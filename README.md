@@ -322,7 +322,7 @@ After benchmarking, rebuild the ordinary Tauri binary with
 ./scripts/package-native.sh
 ```
 
-Output: `build/Cardinal-Native-0.1.32-arm64.dmg`.
+Output: `build/Cardinal-Native-0.1.33-arm64.dmg`.
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. It does not install,

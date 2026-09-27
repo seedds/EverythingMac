@@ -181,7 +181,13 @@ struct PreferencesView: View {
         }
       }
       Toggle("Show menu bar icon", isOn: $prefs.tray)
-      TextField("Terminal application", text: $prefs.terminal)
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Terminal app (F9)")
+        TextField("Path to a terminal application (.app)", text: $prefs.terminal)
+          .accessibilityLabel("Terminal app for F9")
+        Text("Press F9 to open the selected folder, or a file’s parent folder, in this app.")
+          .font(.caption).foregroundColor(.secondary)
+      }
       HStack {
         Text("Sorting limit")
         TextField("20000", value: $prefs.sortLimit, formatter: NumberFormatter()).frame(width: 120)
