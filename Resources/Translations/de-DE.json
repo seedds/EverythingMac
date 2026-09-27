@@ -1,0 +1,193 @@
+{
+  "search": {
+    "placeholder": {
+      "files": "Nach Dateien und Ordnern suchen...",
+      "events": "Ereignisse nach Pfad oder Name filtern...",
+      "directory": "Ordnerbereich..."
+    },
+    "options": {
+      "caseSensitive": "Groß-/Kleinschreibung beachten",
+      "directoryScope": "Ordnerbereich umschalten"
+    },
+    "aria": {
+      "searchInput": "Sucheingabe"
+    }
+  },
+  "stateDisplay": {
+    "loading": "Suche läuft...",
+    "error": "Suchfehler",
+    "emptyTitle": "Keine Ergebnisse für \"{{query}}\"",
+    "emptyMessage": "Passe deine Suchbegriffe oder Filter an.",
+    "emptyTitleWithDirectory": "Keine Ergebnisse für \"{{query}}\" im Ordnerbereich \"{{directoryQuery}}\""
+  },
+  "columns": {
+    "filename": "Dateiname",
+    "path": "Pfad",
+    "size": "Größe",
+    "modified": "Geändert",
+    "created": "Erstellt"
+  },
+  "sorting": {
+    "disabled": "Sortieren ist deaktiviert. Zu viele Ergebnisse ({{limit}}+) können die Leistung beeinträchtigen. Sie können den Schwellenwert in den Einstellungen anpassen."
+  },
+  "events": {
+    "columns": {
+      "time": "Zeit",
+      "event": "Ereignis",
+      "name": "Dateiname",
+      "path": "Pfad"
+    },
+    "empty": {
+      "title": "Noch keine aktuellen Dateiereignisse.",
+      "hint": "Arbeite weiter und schau später erneut vorbei."
+    }
+  },
+  "contextMenu": {
+    "openItem": "Öffnen",
+    "quickLook": "Schnellansicht",
+    "revealInFinder": "Im Finder anzeigen",
+    "copyFile": "Datei kopieren",
+    "copyFiles": "Dateien kopieren",
+    "copyFilename": "Dateinamen kopieren",
+    "copyFilenames": "Dateinamen kopieren",
+    "copyPath": "Pfad kopieren",
+    "copyPaths": "Pfade kopieren",
+    "resetColumnWidths": "Spaltenbreiten zurücksetzen"
+  },
+  "statusBar": {
+    "tabs": {
+      "files": "Dateien",
+      "events": "Ereignisse"
+    },
+    "lifecycle": {
+      "Initializing": "Initialisierung",
+      "Updating": "Aktualisierung",
+      "Ready": "Bereit"
+    },
+    "aria": {
+      "status": "Anwendungsstatus: {{status}}",
+      "tablist": "Ansicht des Suchstatus",
+      "rescan": "Dateisystem erneut scannen",
+      "settings": "Einstellungen öffnen"
+    },
+    "rescan": {
+      "disabledHint": "Der erneute Scan ist verfügbar, sobald Cardinal bereit ist.",
+      "enabledHint": "Einen vollständigen Scan des Dateisystems starten.",
+      "errorCountSuffix": " Es sind {{formatted}} Dateisystemfehler aufgetreten, ein erneuter Scan wird empfohlen."
+    },
+    "searchLabel": "Suche:",
+    "resultsUnavailable": "—",
+    "resultsCount_one": "{{formatted}} Ergebnis",
+    "resultsCount_other": "{{formatted}} Ergebnisse",
+    "duration": "{{value}} ms",
+    "resultsWithDuration": "{{results}} • {{duration}}",
+    "resultsTitle": "Ergebnisse • Dauer",
+    "shortcuts": {
+      "rename": "Umbenennen",
+      "trash": "Papierkorb",
+      "terminal": "Terminal"
+    }
+  },
+  "app": {
+    "fullDiskAccess": {
+      "title": "Voller Festplattenzugriff erforderlich",
+      "description": "Cardinal benötigt den vollen Festplattenzugriff von macOS, um Dateien auf deinem System zu indexieren und zu überwachen. Aktiviere den vollen Festplattenzugriff für Cardinal in den Systemeinstellungen.",
+      "steps": {
+        "one": "Öffne Systemeinstellungen > Datenschutz & Sicherheit > Voller Festplattenzugriff.",
+        "two": "Klicke auf das Schloss, erlaube Änderungen und aktiviere Cardinal.",
+        "three": "Erlaube macOS, Cardinal bei Aufforderung neu zu starten."
+      },
+      "status": {
+        "checking": "Berechtigungsstatus wird überprüft...",
+        "disabled": "Voller Festplattenzugriff ist deaktiviert."
+      },
+      "openSettings": "Systemeinstellungen öffnen"
+    }
+  },
+  "menu": {
+    "about": "Über {{appName}}",
+    "preferences": "Einstellungen",
+    "hide": "Ausblenden",
+    "quit": "{{appName}} beenden",
+    "edit": "Bearbeiten",
+    "undo": "Rückgängig",
+    "redo": "Wiederholen",
+    "cut": "Ausschneiden",
+    "copy": "Kopieren",
+    "paste": "Einfügen",
+    "selectAll": "Alles auswählen",
+    "view": "Ansicht",
+    "fullscreen": "Vollbild umschalten",
+    "window": "Fenster",
+    "minimize": "Im Dock ablegen",
+    "maximize": "Zoomen",
+    "closeWindow": "Fenster schließen",
+    "help": "Hilfe",
+    "getUpdates": "Updates abrufen"
+  },
+  "preferences": {
+    "title": "Einstellungen",
+    "heading": "Passe Cardinal an",
+    "subtitle": "Stelle Erscheinungsbild und Sprache ein.",
+    "appearance": "Darstellung",
+    "themeHint": "Wähle Hell, Dunkel oder Systemstandard.",
+    "language": "Sprache",
+    "languageHint": "Wechsle die Oberflächensprache sofort.",
+    "trayIcon": {
+      "label": "Tray-Symbol anzeigen"
+    },
+    "sortingLimit": {
+      "label": "Sortierlimit"
+    },
+    "save": "Speichern",
+    "reset": "Standardwerte wiederherstellen",
+    "close": "Schließen",
+    "terminalApp": {
+      "label": "Terminal-App",
+      "help": "Von F9 verwendete App, z. B. /Applications/iTerm.app. Leer lassen, um das macOS-Terminal zu verwenden.",
+      "error": "Geben Sie einen absoluten .app-Pfad ein oder lassen Sie das Feld leer, um das macOS-Terminal zu verwenden."
+    }
+  },
+  "language": {
+    "label": "Sprache",
+    "separator": ":",
+    "trigger": "🌐"
+  },
+  "theme": {
+    "label": "Design",
+    "options": {
+      "system": "Systemstandard",
+      "light": "Hell",
+      "dark": "Dunkel"
+    }
+  },
+  "tray": {
+    "open": "Cardinal öffnen",
+    "quit": "Cardinal beenden"
+  },
+  "watchRoot": {
+    "label": "Überwachungs-Stammverzeichnis",
+    "help": "Eine Änderung erstellt den Index für das neue Verzeichnis neu.",
+    "errors": {
+      "required": "Bitte einen Pfad eingeben.",
+      "absolute": "Bitte einen absoluten Pfad angeben, der mit '/' oder '~' beginnt."
+    },
+    "title": "Überwachungs-Stammverzeichnis wählen",
+    "description": "Cardinal indiziert und überwacht Dateien in diesem Verzeichnis. Sie können es später in den Einstellungen ändern.",
+    "action": "Indexierung starten"
+  },
+  "ignorePaths": {
+    "label": "Pfade ignorieren",
+    "help": "Ein Pfad pro Zeile; ignorierte Pfade werden bei der Indexierung übersprungen.",
+    "errors": {
+      "absolute": "Jeder Pfad muss mit '/' oder '~' beginnen."
+    }
+  },
+  "includePaths": {
+    "label": "Pfade einschließen",
+    "help": "Ein Pfad pro Zeile; eingeschlossene Pfade bleiben indexiert, auch wenn ein übergeordneter Pfad ignoriert wird.",
+    "errors": {
+      "absolute": "Jeder Pfad muss mit '/' oder '~' beginnen."
+    }
+  }
+}

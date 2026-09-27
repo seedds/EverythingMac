@@ -1,0 +1,9 @@
+.build/
+build/
+.swiftpm/
+__pycache__/
+*.pyc
+target/
+.DS_Store
+.env
+.env.*

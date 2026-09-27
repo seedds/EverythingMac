@@ -1,0 +1,4 @@
+module CNative {
+    header "include/cardinal_native.h"
+    export *
+}

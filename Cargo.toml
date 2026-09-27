@@ -1,0 +1,3 @@
+[workspace]
+resolver = "3"
+members = ["bridge", "engine/search-cache", "engine/search-cancel", "engine/cardinal-sdk", "engine/fswalk", "engine/namepool", "engine/file-tags", "engine/query-segmentation", "engine/cardinal-syntax", "engine/slab-mmap"]

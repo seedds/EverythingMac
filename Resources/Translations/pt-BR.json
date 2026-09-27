@@ -1,0 +1,193 @@
+{
+  "search": {
+    "placeholder": {
+      "files": "Buscar por arquivos e pastas...",
+      "events": "Filtrar eventos por caminho ou nome...",
+      "directory": "Escopo de pasta..."
+    },
+    "options": {
+      "caseSensitive": "Alternar correspondência sensível a maiúsculas",
+      "directoryScope": "Alternar escopo de pasta"
+    },
+    "aria": {
+      "searchInput": "Entrada de pesquisa"
+    }
+  },
+  "stateDisplay": {
+    "loading": "Pesquisando...",
+    "error": "Erro na busca",
+    "emptyTitle": "Nenhum resultado para \"{{query}}\"",
+    "emptyMessage": "Tente ajustar suas palavras-chave ou filtros.",
+    "emptyTitleWithDirectory": "Nenhum resultado para \"{{query}}\" no escopo de pasta \"{{directoryQuery}}\""
+  },
+  "columns": {
+    "filename": "Nome do arquivo",
+    "path": "Caminho",
+    "size": "Tamanho",
+    "modified": "Modificado",
+    "created": "Criado"
+  },
+  "sorting": {
+    "disabled": "A ordenação está desativada. Muitos resultados ({{limit}}+) podem afetar o desempenho. Ajuste o limite em Preferências."
+  },
+  "events": {
+    "columns": {
+      "time": "Hora",
+      "event": "Evento",
+      "name": "Nome",
+      "path": "Caminho"
+    },
+    "empty": {
+      "title": "Ainda não há eventos recentes.",
+      "hint": "Continue trabalhando e volte para conferir."
+    }
+  },
+  "contextMenu": {
+    "openItem": "Abrir",
+    "quickLook": "Visualização rápida",
+    "revealInFinder": "Mostrar no Finder",
+    "copyFile": "Copiar arquivo",
+    "copyFiles": "Copiar arquivos",
+    "copyFilename": "Copiar nome",
+    "copyFilenames": "Copiar nomes de arquivos",
+    "copyPath": "Copiar caminho",
+    "copyPaths": "Copiar caminhos",
+    "resetColumnWidths": "Redefinir larguras das colunas"
+  },
+  "statusBar": {
+    "tabs": {
+      "files": "Arquivos",
+      "events": "Eventos"
+    },
+    "lifecycle": {
+      "Initializing": "Inicializando",
+      "Updating": "Atualizando",
+      "Ready": "Pronto"
+    },
+    "aria": {
+      "status": "Status do aplicativo: {{status}}",
+      "tablist": "Visão de status da busca",
+      "rescan": "Iniciar nova varredura do sistema de arquivos",
+      "settings": "Abrir preferências"
+    },
+    "rescan": {
+      "disabledHint": "A varredura fica disponível quando o Cardinal estiver pronto.",
+      "enabledHint": "Iniciar uma varredura completa do sistema de arquivos.",
+      "errorCountSuffix": " Ocorreram {{formatted}} erros do sistema de arquivos, uma nova varredura é sugerida."
+    },
+    "searchLabel": "Busca:",
+    "resultsUnavailable": "—",
+    "resultsCount_one": "{{formatted}} resultado",
+    "resultsCount_other": "{{formatted}} resultados",
+    "duration": "{{value}} ms",
+    "resultsWithDuration": "{{results}} • {{duration}}",
+    "resultsTitle": "Resultados • Duração",
+    "shortcuts": {
+      "rename": "Renomear",
+      "trash": "Lixeira",
+      "terminal": "Terminal"
+    }
+  },
+  "app": {
+    "fullDiskAccess": {
+      "title": "É necessário Acesso Total ao Disco",
+      "description": "O Cardinal precisa do Acesso Total ao Disco do macOS para indexar e monitorar arquivos em todo o sistema. Ative o acesso para o Cardinal nos Ajustes do Sistema.",
+      "steps": {
+        "one": "Abra Ajustes do Sistema > Privacidade e Segurança > Acesso Total ao Disco.",
+        "two": "Clique no cadeado para permitir alterações e habilite o Cardinal.",
+        "three": "Quando solicitado, permita que o macOS reinicie o Cardinal."
+      },
+      "status": {
+        "checking": "Verificando status da permissão...",
+        "disabled": "O Acesso Total ao Disco está desativado."
+      },
+      "openSettings": "Abrir Ajustes do Sistema"
+    }
+  },
+  "menu": {
+    "about": "Sobre {{appName}}",
+    "preferences": "Preferências",
+    "hide": "Ocultar",
+    "quit": "Sair do {{appName}}",
+    "edit": "Editar",
+    "undo": "Desfazer",
+    "redo": "Refazer",
+    "cut": "Cortar",
+    "copy": "Copiar",
+    "paste": "Colar",
+    "selectAll": "Selecionar tudo",
+    "view": "Visualizar",
+    "fullscreen": "Alternar tela cheia",
+    "window": "Janela",
+    "minimize": "Minimizar",
+    "maximize": "Zoom",
+    "closeWindow": "Fechar janela",
+    "help": "Ajuda",
+    "getUpdates": "Obter atualizações"
+  },
+  "preferences": {
+    "title": "Preferências",
+    "heading": "Deixe o Cardinal com a sua cara",
+    "subtitle": "Ajuste aparência e idioma como preferir.",
+    "appearance": "Aparência",
+    "themeHint": "Escolha claro, escuro ou seguir o sistema.",
+    "language": "Idioma",
+    "languageHint": "Altere o idioma da interface instantaneamente.",
+    "trayIcon": {
+      "label": "Mostrar ícone na bandeja"
+    },
+    "sortingLimit": {
+      "label": "Limite de ordenação"
+    },
+    "save": "Salvar",
+    "reset": "Restaurar padrões",
+    "close": "Fechar",
+    "terminalApp": {
+      "label": "Aplicativo de terminal",
+      "help": "Aplicativo usado por F9, por exemplo /Applications/iTerm.app. Deixe em branco para usar o Terminal do macOS.",
+      "error": "Insira um caminho absoluto para um aplicativo .app ou deixe em branco para usar o Terminal do macOS."
+    }
+  },
+  "language": {
+    "label": "Idioma",
+    "separator": ":",
+    "trigger": "🌐"
+  },
+  "theme": {
+    "label": "Tema",
+    "options": {
+      "system": "Padrão do sistema",
+      "light": "Claro",
+      "dark": "Escuro"
+    }
+  },
+  "tray": {
+    "open": "Abrir Cardinal",
+    "quit": "Sair do Cardinal"
+  },
+  "watchRoot": {
+    "label": "Caminho raiz de monitoramento",
+    "help": "Alterar isso vai recriar o índice para o novo diretório.",
+    "errors": {
+      "required": "Informe um caminho.",
+      "absolute": "Informe um caminho absoluto que comece com '/' ou '~'."
+    },
+    "title": "Escolher caminho raiz de monitoramento",
+    "description": "O Cardinal vai indexar e monitorar os arquivos neste diretório. Você pode alterar isso depois em Preferências.",
+    "action": "Iniciar indexação"
+  },
+  "ignorePaths": {
+    "label": "Caminhos ignorados",
+    "help": "Um caminho por linha; caminhos ignorados são ignorados durante a indexação.",
+    "errors": {
+      "absolute": "Cada caminho deve começar com '/' ou '~'."
+    }
+  },
+  "includePaths": {
+    "label": "Caminhos incluídos",
+    "help": "Um caminho por linha; caminhos incluídos permanecem indexados mesmo quando um ancestral é ignorado.",
+    "errors": {
+      "absolute": "Cada caminho deve começar com '/' ou '~'."
+    }
+  }
+}

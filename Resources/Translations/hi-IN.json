@@ -1,0 +1,183 @@
+{
+  "search": {
+    "placeholder": {
+      "files": "फ़ाइलों और फ़ोल्डरों में खोजें...",
+      "events": "पथ या नाम से ईवेंट फ़िल्टर करें...",
+      "directory": "फ़ोल्डर स्कोप..."
+    },
+    "options": {
+      "caseSensitive": "केस-सेंसिटिव मिलान टॉगल करें",
+      "directoryScope": "फ़ोल्डर स्कोप टॉगल करें"
+    },
+    "aria": {
+      "searchInput": "खोज इनपुट"
+    }
+  },
+  "stateDisplay": {
+    "loading": "खोज जारी है...",
+    "error": "खोज त्रुटि",
+    "emptyTitle": "\"{{query}}\" के लिए कोई परिणाम नहीं",
+    "emptyMessage": "अपनी कुंजियाँ या फ़िल्टर बदलकर देखिए।",
+    "emptyTitleWithDirectory": "फ़ोल्डर स्कोप \"{{directoryQuery}}\" में \"{{query}}\" के लिए कोई परिणाम नहीं"
+  },
+  "columns": {
+    "filename": "फ़ाइल नाम",
+    "path": "पथ",
+    "size": "आकार",
+    "modified": "संशोधित",
+    "created": "निर्मित"
+  },
+  "sorting": {
+    "disabled": "सॉर्टिंग बंद है। बहुत अधिक परिणाम ({{limit}}+) प्रदर्शन को प्रभावित कर सकते हैं। आप सीमा को प्राथमिकताओं में बदल सकते हैं।"
+  },
+  "events": {
+    "columns": {
+      "time": "समय",
+      "event": "ईवेंट",
+      "name": "फ़ाइल नाम",
+      "path": "पथ"
+    },
+    "empty": {
+      "title": "अभी तक कोई हालिया फ़ाइल ईवेंट नहीं है।",
+      "hint": "काम जारी रखें और बाद में फिर देखें।"
+    }
+  },
+  "contextMenu": {
+    "openItem": "खोलें",
+    "quickLook": "त्वरित पूर्वावलोकन",
+    "revealInFinder": "Finder में दिखाएँ",
+    "copyFile": "फ़ाइल कॉपी करें",
+    "copyFiles": "फ़ाइलें कॉपी करें",
+    "copyFilename": "फ़ाइल नाम कॉपी करें",
+    "copyFilenames": "फ़ाइल नाम कॉपी करें",
+    "copyPath": "पथ कॉपी करें",
+    "copyPaths": "पथ कॉपी करें",
+    "resetColumnWidths": "कॉलम चौड़ाई रीसेट करें"
+  },
+  "statusBar": {
+    "tabs": {
+      "files": "फ़ाइलें",
+      "events": "ईवेंट"
+    },
+    "lifecycle": {
+      "Initializing": "आरंभ हो रहा है",
+      "Updating": "अपडेट हो रहा है",
+      "Ready": "तैयार"
+    },
+    "aria": {
+      "status": "एप की स्थिति: {{status}}",
+      "tablist": "खोज स्थिति दृश्य",
+      "rescan": "फ़ाइल सिस्टम का पुनः स्कैन शुरू करें",
+      "settings": "प्राथमिकताएँ खोलें"
+    },
+    "rescan": {
+      "disabledHint": "Cardinal तैयार होने पर पुनः स्कैन उपलब्ध होगा.",
+      "enabledHint": "पूरे फ़ाइल सिस्टम का पुनः स्कैन करें.",
+      "errorCountSuffix": " फ़ाइल सिस्टम की {{formatted}} त्रुटियाँ हुई हैं, पुनः स्कैन सुझाया जाता है।"
+    },
+    "searchLabel": "खोज:",
+    "resultsUnavailable": "—",
+    "resultsCount_one": "{{formatted}} परिणाम",
+    "resultsCount_other": "{{formatted}} परिणाम",
+    "duration": "{{value}} मि.से.",
+    "resultsWithDuration": "{{results}} • {{duration}}",
+    "resultsTitle": "परिणाम • अवधि",
+    "shortcuts": {
+      "rename": "नाम बदलें",
+      "trash": "ट्रैश में भेजें",
+      "terminal": "टर्मिनल"
+    }
+  },
+  "app": {
+    "fullDiskAccess": {
+      "title": "पूर्ण डिस्क एक्सेस आवश्यक",
+      "description": "पूरे सिस्टम की फ़ाइलों को अनुक्रमित और मॉनिटर करने के लिए Cardinal को macOS की पूर्ण डिस्क अनुमति चाहिए. कृपया सिस्टम सेटिंग्स में Cardinal को अनुमति दें.",
+      "steps": {
+        "one": "सिस्टम सेटिंग्स > गोपनीयता व सुरक्षा > पूर्ण डिस्क एक्सेस खोलें.",
+        "two": "ताला खोलें, बदलाव की अनुमति दें और Cardinal सक्षम करें.",
+        "three": "प्रॉम्प्ट आने पर macOS को Cardinal पुनः आरंभ करने दें."
+      },
+      "status": {
+        "checking": "अनुमति स्थिति जाँची जा रही है...",
+        "disabled": "पूर्ण डिस्क एक्सेस बंद है."
+      },
+      "openSettings": "सिस्टम सेटिंग्स खोलें"
+    }
+  },
+  "menu": {
+    "about": "{{appName}} के बारे में",
+    "preferences": "प्राथमिकताएँ",
+    "hide": "छिपाएँ",
+    "quit": "{{appName}} बंद करें",
+    "edit": "संपादित करें",
+    "view": "दृश्य",
+    "window": "विंडो",
+    "help": "सहायता",
+    "getUpdates": "अपडेट प्राप्त करें"
+  },
+  "preferences": {
+    "title": "प्राथमिकताएँ",
+    "heading": "Cardinal को अपना बनाएं",
+    "subtitle": "रूप और भाषा अपनी पसंद से सेट करें.",
+    "appearance": "दिखावट",
+    "themeHint": "हल्का, गहरा या सिस्टम मोड चुनें.",
+    "language": "भाषा",
+    "languageHint": "इंटरफ़ेस भाषा तुरंत बदलें.",
+    "trayIcon": {
+      "label": "ट्रे आइकन दिखाएँ"
+    },
+    "sortingLimit": {
+      "label": "सॉर्टिंग सीमा"
+    },
+    "save": "सहेजें",
+    "reset": "डिफ़ॉल्ट पर लौटाएँ",
+    "close": "बंद करें",
+    "terminalApp": {
+      "label": "टर्मिनल ऐप",
+      "help": "F9 के लिए ऐप, जैसे /Applications/iTerm.app। macOS Terminal का उपयोग करने के लिए खाली छोड़ें।",
+      "error": ".app का पूर्ण पथ दर्ज करें, या macOS Terminal का उपयोग करने के लिए खाली छोड़ें।"
+    }
+  },
+  "language": {
+    "label": "भाषा",
+    "separator": ":",
+    "trigger": "🌐"
+  },
+  "theme": {
+    "label": "थीम",
+    "options": {
+      "system": "सिस्टम डिफॉल्ट",
+      "light": "हल्का",
+      "dark": "गहरा"
+    }
+  },
+  "tray": {
+    "open": "Cardinal खोलें",
+    "quit": "Cardinal बंद करें"
+  },
+  "watchRoot": {
+    "label": "मॉनिटर रूट पाथ",
+    "help": "इसे बदलने पर नए डायरेक्टरी के लिए इंडेक्स दोबारा बनेगा।",
+    "errors": {
+      "required": "कृपया एक पाथ दर्ज करें।",
+      "absolute": "कृपया '/' या '~' से शुरू होने वाला एब्सोल्यूट पाथ दर्ज करें।"
+    },
+    "title": "मॉनिटर रूट पाथ चुनें",
+    "description": "Cardinal इस डायरेक्टरी के भीतर की फ़ाइलों को इंडेक्स और मॉनिटर करेगा। आप इसे बाद में Preferences में बदल सकते हैं।",
+    "action": "इंडेक्सिंग शुरू करें"
+  },
+  "ignorePaths": {
+    "label": "अनदेखे पाथ",
+    "help": "प्रत्येक पंक्ति में एक पाथ; अनदेखे पाथ इंडेक्सिंग के दौरान छोड़ दिए जाते हैं।",
+    "errors": {
+      "absolute": "हर पाथ '/' या '~' से शुरू होना चाहिए।"
+    }
+  },
+  "includePaths": {
+    "label": "शामिल पाथ",
+    "help": "प्रत्येक पंक्ति में एक पाथ; शामिल पाथ इंडेक्स में बने रहते हैं, भले ही उनका मूल अनदेखा हो।",
+    "errors": {
+      "absolute": "हर पाथ '/' या '~' से शुरू होना चाहिए।"
+    }
+  }
+}

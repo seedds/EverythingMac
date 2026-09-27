@@ -1,0 +1,193 @@
+{
+  "search": {
+    "placeholder": {
+      "files": "Dosya ve klasör arayın...",
+      "events": "Olayları yol veya ada göre filtreleyin...",
+      "directory": "Klasör kapsamı..."
+    },
+    "options": {
+      "caseSensitive": "Büyük/küçük harfe duyarlı eşleşmeyi değiştir",
+      "directoryScope": "Klasör kapsamını değiştir"
+    },
+    "aria": {
+      "searchInput": "Arama girişi"
+    }
+  },
+  "stateDisplay": {
+    "loading": "Aranıyor...",
+    "error": "Arama hatası",
+    "emptyTitle": "\"{{query}}\" için sonuç yok",
+    "emptyMessage": "Anahtar kelimeleri veya filtreleri değiştirmeyi deneyin.",
+    "emptyTitleWithDirectory": "\"{{directoryQuery}}\" klasör kapsamında \"{{query}}\" için sonuç yok"
+  },
+  "columns": {
+    "filename": "Dosya adı",
+    "path": "Yol",
+    "size": "Boyut",
+    "modified": "Değiştirildi",
+    "created": "Oluşturuldu"
+  },
+  "sorting": {
+    "disabled": "Sıralama devre dışı. Çok fazla sonuç ({{limit}}+) performansı etkileyebilir. Eşiği Tercihler'de ayarlayabilirsiniz."
+  },
+  "events": {
+    "columns": {
+      "time": "Saat",
+      "event": "Olay",
+      "name": "Dosya adı",
+      "path": "Yol"
+    },
+    "empty": {
+      "title": "Henüz son olay yok.",
+      "hint": "Çalışmaya devam edin ve sonra tekrar kontrol edin."
+    }
+  },
+  "contextMenu": {
+    "openItem": "Aç",
+    "quickLook": "Hızlı Bakış",
+    "revealInFinder": "Finder'da göster",
+    "copyFile": "Dosyayı kopyala",
+    "copyFiles": "Dosyaları kopyala",
+    "copyFilename": "Dosya adını kopyala",
+    "copyFilenames": "Dosya adlarını kopyala",
+    "copyPath": "Yolu kopyala",
+    "copyPaths": "Yolları kopyala",
+    "resetColumnWidths": "Sütun genişliklerini sıfırla"
+  },
+  "statusBar": {
+    "tabs": {
+      "files": "Dosyalar",
+      "events": "Olaylar"
+    },
+    "lifecycle": {
+      "Initializing": "Başlatılıyor",
+      "Updating": "Güncelleniyor",
+      "Ready": "Hazır"
+    },
+    "aria": {
+      "status": "Uygulama durumu: {{status}}",
+      "tablist": "Arama durumu görünümü",
+      "rescan": "Dosya sistemini yeniden tara",
+      "settings": "Tercihleri aç"
+    },
+    "rescan": {
+      "disabledHint": "Cardinal hazır olduğunda yeniden tarama kullanılabilir.",
+      "enabledHint": "Dosya sistemini tamamen tara.",
+      "errorCountSuffix": " Şu ana kadar {{formatted}} dosya sistemi hatası oluştu, yeniden tarama önerilir."
+    },
+    "searchLabel": "Arama:",
+    "resultsUnavailable": "—",
+    "resultsCount_one": "{{formatted}} sonuç",
+    "resultsCount_other": "{{formatted}} sonuç",
+    "duration": "{{value}} ms",
+    "resultsWithDuration": "{{results}} • {{duration}}",
+    "resultsTitle": "Sonuçlar • Süre",
+    "shortcuts": {
+      "rename": "Yeniden adlandır",
+      "trash": "Çöp kutusu",
+      "terminal": "Terminal"
+    }
+  },
+  "app": {
+    "fullDiskAccess": {
+      "title": "Tam Disk Erişimi gerekli",
+      "description": "Cardinal'in sistem genelindeki dosyaları dizine ekleyip izlemesi için macOS Tam Disk Erişimi gerekir. Lütfen Sistem Ayarları'nda Cardinal'e izin verin.",
+      "steps": {
+        "one": "Sistem Ayarları > Gizlilik ve Güvenlik > Tam Disk Erişimi'ni açın.",
+        "two": "Kilidi açıp değişikliklere izin verin ve Cardinal'i etkinleştirin.",
+        "three": "İstendiğinde macOS'un Cardinal'i yeniden başlatmasına izin verin."
+      },
+      "status": {
+        "checking": "İzin durumu kontrol ediliyor...",
+        "disabled": "Tam Disk Erişimi devre dışı."
+      },
+      "openSettings": "Sistem Ayarlarını aç"
+    }
+  },
+  "menu": {
+    "about": "{{appName}} Hakkında",
+    "preferences": "Tercihler",
+    "hide": "Gizle",
+    "quit": "{{appName}} uygulamasından çık",
+    "edit": "Düzenle",
+    "undo": "Geri al",
+    "redo": "Yinele",
+    "cut": "Kes",
+    "copy": "Kopyala",
+    "paste": "Yapıştır",
+    "selectAll": "Tümünü seç",
+    "view": "Görünüm",
+    "fullscreen": "Tam ekranı değiştir",
+    "window": "Pencere",
+    "minimize": "Simge durumuna küçült",
+    "maximize": "Yakınlaştır",
+    "closeWindow": "Pencereyi kapat",
+    "help": "Yardım",
+    "getUpdates": "Güncellemeleri al"
+  },
+  "preferences": {
+    "title": "Tercihler",
+    "heading": "Cardinal'i kişiselleştir",
+    "subtitle": "Görünüm ve dili istediğiniz gibi ayarlayın.",
+    "appearance": "Görünüm",
+    "themeHint": "Açık, koyu veya sistem varsayılanını seç.",
+    "language": "Dil",
+    "languageHint": "Arayüz dilini anında değiştir.",
+    "trayIcon": {
+      "label": "Tepsi simgesini göster"
+    },
+    "sortingLimit": {
+      "label": "Sıralama sınırı"
+    },
+    "save": "Kaydet",
+    "reset": "Varsayılanlara döndür",
+    "close": "Kapat",
+    "terminalApp": {
+      "label": "Terminal uygulaması",
+      "help": "F9 ile kullanılan uygulama, ör. /Applications/iTerm.app. macOS Terminal için boş bırakın.",
+      "error": "Mutlak bir .app yolu girin veya macOS Terminal için boş bırakın."
+    }
+  },
+  "language": {
+    "label": "Dil",
+    "separator": ":",
+    "trigger": "🌐"
+  },
+  "theme": {
+    "label": "Tema",
+    "options": {
+      "system": "Sistem varsayılanı",
+      "light": "Açık",
+      "dark": "Koyu"
+    }
+  },
+  "tray": {
+    "open": "Cardinal'i Aç",
+    "quit": "Cardinal'den çık"
+  },
+  "watchRoot": {
+    "label": "İzleme kök yolu",
+    "help": "Bunu değiştirmek yeni dizin için indeksi yeniden oluşturur.",
+    "errors": {
+      "required": "Lütfen bir yol girin.",
+      "absolute": "Lütfen '/' veya '~' ile başlayan mutlak bir yol girin."
+    },
+    "title": "İzleme kök yolunu seçin",
+    "description": "Cardinal bu dizin altındaki dosyaları indeksler ve izler. Bunu daha sonra Tercihler'den değiştirebilirsiniz.",
+    "action": "Dizinlemeyi başlat"
+  },
+  "ignorePaths": {
+    "label": "Yok sayılan yollar",
+    "help": "Her satıra bir yol; yok sayılan yollar dizinleme sırasında atlanır.",
+    "errors": {
+      "absolute": "Her yol '/' veya '~' ile başlamalıdır."
+    }
+  },
+  "includePaths": {
+    "label": "Dahil edilen yollar",
+    "help": "Her satıra bir yol; dahil edilen yollar, üst dizini yok sayılsa bile dizinde kalır.",
+    "errors": {
+      "absolute": "Her yol '/' veya '~' ile başlamalıdır."
+    }
+  }
+}
