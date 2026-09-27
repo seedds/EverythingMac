@@ -115,7 +115,10 @@ struct ResultsTable: NSViewRepresentable {
     ) { [weak model, weak table] _ in
       guard let table = table else { return }
       let range = table.rows(in: table.visibleRect)
-      if range.location != NSNotFound { model?.visibleStart = range.location }
+      if range.location != NSNotFound {
+        model?.visibleStart = range.location
+        model?.loadVisibleMetadata(range)
+      }
     }
     model.tableAction = { [weak coordinator = context.coordinator] in coordinator?.navigate($0) }
     return scroll
@@ -161,6 +164,7 @@ struct ResultsTable: NSViewRepresentable {
       }
       let range = table.rows(in: table.visibleRect)
       if range.location != NSNotFound && range.location < model.total {
+        model.loadVisibleMetadata(range)
         for row in range.location..<min(NSMaxRange(range), model.total) {
           for (column, descriptor) in table.tableColumns.enumerated() {
             if let cell = table.view(atColumn: column, row: row, makeIfNecessary: false)
@@ -195,11 +199,12 @@ struct ResultsTable: NSViewRepresentable {
       }
       switch column.rawValue {
       case "Name":
-        cell.textField?.stringValue = URL(fileURLWithPath: item.path).lastPathComponent
+        // String-only parsing: URL(fileURLWithPath:) can stat the path on the UI thread.
+        cell.textField?.stringValue = (item.path as NSString).lastPathComponent
         icon(item, cell: cell)
       case "Path":
         cell.textField?.stringValue =
-          item.path == "/" ? "/" : URL(fileURLWithPath: item.path).deletingLastPathComponent().path
+          item.path == "/" ? "/" : (item.path as NSString).deletingLastPathComponent
       case "Size":
         cell.textField?.stringValue =
           item.is_directory

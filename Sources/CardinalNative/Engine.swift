@@ -10,6 +10,7 @@ struct Row: Decodable {
   let modified: UInt32?
   let created: UInt32?
   let is_directory: Bool
+  let metadata_loaded: Bool
 }
 
 struct Reply: Decodable {
@@ -233,6 +234,14 @@ final class Model: ObservableObject {
   var lastSample: Sample?
   var pendingDraw: UInt64?
   var pendingPages = Set<Int>()
+  let metadataQueue: OperationQueue = {
+    let queue = OperationQueue()
+    queue.name = "cardinal.native.row-metadata"
+    queue.qualityOfService = .utility
+    queue.maxConcurrentOperationCount = 2
+    return queue
+  }()
+  var pendingMetadata: [Int: RowMetadataOperation] = [:]
   var debounceWork: DispatchWorkItem?
   var onDraw: ((Sample) -> Void)?
   var loadedMS = 0.0
@@ -252,6 +261,7 @@ final class Model: ObservableObject {
     selectionCount = 0
     pendingDraw = nil
     rows.removeAll()
+    cancelMetadata()
     total = 0
     revision &+= 1
     status = "Loading snapshot…"
@@ -341,6 +351,7 @@ final class Model: ObservableObject {
         self.backendMS = reply.search_ms ?? 0
         self.total = reply.total ?? 0
         self.displayedGeneration = ticket
+        self.cancelMetadata()
         self.rows = Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0) })
         self.pendingPages.removeAll()
         self.pendingDraw = ticket
@@ -410,6 +421,7 @@ final class Model: ObservableObject {
     closeCompletions.append(completion)
     guard !closed else { return }
     closed = true
+    cancelMetadata()
     timer?.invalidate()
     timer = nil
     debounceWork?.cancel()

@@ -946,6 +946,12 @@ impl SearchCache {
         self.expand_file_nodes_inner::<true>(nodes)
     }
 
+    /// Expand indexed paths and already cached metadata without filesystem I/O.
+    /// Interactive viewports can display names before loading optional metadata.
+    pub fn expand_cached_file_nodes(&mut self, nodes: &[SlabIndex]) -> Vec<SearchResultNode> {
+        self.expand_file_nodes_inner::<false>(nodes)
+    }
+
     fn expand_file_nodes_inner<const FETCH_META: bool>(
         &mut self,
         nodes: &[SlabIndex],

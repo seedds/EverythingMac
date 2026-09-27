@@ -134,6 +134,10 @@ The context menu also provides filename copying, Double Commander reveal, and
 column-width reset. Dragging results exports file URLs. Standard file icons load
 lazily into a bounded cache. Search results never generate content thumbnails; Quick Look opens only when explicitly requested.
 
+Scrolling loads filenames and paths directly from the index. Size and dates load
+separately for visible rows; slow filesystem metadata cannot hold up a whole page.
+Metadata requests for rows that scroll out of view are cancelled when possible.
+
 ## Indexing and storage
 
 Normal launch loads the native index when one exists. Otherwise it reads the
@@ -337,6 +341,22 @@ Before a production release, validate cloud-provider behavior, sustained high-ch
 indexing, external terminal/Double Commander integration, and drag/drop into the
 intended target applications. Full native migration should be based on those
 results and an updated performance comparison.
+
+## Scrolling regression check
+
+With a saved index containing at least 10,000 matching rows:
+
+```bash
+./run.sh --index /absolute/path/to/cardinal.db --scroll-query a \
+  --scroll-stress --scroll-check /tmp/cardinal-scroll.json
+python3 -c 'import json; r=json.load(open("/tmp/cardinal-scroll.json")); assert r["error"] is None, r'
+```
+
+This opens the index read-only, scrolls the real table through 60 positions, and
+fails if visible filenames take longer than 250 ms to appear. The report records
+each delay. `--scroll-seed 5107` samples different positions; omit `--scroll-query`
+to check all indexed files. Filesystem and icon caches affect timings, so compare
+both repeated positions and fresh positions without competing builds running.
 
 ## Automated releases
 

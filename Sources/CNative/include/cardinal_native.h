@@ -17,6 +17,7 @@ void cn_request_free(CNRequest *request);
 void cn_cancel(void);
 CNBuffer cn_search(CNEngine *engine, const CNRequest *request, uint64_t generation,
                    const char *query, const char *directory, bool case_sensitive);
+// Indexed paths/cached metadata only; never performs filesystem metadata reads.
 CNBuffer cn_rows(CNEngine *engine, uint64_t generation, size_t start, size_t count);
 void cn_buffer_free(CNBuffer buffer);
 CNRequest *cn_scan_request_new(void);

@@ -56,11 +56,17 @@ final class SelfCheck {
       }
       checks.append("Case-insensitive search")
     case 1:
+      guard model.rows[0]?.metadata_loaded == true else { return }
       guard model.total == 1, model.rows[0]?.path.hasSuffix("alpha.md") == true else {
         finish("Case-sensitive result mismatch")
         return
       }
-      checks.append("Case-sensitive search")
+      guard model.rows[0]?.size == 1, model.rows[0]?.modified != nil,
+        model.rows[0]?.created != nil else {
+        finish("Asynchronous visible-row metadata did not load")
+        return
+      }
+      checks.append("Case-sensitive search and asynchronous file metadata")
     case 2:
       guard model.total == 1, model.rows[0]?.path.hasSuffix("résumé.txt") == true else {
         finish("Directory/Unicode result mismatch")
@@ -80,6 +86,7 @@ final class SelfCheck {
       }
       checks.append("Rapid query replacement rejects cancelled responses")
     case 5:
+      guard model.rows[0]?.metadata_loaded == true else { return }
       guard model.total == 1, model.rows[0]?.size == nil else {
         finish("Missing file metadata mismatch")
         return

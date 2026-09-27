@@ -248,7 +248,7 @@ pub unsafe extern "C" fn cn_rows(
             .min(state.results.len());
         let start = start.min(end);
         let ids = state.results[start..end].to_vec();
-        let nodes = state.cache.expand_file_nodes(&ids);
+        let nodes = state.cache.expand_cached_file_nodes(&ids);
         let rows: Vec<_> = nodes
             .iter()
             .zip(ids)
@@ -259,6 +259,7 @@ pub unsafe extern "C" fn cn_rows(
                 "size":metadata.as_ref().map(|m| m.size()),
                 "modified":metadata.as_ref().and_then(|m| m.mtime()).map(|v| v.get()),
                 "created":metadata.as_ref().and_then(|m| m.ctime()).map(|v| v.get()),
+                "metadata_loaded":!node.metadata.is_none(),
                 "is_directory":node.metadata.file_type_hint() as u8 == 1})
             })
             .collect();
@@ -285,6 +286,46 @@ mod tests {
     use super::*;
     use std::{ffi::CString, fs};
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn scrolling_rows_do_not_wait_for_uncached_filesystem_metadata() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("scroll-target.txt"), b"contents").unwrap();
+        let cache = SearchCache::walk_fs(temp.path());
+        let results = vec![
+            cache
+                .node_index_for_path(&temp.path().join("scroll-target.txt"))
+                .unwrap(),
+        ];
+        let mut state = State::new(cache, temp.path().to_path_buf());
+        state.results = results;
+        let engine = Box::into_raw(Box::new(Engine(Mutex::new(state))));
+        unsafe {
+            let page = reply(cn_rows(engine, 0, 0, 128));
+            assert_eq!(page["rows"].as_array().unwrap().len(), 1);
+            assert!(
+                page["rows"][0]["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("scroll-target.txt")
+            );
+            assert!(
+                page["rows"][0]["size"].is_null(),
+                "Paging must not fetch filesystem metadata before returning filenames"
+            );
+            assert_eq!(page["rows"][0]["metadata_loaded"], false);
+            {
+                let mut state = (*engine).0.lock().unwrap();
+                let ids = state.results.clone();
+                state.cache.expand_file_nodes(&ids);
+            }
+            let cached = reply(cn_rows(engine, 0, 0, 128));
+            assert_eq!(cached["rows"][0]["size"], 8);
+            assert_eq!(cached["rows"][0]["metadata_loaded"], true);
+            cn_engine_close(engine);
+        }
+    }
 
     unsafe fn reply(buffer: Buffer) -> Value {
         let value =

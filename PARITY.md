@@ -145,3 +145,29 @@ layout, 10 snapshot checks, and focused F9 checks passed. The full live suite
 completed its first 19 checks (including English-only resources and legacy
 preference import) but timed out at the previously observed Events-tab transition
 on both runs; this is not a full live-suite pass.
+
+## Nonblocking scrolling — 0.1.36
+
+The old row pager fetched filesystem metadata for all 128 rows before returning
+any filenames. Instrumentation measured a 253 ms fetch with the next page queued
+behind it. The UI also constructed file URLs without a directory hint while
+formatting names and paths, allowing implicit filesystem checks on the main thread.
+
+Paging now expands indexed paths and cached metadata without filesystem reads.
+Two separate workers load metadata only for visible rows, cancel obsolete work,
+and reject replies from older result generations. Filename/path formatting uses
+string operations. Metadata reads and icons can finish after filenames appear;
+neither requires content thumbnails.
+
+The real-table `--scroll-check` harness sampled 60 positions in 2,577,296 matching
+rows from a fixed copy of a 4,536,478-entry index on the M4 Pro development machine.
+Before: maximum 988 ms, four stops above 250 ms. After, at fresh positions:
+median 39 ms, maximum 71 ms. Replaying the original positions: median 36 ms,
+maximum 95 ms. Six jumps through the unfiltered index: median 24 ms, maximum 50 ms.
+These are observed viewport readiness timings, not display-frame or universal
+latency guarantees; OS filesystem caches and the sampled paths influence results.
+
+Validation: the bridge regression failed before the fix and passed afterward;
+1,793 Rust workspace tests, 10 rendered snapshot checks (including deferred size
+and dates), and three focused live F9 checks passed. The initial sandboxed Rust
+run could not create filesystem event streams; the unrestricted rerun passed.
