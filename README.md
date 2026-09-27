@@ -75,8 +75,8 @@ results table, and a compact bottom status bar**.
 | Area | Purpose |
 | --- | --- |
 | Main search field | Search filenames, or filter recent events when Events is selected. |
-| Leading chevron/folder button | Expand or collapse the directory query. Closing suspends the filter; reopening restores its value for the current session. |
-| Aa button | Toggle case-sensitive matching. |
+| Folder scope field | Always visible to the right of the search field. Filters file results by folder; clear it to remove the filter. Disabled on the Events tab. |
+| Aa button | Left of the search field; toggles case-sensitive matching. |
 | Results table | Name, Path, Size, Modified, and Created columns, with resizable widths and single-line middle truncation. |
 | Bottom status bar | Lifecycle state, Files/Events tabs and counts, rescan, preferences, selection count, and search duration. |
 | Index details (ⓘ) | Snapshot location and modification time, index/live-update controls, detailed timings, and typing delay. |
@@ -322,7 +322,7 @@ After benchmarking, rebuild the ordinary Tauri binary with
 ./scripts/package-native.sh
 ```
 
-Output: `build/Cardinal-Native-0.1.33-arm64.dmg`.
+Output: `build/Cardinal-Native-0.1.34-arm64.dmg`.
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. It does not install,

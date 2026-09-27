@@ -9,8 +9,6 @@ struct ContentView: View {
   @ObservedObject var prefs: Preferences
   @FocusState var searchFocused: Bool
   @FocusState var directoryFocused: Bool
-  @State private var scopeOpen = false
-  @State private var savedDirectory = ""
   @State private var indexDetailsOpen = false
 
   private var searchText: Binding<String> {
@@ -47,15 +45,11 @@ struct ContentView: View {
     .background(Color(nsColor: .textBackgroundColor))
     .frame(minWidth: 800, minHeight: 420)
     .onAppear {
-      scopeOpen = !model.directory.isEmpty
       model.focusSearch = { searchFocused = true }
       searchFocused = true
     }
     .onChange(of: model.query) { _ in model.changed() }
-    .onChange(of: model.directory) { value in
-      if !value.isEmpty { scopeOpen = true }
-      model.changed()
-    }
+    .onChange(of: model.directory) { _ in model.changed() }
     .onChange(of: model.activeTab) { _ in
       model.restoredSelection = nil
       model.selectionChanged(IndexSet())
@@ -68,47 +62,6 @@ struct ContentView: View {
 
   private var searchBar: some View {
     HStack(spacing: 6) {
-      if model.activeTab == "files" {
-        Button {
-          scopeOpen.toggle()
-          if scopeOpen {
-            model.directory = savedDirectory
-            directoryFocused = true
-          } else {
-            savedDirectory = model.directory
-            model.directory = ""
-            searchFocused = true
-          }
-        } label: {
-          Image(systemName: scopeOpen ? "folder.fill" : "chevron.right")
-            .foregroundColor(scopeOpen ? .accentColor : .secondary)
-            .frame(width: scopeOpen ? 24 : 16, height: 32)
-        }.buttonStyle(.plain)
-          .help("Toggle folder scope")
-          .accessibilityLabel("Toggle folder scope")
-          .accessibilityValue(scopeOpen ? "On" : "Off")
-        if scopeOpen {
-          TextField("Folder scope…", text: $model.directory)
-            .textFieldStyle(.plain).focused($directoryFocused)
-            .onSubmit { model.submit() }
-            .padding(.horizontal, 10).frame(width: 215, height: 32)
-            .background(searchFieldBackground)
-        }
-      }
-      TextField(
-        model.activeTab == "files" ? "Search for files and folders…" : "Filter events by path or name…",
-        text: searchText
-      )
-      .textFieldStyle(.plain).focused($searchFocused)
-      .onSubmit {
-        if model.activeTab == "files" {
-          model.rememberQuery()
-          model.submit()
-        }
-      }
-      .padding(.horizontal, 10).frame(height: 32)
-      .background(searchFieldBackground)
-      .help("Enter: search · Down: results · Option-Up/Down: history")
       Button {
         model.sensitive.toggle()
         model.changed()
@@ -129,6 +82,28 @@ struct ContentView: View {
         .help("Case sensitive")
         .accessibilityLabel("Case sensitive")
         .accessibilityValue(model.sensitive ? "On" : "Off")
+      TextField(
+        model.activeTab == "files" ? "Search for files and folders…" : "Filter events by path or name…",
+        text: searchText
+      )
+      .textFieldStyle(.plain).focused($searchFocused)
+      .onSubmit {
+        if model.activeTab == "files" {
+          model.rememberQuery()
+          model.submit()
+        }
+      }
+      .padding(.horizontal, 10).frame(height: 32)
+      .background(searchFieldBackground)
+      .help("Enter: search · Down: results · Option-Up/Down: history")
+      TextField("Folder scope…", text: $model.directory)
+        .textFieldStyle(.plain).focused($directoryFocused)
+        .onSubmit { model.submit() }
+        .padding(.horizontal, 10).frame(width: 215, height: 32)
+        .background(searchFieldBackground)
+        .disabled(model.activeTab != "files")
+        .accessibilityLabel("Folder scope")
+        .help("Filter file results by folder. Clear this field to search all folders.")
     }.font(.system(size: 13))
   }
 
