@@ -4,6 +4,10 @@ Cardinal Native is a macOS file-search application built with **SwiftUI controls
 an AppKit results table, and Cardinal’s existing Rust search engine**. This repository contains the standalone native app and its Rust engine.
 See [UPSTREAM.md](UPSTREAM.md) for attribution.
 
+Download the [latest native release](https://github.com/seedds/cardinal_native/releases/latest).
+The `seedds/tap/cardinal` Homebrew cask follows releases from this repository.
+The older `seedds/cardinal` repository contains the previous Tauri app.
+
 The native application is a **local release candidate**. Core desktop workflows
 are implemented, but older macOS releases, Intel hardware, cloud providers, and
 some external application integrations still need deployment validation.
@@ -322,7 +326,7 @@ After benchmarking, rebuild the ordinary Tauri binary with
 ./scripts/package-native.sh
 ```
 
-Output: `build/Cardinal-Native-0.1.34-arm64.dmg`.
+Output: `build/Cardinal-Native-<VERSION>-arm64.dmg`, using the root `VERSION` file.
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. It does not install,
@@ -333,3 +337,22 @@ Before a production release, validate cloud-provider behavior, sustained high-ch
 indexing, external terminal/Double Commander integration, and drag/drop into the
 intended target applications. Full native migration should be based on those
 results and an updated performance comparison.
+
+## Automated releases
+
+`VERSION` is the app's release version. To publish, increase it using `major.minor.patch`
+and push the change to `main`. The [release workflow](.github/workflows/release.yml)
+tests the Rust bridge, builds an Apple Silicon DMG on macOS 15, verifies the app
+signature and DMG, and publishes a matching GitHub tag and release. It then downloads
+the public DMG and updates the Homebrew cask's version and SHA256 together.
+
+Run the workflow manually from GitHub Actions on `main` to retry a failed release
+or tap update. Published DMGs are reused, never replaced; older versions cannot
+replace the latest release or downgrade the tap. Concurrent releases are serialized.
+If the tap job fails, the GitHub release remains available; rerun the failed job
+after fixing the reported error.
+
+The `HOMEBREW_TAP_DEPLOY_KEY` Actions secret holds a dedicated write deploy key
+for `seedds/homebrew-tap`. The normal `GITHUB_TOKEN` publishes releases in this
+repository. No personal account token is needed. Packaging remains ad-hoc signed;
+this workflow does not notarize the application.

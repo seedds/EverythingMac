@@ -1,0 +1,96 @@
+name: Release DMG and update Homebrew
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cardinal-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'seedds/cardinal_native' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check release version
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release.py prepare
+      - name: Test release safeguards
+        run: python3 -m unittest discover -s scripts -p 'test_release.py'
+      - name: Install pinned Rust toolchain
+        if: steps.prepare.outputs.published != 'true'
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup show
+      - name: Test native bridge
+        if: steps.prepare.outputs.published != 'true'
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo test --locked -p cardinal-native-prototype --config 'build.rustflags=["-Csplit-debuginfo=unpacked"]'
+      - name: Build and verify Apple Silicon DMG
+        if: steps.prepare.outputs.published != 'true'
+        run: |
+          test "$(uname -m)" = arm64
+          ./scripts/package-native.sh
+          codesign --verify --deep --strict "build/Cardinal Native.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' 'build/Cardinal Native.app/Contents/Info.plist')" = "$(cat VERSION)"
+          hdiutil verify "build/Cardinal-Native-$(cat VERSION)-arm64.dmg"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release.py publish
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check out Homebrew tap
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: seedds/homebrew-tap
+          ref: main
+          path: homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      - name: Verify published DMG and update cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          python3 scripts/release.py sync-tap homebrew-tap/Casks/cardinal.rb
+          ruby -c homebrew-tap/Casks/cardinal.rb
+      - name: Push tap update
+        working-directory: homebrew-tap
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          if git diff --quiet -- Casks/cardinal.rb; then
+            echo "Tap already matches the release."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Casks/cardinal.rb
+          git diff --cached --check
+          git commit -m "Update Cardinal Native to $RELEASE_VERSION"
+          git push origin HEAD:main
