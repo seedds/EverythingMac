@@ -125,8 +125,8 @@ For future UI changes:
 | Command-Q | Save the native checkpoint and quit. |
 
 The context menu also provides filename copying, Double Commander reveal, and
-column-width reset. Dragging results exports file URLs. Basic icons load lazily;
-optional thumbnails use a bounded cache and skip files marked dataless.
+column-width reset. Dragging results exports file URLs. Standard file icons load
+lazily into a bounded cache. Search results never generate content thumbnails; Quick Look opens only when explicitly requested.
 
 ## Indexing and storage
 
@@ -154,7 +154,7 @@ The original Cardinal index and preferences are not overwritten.
 
 Use **Index folder…** in Index details to choose a monitored root, and the bottom
 rescan button to rebuild the current scope. Preferences contains include/ignore
-paths, appearance, language, menu bar visibility, thumbnails, terminal application,
+paths, appearance, language, menu bar visibility, terminal application,
 and sorting limit. Include paths override ignored ancestors.
 
 The app processes filesystem events and writes checkpoints during idle intervals
@@ -198,7 +198,7 @@ the conflict. Quit the conflicting Cardinal instance to make the shortcut availa
 | `Sources/CardinalNative/Engine.swift` | C bridge calls, background queue, search generations, and row paging. |
 | `Sources/CardinalNative/LiveModel.swift` | Live updates, scans, checkpoint status, and selection restoration. |
 | `Sources/CardinalNative/FileActions.swift` | Open/reveal/copy, rename, Trash, terminal, and Quick Look. |
-| `Sources/CardinalNative/Icons.swift` | Bounded native icon and thumbnail loading. |
+| `Sources/CardinalNative/Icons.swift` | Bounded standard file icon loading. |
 | `Sources/CardinalNative/Preferences.swift` | Native preferences, legacy import, and translations. |
 | `Sources/CNative/include/cardinal_native.h` | C-compatible Rust/Swift interface and ownership contract. |
 | `bridge/src/` | Rust static library, saved-index loading, search, selection, and live indexing. |
@@ -303,7 +303,7 @@ After benchmarking, rebuild the ordinary Tauri binary with
 ./scripts/package-native.sh
 ```
 
-Output: `build/Cardinal-Native-0.1.28-arm64.dmg`.
+Output: `build/Cardinal-Native-0.1.29-arm64.dmg`.
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. It does not install,

@@ -187,10 +187,6 @@ struct ResultsTable: NSViewRepresentable {
         model.selectionChanged(table.selectedRowIndexes)
       }
       let range = table.rows(in: table.visibleRect)
-      let visible = model.rows.values.filter {
-        range.location != NSNotFound && NSLocationInRange($0.index, range)
-      }
-      icons.cancelOutside(Set(visible.map(FileIcons.key)))
       if range.location != NSNotFound && range.location < model.total {
         for row in range.location..<min(NSMaxRange(range), model.total) {
           for (column, descriptor) in table.tableColumns.enumerated() {
@@ -304,9 +300,7 @@ struct ResultsTable: NSViewRepresentable {
       return cell
     }
     private func icon(_ row: Row, cell: NSTableCellView) {
-      cell.imageView?.image = icons.image(
-        row, thumbnails: model.prefs.thumbnails && !model.snapshotOnly
-      ) { [weak self] key, image in
+      cell.imageView?.image = icons.image(row) { [weak self] key, image in
         guard let self = self, let table = self.table else { return }
         let range = table.rows(in: table.visibleRect)
         guard range.location != NSNotFound else { return }

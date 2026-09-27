@@ -20,7 +20,6 @@ final class Preferences: ObservableObject {
   @Published var theme = "system"
   @Published var language = "en-US"
   @Published var tray = false
-  @Published var thumbnails = true
   @Published var terminal = "/System/Applications/Utilities/Terminal.app"
   @Published var sortLimit = 20000
   @Published var migration = ""
@@ -46,7 +45,6 @@ final class Preferences: ObservableObject {
     theme = v["theme"] as? String ?? theme
     language = v["language"] as? String ?? language
     tray = v["tray"] as? Bool ?? tray
-    thumbnails = v["thumbnails"] as? Bool ?? thumbnails
     terminal = v["terminal"] as? String ?? terminal
     sortLimit = max(1, v["sortLimit"] as? Int ?? sortLimit)
     tableColumns = v["columns"] as? [String: Double] ?? [:]
@@ -58,7 +56,7 @@ final class Preferences: ObservableObject {
     guard !isolated else { return }
     let values: [String: Any] = [
       "root": root, "ignores": ignores, "includes": includes,
-      "theme": theme, "language": language, "tray": tray, "thumbnails": thumbnails,
+      "theme": theme, "language": language, "tray": tray,
       "terminal": terminal, "sortLimit": max(1, sortLimit), "columns": tableColumns,
     ]
     try FileManager.default.createDirectory(
@@ -224,7 +222,6 @@ struct PreferencesView: View {
         }
       }
       Toggle(tr("preferences.trayIcon.label", "Show menu bar icon"), isOn: $prefs.tray)
-      Toggle(tr("native.thumbnails", "Generate file thumbnails"), isOn: $prefs.thumbnails)
       TextField(tr("preferences.terminalApp.label", "Terminal application"), text: $prefs.terminal)
       HStack {
         Text(tr("preferences.sortingLimit.label", "Sorting limit"))
@@ -252,7 +249,6 @@ struct PreferencesView: View {
           prefs.tray = false
           prefs.terminal = "/System/Applications/Utilities/Terminal.app"
           prefs.sortLimit = 20000
-          prefs.thumbnails = true
         }
         Spacer()
         Button(tr("preferences.close", "Close")) { presentation.wrappedValue.dismiss() }
