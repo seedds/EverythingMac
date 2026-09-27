@@ -67,6 +67,8 @@ Node/npm is needed only for the optional Tauri benchmark in a separate checkout.
 
 ## Interface
 
+The app is English-only, with no language setting or bundled translations.
+
 The layout follows the original Cardinal app: **one search row, a full-width
 results table, and a compact bottom status bar**.
 
@@ -154,7 +156,7 @@ The original Cardinal index and preferences are not overwritten.
 
 Use **Index folder…** in Index details to choose a monitored root, and the bottom
 rescan button to rebuild the current scope. Preferences contains include/ignore
-paths, appearance, language, menu bar visibility, terminal application,
+paths, appearance, menu bar visibility, terminal application,
 and sorting limit. Include paths override ignored ancestors.
 
 The app processes filesystem events and writes checkpoints during idle intervals
@@ -199,10 +201,9 @@ the conflict. Quit the conflicting Cardinal instance to make the shortcut availa
 | `Sources/CardinalNative/LiveModel.swift` | Live updates, scans, checkpoint status, and selection restoration. |
 | `Sources/CardinalNative/FileActions.swift` | Open/reveal/copy, rename, Trash, terminal, and Quick Look. |
 | `Sources/CardinalNative/Icons.swift` | Bounded standard file icon loading. |
-| `Sources/CardinalNative/Preferences.swift` | Native preferences, legacy import, and translations. |
+| `Sources/CardinalNative/Preferences.swift` | Native preferences and legacy import. |
 | `Sources/CNative/include/cardinal_native.h` | C-compatible Rust/Swift interface and ownership contract. |
 | `bridge/src/` | Rust static library, saved-index loading, search, selection, and live indexing. |
-| `Resources/native-translations.json` | Native-specific labels for the 15 bundled languages. |
 | `run.sh` | Release build, app assembly, signing, and launch. |
 | `scripts/package-native.sh` | Local DMG creation. |
 
@@ -234,7 +235,7 @@ cargo clippy --workspace --all-targets
 
 The live check creates disposable fixtures and its own checkpoint. It exercises
 FSEvents, filters, selection, rename, Trash/recovery, Quick Look, saved-scope
-restoration, translations, preference import, and tab switching. A successful JSON
+restoration, English-only packaging, preference import, and tab switching. A successful JSON
 report contains `"error": null`; inspect the report rather than relying only on
 the process exit status.
 
@@ -248,12 +249,12 @@ The checks use a deliberately missing terminal application to verify that F9
 reaches terminal validation after the displayed result rows become stale, without
 opening an external app.
 
-To verify stable lifecycle status widths across all bundled languages:
+To verify stable lifecycle status widths across all English states:
 
 ```bash
 swiftc -parse-as-library Sources/CardinalNative/LifecycleStatus.swift \
   scripts/check-status-layout.swift -o /tmp/cardinal-status-layout-check
-/tmp/cardinal-status-layout-check Resources/Translations
+/tmp/cardinal-status-layout-check
 ```
 
 For the saved-index window checks, create a fresh fixture directory:
@@ -321,7 +322,7 @@ After benchmarking, rebuild the ordinary Tauri binary with
 ./scripts/package-native.sh
 ```
 
-Output: `build/Cardinal-Native-0.1.31-arm64.dmg`.
+Output: `build/Cardinal-Native-0.1.32-arm64.dmg`.
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. It does not install,

@@ -5,7 +5,7 @@ and the [seedds fork](https://github.com/seedds/cardinal), under the MIT license
 included in LICENSE.
 
 The native app was extracted from `native-prototype/`. The Rust engine crates in
-`engine/`, `bridge/src/sort.rs`, translations, and app icon were copied from the
+`engine/`, `bridge/src/sort.rs`, and app icon were copied from the
 local seedds/cardinal checkout at commit
 `444fdd8618cab97bde45dab7b747ab331133dc06`.
 

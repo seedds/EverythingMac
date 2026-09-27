@@ -125,13 +125,13 @@ final class FileActions {
     guard paths.count == 1, let model = model else { return }
     let url = URL(fileURLWithPath: paths[0])
     let alert = NSAlert()
-    alert.messageText = tr("statusBar.shortcuts.rename", "Rename")
+    alert.messageText = "Rename"
     alert.informativeText = url.path
     let field = NSTextField(string: url.lastPathComponent)
     field.frame = NSRect(x: 0, y: 0, width: 380, height: 24)
     alert.accessoryView = field
-    alert.addButton(withTitle: tr("statusBar.shortcuts.rename", "Rename"))
-    alert.addButton(withTitle: tr("native.cancel", "Cancel"))
+    alert.addButton(withTitle: "Rename")
+    alert.addButton(withTitle: "Cancel")
     alert.window.initialFirstResponder = field
     field.selectText(nil)
     (field.currentEditor() as? NSTextView)?.setSelectedRange(

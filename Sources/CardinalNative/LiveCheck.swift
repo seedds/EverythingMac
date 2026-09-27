@@ -203,24 +203,15 @@ final class LiveCheck {
         }
         QLPreviewPanel.shared()?.orderOut(nil)
         next("Quick Look shows a real selected file")
-        model.prefs.language = "zh-CN"
-        Translation.load("zh-CN")
-        guard tr("columns.filename", "Filename") != "Filename" else {
-          finish("Translations were not bundled")
+        let resources = Bundle.main.resourceURL!
+        guard Bundle.main.localizations == ["en"],
+          !FileManager.default.fileExists(atPath: resources.appendingPathComponent("Translations").path),
+          !FileManager.default.fileExists(atPath: resources.appendingPathComponent("native-translations.json").path)
+        else {
+          finish("English-only bundle contains unexpected language resources")
           return
         }
-        Translation.load("en-US")
-        for language in Translation.languages {
-          Translation.load(language)
-          guard tr("native.search", "MISSING") != "MISSING",
-            tr("contextMenu.openItem", "MISSING") != "MISSING"
-          else {
-            finish("Missing translation for \(language)")
-            return
-          }
-        }
-        Translation.load("en-US")
-        next("Bundled language resources")
+        next("English-only bundle has no translation resources")
         try checkMigration()
         next("Read-only legacy preferences migration")
         model.actions.preview.update([])
@@ -323,7 +314,7 @@ final class LiveCheck {
       throw messageError("Migration fixture database failed")
     }
     let values = [
-      "cardinal.watchRoot": root.path, "cardinal.theme": "dark", "cardinal.sortThreshold": "4321",
+      "cardinal.watchRoot": root.path, "cardinal.theme": "dark", "cardinal.language": "zh-CN", "cardinal.sortThreshold": "4321",
       "cardinal.ignorePaths": "[\"/tmp/ignored\"]",
     ]
     var sql = "CREATE TABLE ItemTable (key TEXT UNIQUE, value BLOB NOT NULL);"

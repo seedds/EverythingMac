@@ -21,10 +21,7 @@ struct ContentView: View {
       || (!model.ready && model.error == nil)
   }
   private var lifecycle: String {
-    tr(
-      "statusBar.lifecycle."
-        + (model.scanning ? "Updating" : model.ready ? "Ready" : "Initializing"),
-      model.scanning ? "Updating" : model.ready ? "Ready" : "Initializing")
+    model.scanning ? "Updating" : model.ready ? "Ready" : "Initializing"
   }
 
   var body: some View {
@@ -34,7 +31,7 @@ struct ContentView: View {
       if model.activeTab == "files" {
         ResultsTable(model: model).overlay(alignment: .center) {
           if model.ready && !model.searching && model.total == 0 && model.error == nil {
-            Text(tr("native.empty", "No matching files")).foregroundColor(.secondary)
+            Text("No matching files").foregroundColor(.secondary)
           }
         }
       } else {
@@ -87,11 +84,11 @@ struct ContentView: View {
             .foregroundColor(scopeOpen ? .accentColor : .secondary)
             .frame(width: scopeOpen ? 24 : 16, height: 32)
         }.buttonStyle(.plain)
-          .help(tr("search.options.directoryScope", "Toggle folder scope"))
-          .accessibilityLabel(tr("search.options.directoryScope", "Toggle folder scope"))
+          .help("Toggle folder scope")
+          .accessibilityLabel("Toggle folder scope")
           .accessibilityValue(scopeOpen ? "On" : "Off")
         if scopeOpen {
-          TextField(tr("search.placeholder.directory", "Folder scope…"), text: $model.directory)
+          TextField("Folder scope…", text: $model.directory)
             .textFieldStyle(.plain).focused($directoryFocused)
             .onSubmit { model.submit() }
             .padding(.horizontal, 10).frame(width: 215, height: 32)
@@ -99,9 +96,8 @@ struct ContentView: View {
         }
       }
       TextField(
-        tr(
-          model.activeTab == "files" ? "search.placeholder.files" : "search.placeholder.events",
-          "Search…"), text: searchText
+        model.activeTab == "files" ? "Search for files and folders…" : "Filter events by path or name…",
+        text: searchText
       )
       .textFieldStyle(.plain).focused($searchFocused)
       .onSubmit {
@@ -130,8 +126,8 @@ struct ContentView: View {
               model.sensitive
                 ? Color.accentColor.opacity(0.5) : Color(nsColor: .separatorColor).opacity(0.4)))
       }.buttonStyle(.plain)
-        .help(tr("search.options.caseSensitive", "Case sensitive"))
-        .accessibilityLabel(tr("search.options.caseSensitive", "Case sensitive"))
+        .help("Case sensitive")
+        .accessibilityLabel("Case sensitive")
         .accessibilityValue(model.sensitive ? "On" : "Off")
     }.font(.system(size: 13))
   }
@@ -145,13 +141,11 @@ struct ContentView: View {
     if !model.snapshotOnly && !model.hasFullDiskAccess {
       HStack(spacing: 8) {
         Image(systemName: "lock.shield")
-        Text(tr("app.fullDiskAccess.title", "Full Disk Access Required"))
+        Text("Full Disk Access Required")
           .help(
-            tr(
-              "app.fullDiskAccess.description", "Enable Full Disk Access to search protected files."
-            ))
+            "Enable Full Disk Access to search protected files.")
         Spacer()
-        Button(tr("app.fullDiskAccess.openSettings", "Open System Settings")) {
+        Button("Open System Settings") {
           FileActions.openPrivacySettings()
         }
       }.font(.caption).foregroundColor(.orange).padding(.horizontal, 12).padding(.bottom, 8)
@@ -160,7 +154,7 @@ struct ContentView: View {
       HStack {
         Text(error).foregroundColor(.red).textSelection(.enabled)
         Spacer()
-        Button(tr("native.dismiss", "Dismiss")) { model.error = nil }
+        Button("Dismiss") { model.error = nil }
       }.font(.caption).padding(.horizontal, 12).padding(.bottom, 8)
     }
     if let message = model.shortcutMessage {
@@ -173,10 +167,10 @@ struct ContentView: View {
   private var eventsList: some View {
     VStack(spacing: 0) {
       HStack {
-        Text(tr("events.columns.time", "Time")).frame(width: 90, alignment: .leading)
-        Text(tr("events.columns.event", "Event")).frame(width: 180, alignment: .leading)
-        Text(tr("events.columns.name", "Filename")).frame(width: 180, alignment: .leading)
-        Text(tr("events.columns.path", "Path")).frame(maxWidth: .infinity, alignment: .leading)
+        Text("Time").frame(width: 90, alignment: .leading)
+        Text("Event").frame(width: 180, alignment: .leading)
+        Text("Filename").frame(width: 180, alignment: .leading)
+        Text("Path").frame(maxWidth: .infinity, alignment: .leading)
       }.font(.system(size: 12, weight: .medium)).foregroundColor(.secondary)
         .padding(.horizontal, 10).frame(height: 25).background(
           Color(nsColor: .windowBackgroundColor))
@@ -198,13 +192,13 @@ struct ContentView: View {
             .truncationMode(.middle)
         }.font(.system(size: 12)).lineLimit(1).frame(height: 24).textSelection(.enabled)
           .contextMenu {
-            Button(tr("contextMenu.openItem", "Open")) {
+            Button("Open") {
               model.actions.perform("open", paths: [event.path])
             }
-            Button(tr("contextMenu.revealInFinder", "Reveal in Finder")) {
+            Button("Reveal in Finder") {
               model.actions.perform("reveal", paths: [event.path])
             }
-            Button(tr("contextMenu.copyPath", "Copy Path")) {
+            Button("Copy Path") {
               model.actions.perform("paths", paths: [event.path])
             }
           }
@@ -217,7 +211,7 @@ struct ContentView: View {
       model.activeTab = key
     } label: {
       HStack(spacing: 5) {
-        Text(tr("statusBar.tabs." + key, key.capitalized))
+        Text(key.capitalized)
         Text(count.formatted()).monospacedDigit().foregroundColor(.secondary)
       }.padding(.horizontal, 9).frame(height: 24)
         .background(
@@ -229,8 +223,7 @@ struct ContentView: View {
   private func statusBar(showShortcuts: Bool) -> some View {
     HStack(spacing: 10) {
       LifecycleStatus(
-        busy: busy, hasError: model.error != nil, label: lifecycle,
-        labels: ["Ready", "Initializing", "Updating"].map { tr("statusBar.lifecycle." + $0, $0) }
+        busy: busy, hasError: model.error != nil, label: lifecycle
       ).help(model.indexStatus)
       HStack(spacing: 1) {
         tab("files", count: model.indexedCount)
@@ -242,8 +235,8 @@ struct ContentView: View {
         } label: {
           Image(systemName: "xmark.circle").frame(width: 14, height: 14)
         }
-        .help(tr("native.cancelScan", "Cancel scan")).accessibilityLabel(
-          tr("native.cancelScan", "Cancel scan"))
+        .help("Cancel scan").accessibilityLabel(
+          "Cancel scan")
       } else {
         Button {
           model.scan(useCurrentConfig: true)
@@ -251,42 +244,41 @@ struct ContentView: View {
           Image(systemName: "arrow.clockwise").frame(width: 14, height: 14)
         }
         .disabled(!model.ready || model.snapshotOnly)
-        .help(tr("statusBar.aria.rescan", "Rescan")).accessibilityLabel(
-          tr("statusBar.aria.rescan", "Rescan"))
+        .help("Rescan").accessibilityLabel(
+          "Rescan")
       }
       Button {
         model.preferencesOpen = true
       } label: {
         Image(systemName: "gearshape")
       }
-      .help(tr("statusBar.aria.settings", "Open preferences")).accessibilityLabel(
-        tr("statusBar.aria.settings", "Open preferences"))
+      .help("Open preferences").accessibilityLabel(
+        "Open preferences")
       Button {
         indexDetailsOpen.toggle()
       } label: {
         Image(systemName: "info.circle")
       }
-      .help(tr("native.indexDetails", "Index details"))
-      .accessibilityLabel(tr("native.indexDetails", "Index details"))
+      .help("Index details")
+      .accessibilityLabel("Index details")
       .popover(isPresented: $indexDetailsOpen, arrowEdge: .top) { indexDetails }
       Spacer(minLength: 4)
       if showShortcuts && model.activeTab == "files" {
         Text(
-          "F2 \(tr("statusBar.shortcuts.rename", "Rename"))   F8 \(tr("statusBar.shortcuts.trash", "Trash"))   F9 \(tr("statusBar.shortcuts.terminal", "Terminal"))"
+          "F2 Rename   F8 Trash   F9 Terminal"
         )
         .foregroundColor(.secondary)
         Spacer(minLength: 4)
       }
       if model.selectionCount > 0 {
         Text(
-          tr("native.selected", "{count} selected").replacingOccurrences(
-            of: "{count}", with: model.selectionCount.formatted())
+          "\(model.selectionCount.formatted()) selected"
         )
         .foregroundColor(.secondary)
       }
       if model.activeTab == "files" {
         Text(
-          "\(tr("statusBar.searchLabel", "Search:")) \(model.total.formatted()) · \(Int(model.backendMS.rounded())) ms"
+          "Search: \(model.total.formatted()) · \(Int(model.backendMS.rounded())) ms"
         )
         .monospacedDigit().help(model.status)
       }
@@ -297,7 +289,7 @@ struct ContentView: View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
         model.snapshotOnly
-          ? tr("native.snapshot", "Read-only snapshot") : tr("native.live", "Live updates")
+          ? "Read-only snapshot" : "Live updates"
       ).font(.headline)
       Text(model.snapshot).font(.caption).textSelection(.enabled).fixedSize(
         horizontal: false, vertical: true)
@@ -306,23 +298,23 @@ struct ContentView: View {
       Text(model.status).font(.caption).foregroundColor(.secondary)
       Divider()
       if model.snapshotOnly {
-        Button(tr("native.enableLive", "Enable live updates")) { model.enableLive() }.disabled(
+        Button("Enable live updates") { model.enableLive() }.disabled(
           !model.ready)
       } else {
-        Toggle(tr("native.live", "Live updates"), isOn: $model.live)
+        Toggle("Live updates", isOn: $model.live)
           .onChange(of: model.live) { _ in model.setLive() }.disabled(!model.ready)
       }
       HStack {
-        Button(tr("native.chooseIndex", "Choose index…")) {
+        Button("Choose index…") {
           indexDetailsOpen = false
           model.choose()
         }
-        Button(tr("native.indexFolder", "Index folder…")) {
+        Button("Index folder…") {
           indexDetailsOpen = false
           model.chooseFolder()
         }.disabled(model.scanning)
       }
-      Picker(tr("native.delay", "Delay"), selection: $model.debounce) {
+      Picker("Delay", selection: $model.debounce) {
         Text("0 ms").tag(0)
         Text("100 ms").tag(100)
         Text("300 ms").tag(300)
@@ -431,45 +423,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     let app = submenu("Cardinal Native")
     app.addItem(
-      withTitle: tr("menu.about", "About {{appName}}").replacingOccurrences(
-        of: "{{appName}}", with: "Cardinal Native"),
+      withTitle: "About Cardinal Native",
       action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
     let preferences = app.addItem(
-      withTitle: tr("menu.preferences", "Preferences…"), action: #selector(showPreferences),
+      withTitle: "Preferences…", action: #selector(showPreferences),
       keyEquivalent: ",")
     preferences.target = self
     app.addItem(
-      withTitle: tr("menu.hide", "Hide"), action: #selector(NSApplication.hide(_:)),
+      withTitle: "Hide", action: #selector(NSApplication.hide(_:)),
       keyEquivalent: "h")
     app.addItem(
-      withTitle: tr("menu.quit", "Quit {{appName}}").replacingOccurrences(
-        of: "{{appName}}", with: "Cardinal Native"), action: #selector(NSApplication.terminate(_:)),
+      withTitle: "Quit Cardinal Native", action: #selector(NSApplication.terminate(_:)),
       keyEquivalent: "q")
-    let edit = submenu(tr("menu.edit", "Edit"))
+    let edit = submenu("Edit")
     for (title, action, key) in [
       ("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
       ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a"),
     ] {
       edit.addItem(
-        withTitle: tr("menu." + String(action.dropLast()), title), action: Selector(action),
+        withTitle: title, action: Selector(action),
         keyEquivalent: key)
     }
-    let view = submenu(tr("menu.view", "View"))
+    let view = submenu("View")
     view.addItem(
-      withTitle: tr("menu.fullscreen", "Toggle Fullscreen"),
+      withTitle: "Toggle Fullscreen",
       action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f"
     ).keyEquivalentModifierMask = [.control, .command]
-    let windows = submenu(tr("menu.window", "Window"))
+    let windows = submenu("Window")
     windows.addItem(
-      withTitle: tr("menu.minimize", "Minimize"),
+      withTitle: "Minimize",
       action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
     windows.addItem(
-      withTitle: tr("menu.closeWindow", "Close Window"),
+      withTitle: "Close Window",
       action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
     NSApp.windowsMenu = windows
-    let help = submenu(tr("menu.help", "Help"))
+    let help = submenu("Help")
     let updates = help.addItem(
-      withTitle: tr("menu.getUpdates", "Get Updates"), action: #selector(showUpdates),
+      withTitle: "Get Updates", action: #selector(showUpdates),
       keyEquivalent: "")
     updates.target = self
     NSApp.mainMenu = menu
@@ -497,11 +487,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       systemSymbolName: "magnifyingglass", accessibilityDescription: "Cardinal Native")
     let menu = NSMenu()
     let open = menu.addItem(
-      withTitle: tr("tray.open", "Open Cardinal Native"), action: #selector(showWindow),
+      withTitle: "Open Cardinal Native", action: #selector(showWindow),
       keyEquivalent: "")
     open.target = self
     menu.addItem(
-      withTitle: tr("tray.quit", "Quit"), action: #selector(NSApplication.terminate(_:)),
+      withTitle: "Quit", action: #selector(NSApplication.terminate(_:)),
       keyEquivalent: "")
     item.menu = menu
     statusItem = item

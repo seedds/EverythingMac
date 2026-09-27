@@ -4,7 +4,7 @@ struct LifecycleStatus: View {
   let busy: Bool
   let hasError: Bool
   let label: String
-  let labels: [String]
+  static let labels = ["Ready", "Initializing", "Updating"]
 
   var body: some View {
     HStack(spacing: 5) {
@@ -15,11 +15,11 @@ struct LifecycleStatus: View {
           Circle().fill(hasError ? Color.orange : Color.green).frame(width: 6, height: 6)
         }
       }.frame(width: 12, height: 12)
-      // Reserve the widest translated state without exposing hidden labels to
-      // accessibility or truncating languages with longer status descriptions.
+      // Reserve the widest state without exposing hidden labels to
+      // accessibility while keeping state changes from shifting neighboring controls.
       ZStack(alignment: .leading) {
-        ForEach(labels.indices, id: \.self) { index in
-          Text(labels[index]).hidden().accessibilityHidden(true)
+        ForEach(Self.labels.indices, id: \.self) { index in
+          Text(Self.labels[index]).hidden().accessibilityHidden(true)
         }
         Text(label)
       }.fixedSize()

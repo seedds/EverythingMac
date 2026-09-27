@@ -74,11 +74,7 @@ struct ResultsTable: NSViewRepresentable {
       ("Name", 260.0), ("Path", 450.0), ("Size", 100.0), ("Modified", 155.0), ("Created", 155.0),
     ] {
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(name))
-      column.title = tr(
-        "columns." + [
-          "Name": "filename", "Path": "path", "Size": "size", "Modified": "modified",
-          "Created": "created",
-        ][name]!, name)
+      column.title = name == "Name" ? "Filename" : name
       column.width = model.prefs.tableColumns[name] ?? width
       table.addTableColumn(column)
     }
@@ -144,29 +140,6 @@ struct ResultsTable: NSViewRepresentable {
     }
     func update() {
       guard let table = table else { return }
-      for column in table.tableColumns {
-        let key = [
-          "Name": "filename", "Path": "path", "Size": "size", "Modified": "modified",
-          "Created": "created",
-        ][column.identifier.rawValue]!
-        column.title = tr("columns." + key, column.identifier.rawValue)
-      }
-      let keys = [
-        "open": "contextMenu.openItem", "reveal": "contextMenu.revealInFinder",
-        "preview": "contextMenu.quickLook", "copy": "contextMenu.copyFiles",
-        "paths": "contextMenu.copyPaths", "names": "contextMenu.copyFilenames",
-        "columns": "contextMenu.resetColumnWidths",
-        "rename": "statusBar.shortcuts.rename", "trash": "statusBar.shortcuts.trash",
-        "terminal": "statusBar.shortcuts.terminal", "commander": "contextMenu.revealInFinder",
-      ]
-      for item in table.menu?.items ?? [] {
-        if let action = item.representedObject as? String, let key = keys[action] {
-          item.title = tr(key, item.title)
-          if action == "commander" {
-            item.title = item.title.replacingOccurrences(of: "Finder", with: "Double Commander")
-          }
-        }
-      }
       guard revision != model.revision else { return }
       let replaced = generation != model.displayedGeneration
       generation = model.displayedGeneration

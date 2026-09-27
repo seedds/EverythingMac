@@ -18,7 +18,6 @@ final class Preferences: ObservableObject {
   @Published var ignores = defaultIgnores.joined(separator: "\n")
   @Published var includes = ""
   @Published var theme = "system"
-  @Published var language = "en-US"
   @Published var tray = false
   @Published var terminal = "/System/Applications/Utilities/Terminal.app"
   @Published var sortLimit = 20000
@@ -36,34 +35,30 @@ final class Preferences: ObservableObject {
     } else {
       importLegacy()
     }
-    Translation.load(language)
   }
   func apply(_ v: [String: Any]) {
     root = v["root"] as? String ?? root
     ignores = v["ignores"] as? String ?? ignores
     includes = v["includes"] as? String ?? includes
     theme = v["theme"] as? String ?? theme
-    language = v["language"] as? String ?? language
     tray = v["tray"] as? Bool ?? tray
     terminal = v["terminal"] as? String ?? terminal
     sortLimit = max(1, v["sortLimit"] as? Int ?? sortLimit)
     tableColumns = v["columns"] as? [String: Double] ?? [:]
   }
   func save() throws {
-    Translation.load(language)
     NSApp.appearance =
       theme == "system" ? nil : NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
     guard !isolated else { return }
     let values: [String: Any] = [
       "root": root, "ignores": ignores, "includes": includes,
-      "theme": theme, "language": language, "tray": tray,
+      "theme": theme, "tray": tray,
       "terminal": terminal, "sortLimit": max(1, sortLimit), "columns": tableColumns,
     ]
     try FileManager.default.createDirectory(
       atPath: Self.directory, withIntermediateDirectories: true)
     try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys])
       .write(to: URL(fileURLWithPath: Self.file), options: .atomic)
-    Translation.load(language)
     NSApp.appearance =
       theme == "system" ? nil : NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
   }
@@ -111,7 +106,6 @@ final class Preferences: ObservableObject {
     ignores = paths("cardinal.ignorePaths") ?? ignores
     includes = paths("cardinal.includePaths") ?? includes
     theme = values["cardinal.theme"] ?? theme
-    language = values["cardinal.language"] ?? language
     tray = values["cardinal.trayIconEnabled"] == "true"
     terminal = values["cardinal.terminalApp"] ?? terminal
     sortLimit = max(1, Int(values["cardinal.sortThreshold"] ?? "") ?? sortLimit)
@@ -159,36 +153,6 @@ func messageError(_ message: String) -> NSError {
   NSError(domain: "CardinalNative", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
 }
 
-enum Translation {
-  static let languages = [
-    "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", "es-ES", "pt-BR", "de-DE", "it-IT",
-    "ru-RU", "uk-UA", "ar-SA", "hi-IN", "tr-TR",
-  ]
-  static var strings: [String: Any] = [:]
-  static func load(_ code: String) {
-    let url = Bundle.main.resourceURL?.appendingPathComponent("Translations/\(code).json")
-    strings =
-      url.flatMap { try? Data(contentsOf: $0) }.flatMap {
-        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-      } ?? [:]
-    if let nativeURL = Bundle.main.resourceURL?.appendingPathComponent("native-translations.json"),
-      let data = try? Data(contentsOf: nativeURL),
-      let locales = try? JSONSerialization.jsonObject(with: data) as? [String: [String: String]]
-    {
-      strings["native"] = locales[code] ?? locales["en-US"]
-    }
-  }
-  static func text(_ key: String, _ fallback: String) -> String {
-    var current: Any = strings
-    for part in key.split(separator: ".") {
-      guard let value = (current as? [String: Any])?[String(part)] else { return fallback }
-      current = value
-    }
-    return current as? String ?? fallback
-  }
-}
-func tr(_ key: String, _ fallback: String) -> String { Translation.text(key, fallback) }
-
 struct PreferencesView: View {
   @ObservedObject var prefs: Preferences
   @ObservedObject var model: Model
@@ -196,63 +160,55 @@ struct PreferencesView: View {
   @State var error: String?
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(tr("preferences.title", "Preferences")).font(.title2.bold())
-      TextField(tr("watchRoot.label", "Monitor root path"), text: $prefs.root)
+      Text("Preferences").font(.title2.bold())
+      TextField("Monitor root path", text: $prefs.root)
       HStack {
         VStack(alignment: .leading) {
-          Text(tr("ignorePaths.label", "Ignore paths"))
+          Text("Ignore paths")
           TextEditor(text: $prefs.ignores).frame(height: 110)
         }
         VStack(alignment: .leading) {
-          Text(tr("includePaths.label", "Include paths"))
+          Text("Include paths")
           TextEditor(text: $prefs.includes).frame(height: 110)
         }
       }
       Text(
-        tr("includePaths.help", "One absolute path per line; includes override ignored ancestors.")
+        "One absolute path per line; includes override ignored ancestors."
       ).font(.caption).foregroundColor(.secondary)
-      Picker(tr("preferences.appearance", "Appearance"), selection: $prefs.theme) {
+      Picker("Appearance", selection: $prefs.theme) {
         ForEach(["system", "light", "dark"], id: \.self) {
-          Text(tr("theme.options.\($0)", $0.capitalized)).tag($0)
+          Text($0.capitalized).tag($0)
         }
       }
-      Picker(tr("preferences.language", "Language"), selection: $prefs.language) {
-        ForEach(Translation.languages, id: \.self) {
-          Text(Locale(identifier: $0).localizedString(forIdentifier: $0) ?? $0).tag($0)
-        }
-      }
-      Toggle(tr("preferences.trayIcon.label", "Show menu bar icon"), isOn: $prefs.tray)
-      TextField(tr("preferences.terminalApp.label", "Terminal application"), text: $prefs.terminal)
+      Toggle("Show menu bar icon", isOn: $prefs.tray)
+      TextField("Terminal application", text: $prefs.terminal)
       HStack {
-        Text(tr("preferences.sortingLimit.label", "Sorting limit"))
+        Text("Sorting limit")
         TextField("20000", value: $prefs.sortLimit, formatter: NumberFormatter()).frame(width: 120)
       }
       HStack {
-        Button(tr("native.importPrefs", "Import existing Cardinal preferences")) {
+        Button("Import existing Cardinal preferences") {
           prefs.importLegacy()
         }
         Text(prefs.migration).font(.caption).foregroundColor(.secondary)
       }
-      Button(tr("app.fullDiskAccess.openSettings", "Open Full Disk Access settings")) {
+      Button("Open Full Disk Access settings") {
         FileActions.openPrivacySettings()
       }
       Text(
-        tr(
-          "app.fullDiskAccess.description",
-          "Enable Full Disk Access for Cardinal Native and relaunch.")
+        "Enable Full Disk Access for Cardinal Native and relaunch."
       ).font(.caption).foregroundColor(.secondary)
       if let error = error { Text(error).foregroundColor(.red) }
       HStack {
-        Button(tr("preferences.reset", "Restore defaults")) {
+        Button("Restore defaults") {
           prefs.theme = "system"
-          prefs.language = "en-US"
           prefs.tray = false
           prefs.terminal = "/System/Applications/Utilities/Terminal.app"
           prefs.sortLimit = 20000
         }
         Spacer()
-        Button(tr("preferences.close", "Close")) { presentation.wrappedValue.dismiss() }
-        Button(tr("preferences.save", "Save")) {
+        Button("Close") { presentation.wrappedValue.dismiss() }
+        Button("Save") {
           do {
             try prefs.validate()
             try prefs.save()

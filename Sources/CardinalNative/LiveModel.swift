@@ -110,7 +110,7 @@ extension Model {
     scanning = true
     ready = false
     error = nil
-    status = tr("native.scanning", "Scanning…")
+    status = "Scanning…"
     let scanRoot = useCurrentConfig && !root.isEmpty ? root : Preferences.normalized(prefs.root)
     let ignores = useCurrentConfig ? loadedIgnores : Preferences.paths(prefs.ignores)
     let includes = useCurrentConfig ? loadedIncludes : Preferences.paths(prefs.includes)
@@ -121,7 +121,7 @@ extension Model {
       case .success(let reply):
         guard reply.status == "ok" else {
           self.ready = hadIndex
-          self.status = tr("native.scanCancelled", "Scan cancelled; previous index retained")
+          self.status = "Scan cancelled; previous index retained"
           if hadIndex { self.submit(background: true) }
           return
         }
@@ -138,7 +138,7 @@ extension Model {
         self.ready = true
         self.live = true
         self.snapshot = self.checkpointPath
-        self.snapshotDate = tr("native.notSaved", "Not saved yet")
+        self.snapshotDate = "Not saved yet"
         self.loadedMS = reply.load_ms ?? 0
         self.indexedCount = reply.total ?? 0
         self.processedEventCount = 0
@@ -148,7 +148,7 @@ extension Model {
       case .failure(let e):
         self.ready = hadIndex
         self.error = e.localizedDescription
-        self.status = tr("native.scanFailed", "Scan failed; previous index retained")
+        self.status = "Scan failed; previous index retained"
       }
     }
   }
