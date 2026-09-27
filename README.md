@@ -248,6 +248,14 @@ The checks use a deliberately missing terminal application to verify that F9
 reaches terminal validation after the displayed result rows become stale, without
 opening an external app.
 
+To verify stable lifecycle status widths across all bundled languages:
+
+```bash
+swiftc -parse-as-library Sources/CardinalNative/LifecycleStatus.swift \
+  scripts/check-status-layout.swift -o /tmp/cardinal-status-layout-check
+/tmp/cardinal-status-layout-check Resources/Translations
+```
+
 For the saved-index window checks, create a fresh fixture directory:
 
 ```bash
@@ -313,7 +321,7 @@ After benchmarking, rebuild the ordinary Tauri binary with
 ./scripts/package-native.sh
 ```
 
-Output: `build/Cardinal-Native-0.1.30-arm64.dmg`.
+Output: `build/Cardinal-Native-0.1.31-arm64.dmg`.
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. It does not install,

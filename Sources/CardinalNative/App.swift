@@ -228,14 +228,10 @@ struct ContentView: View {
 
   private func statusBar(showShortcuts: Bool) -> some View {
     HStack(spacing: 10) {
-      HStack(spacing: 5) {
-        if busy {
-          ProgressView().controlSize(.small).scaleEffect(0.65).frame(width: 12, height: 12)
-        } else {
-          Circle().fill(model.error != nil ? Color.orange : Color.green).frame(width: 6, height: 6)
-        }
-        Text(lifecycle)
-      }.help(model.indexStatus)
+      LifecycleStatus(
+        busy: busy, hasError: model.error != nil, label: lifecycle,
+        labels: ["Ready", "Initializing", "Updating"].map { tr("statusBar.lifecycle." + $0, $0) }
+      ).help(model.indexStatus)
       HStack(spacing: 1) {
         tab("files", count: model.indexedCount)
         tab("events", count: model.processedEventCount)
@@ -244,7 +240,7 @@ struct ContentView: View {
         Button {
           cn_cancel_scan()
         } label: {
-          Image(systemName: "xmark.circle")
+          Image(systemName: "xmark.circle").frame(width: 14, height: 14)
         }
         .help(tr("native.cancelScan", "Cancel scan")).accessibilityLabel(
           tr("native.cancelScan", "Cancel scan"))
@@ -252,7 +248,7 @@ struct ContentView: View {
         Button {
           model.scan(useCurrentConfig: true)
         } label: {
-          Image(systemName: "arrow.clockwise")
+          Image(systemName: "arrow.clockwise").frame(width: 14, height: 14)
         }
         .disabled(!model.ready || model.snapshotOnly)
         .help(tr("statusBar.aria.rescan", "Rescan")).accessibilityLabel(

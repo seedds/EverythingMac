@@ -120,3 +120,12 @@ selection expansion. The focused check passes for one file and 1,200 selected
 files; the complete live suite passes all 23 checks. An earlier full-suite run
 timed out on the existing Events-tab transition before reaching the new check;
 the focused reproduction and subsequent complete run both finished.
+
+## Stable lifecycle status layout — 0.1.31
+
+The spinner and idle dot now share a 12-point slot. Lifecycle text reserves the
+widest translated state, and rescan/cancel icons share a fixed frame. The SwiftUI
+layout check reproduced a 6-point busy/idle shift before the fix, plus additional
+movement between lifecycle labels. After the fix it measured zero width change
+across all six label/busy combinations in each of the 15 bundled languages.
+The release build and all 10 rendered snapshot-window checks passed.
