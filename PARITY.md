@@ -7,7 +7,7 @@ Acceptance checklist (implementation and validation are tracked separately):
 
 - Live index: load, scan, cancel, resume filesystem history, root/include/ignore configuration, rescan, checkpoint/relaunch, status and recent events.
 - Search: existing query language and cloud-file semantics, directory scope, case sensitivity, history, sorting by Name/Path/Size/Modified/Created with a configurable limit, bounded rows and stale-response protection.
-- Results: persistent resizable columns, multiple selection and stable background refresh, basic icons and lazy thumbnails, drag/copy files, copy names/paths, context menu.
+- Results: persistent resizable columns, multiple selection and stable background refresh, standard file icons, drag/copy files, copy names/paths, context menu.
 - Actions: open, Finder/Double Commander reveal, Quick Look with keyboard navigation, F2 exclusive rename, F8 recoverable Trash, configurable F9 terminal.
 - App: Command-F, search-to-list navigation, Escape/hide, Command-Shift-Space, menu bar item, preferences/theme/language, permission guidance, window restoration, single-instance normal launch.
 - Migration: import existing preferences read-only; keep an independent native index/preferences store. Snapshot benchmark mode remains read-only and has no watcher.
@@ -103,3 +103,10 @@ application passed 21 live UI checks and 10 snapshot UI checks, with `error: nul
 in both reports. The standalone bridge suite passed all 5 tests. Codesign
 verification and the DMG checksum verification passed. Validation used the same
 macOS 27 / Apple M4 Pro environment above; older macOS releases remain untested.
+
+## Thumbnail removal — 0.1.29
+
+The thumbnail feature has been deleted: generator requests, thumbnail cache,
+preference toggle, saved preference handling, reset behavior, and translations.
+Results always use standard file icons. There is no setting to enable thumbnails.
+The release binary has no Quick Look thumbnail generator references.
