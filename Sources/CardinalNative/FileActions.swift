@@ -67,6 +67,13 @@ final class FileActions {
       return
     }
     guard let paths = explicitPaths else {
+      // F9 needs only the first selected path, already retained by the UI.
+      // Resolving row positions again races with live index/search updates and
+      // needlessly expands large selections just to open one terminal window.
+      if action == "terminal", model.selectionCount > 0, let path = model.selectedPaths.first {
+        perform(action, paths: [path])
+        return
+      }
       model.resolveSelection { [weak self] paths in self?.perform(action, paths: paths) }
       return
     }

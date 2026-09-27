@@ -110,3 +110,13 @@ The thumbnail feature has been deleted: generator requests, thumbnail cache,
 preference toggle, saved preference handling, reset behavior, and translations.
 Results always use standard file icons. There is no setting to enable thumbnails.
 The release binary has no Quick Look thumbnail generator references.
+
+## F9 during live updates — 0.1.30
+
+A focused check reproduced the exact “index changed” error by processing a real
+filesystem event before invoking the terminal action. F9 now uses the first
+selected path retained by the UI, avoiding stale result-row resolution and full
+selection expansion. The focused check passes for one file and 1,200 selected
+files; the complete live suite passes all 23 checks. An earlier full-suite run
+timed out on the existing Events-tab transition before reaching the new check;
+the focused reproduction and subsequent complete run both finished.

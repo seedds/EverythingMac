@@ -238,6 +238,16 @@ restoration, translations, preference import, and tab switching. A successful JS
 report contains `"error": null`; inspect the report rather than relying only on
 the process exit status.
 
+To run only the F9/live-update regression checks (single and 1,200-file selections):
+
+```bash
+./run.sh --live-check /tmp/cardinal-native-terminal-check.json --terminal-check
+```
+
+The checks use a deliberately missing terminal application to verify that F9
+reaches terminal validation after the displayed result rows become stale, without
+opening an external app.
+
 For the saved-index window checks, create a fresh fixture directory:
 
 ```bash
@@ -303,7 +313,7 @@ After benchmarking, rebuild the ordinary Tauri binary with
 ./scripts/package-native.sh
 ```
 
-Output: `build/Cardinal-Native-0.1.29-arm64.dmg`.
+Output: `build/Cardinal-Native-0.1.30-arm64.dmg`.
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. It does not install,

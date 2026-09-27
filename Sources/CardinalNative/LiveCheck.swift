@@ -16,6 +16,7 @@ final class LiveCheck {
   var checks: [String] = []
   var pending = false
   var selectionBeforeSort: UInt64 = 0
+  let terminalValidationError = "Choose an installed terminal application in Preferences."
   init(model: Model, output: String) {
     self.model = model
     self.output = output
@@ -35,6 +36,14 @@ final class LiveCheck {
       model.prefs.ignores = model.prefs.root + "/ignored"
       model.prefs.includes = model.prefs.root + "/ignored/keep"
       model.query = "alpha"
+      // Focused entry point for the terminal race, skipping unrelated UI checks.
+      if CommandLine.arguments.contains("--terminal-check") {
+        for i in 0..<1200 {
+          try Data("terminal".utf8).write(to: root.appendingPathComponent("preview-item-\(i).txt"))
+        }
+        model.query = "preview-item"
+        step = 20
+      }
       model.scan()
       timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
         self?.tick()
@@ -58,7 +67,20 @@ final class LiveCheck {
     }
     guard model.ready, !model.searching, !model.scanning, model.pendingDraw == nil else { return }
     if let error = model.error {
-      finish(error)
+      // A deliberately missing terminal proves F9 reached terminal validation
+      // without opening an external app or failing on stale result generations.
+      if (step == 23 || step == 27), error == terminalValidationError {
+        model.error = nil
+        if step == 23 {
+          next("F9 resolves a selected file after live updates invalidate displayed rows")
+          model.submit(background: true)
+        } else {
+          next("F9 resolves the first file of a large selection during live updates")
+          finish(nil)
+        }
+      } else {
+        finish(error)
+      }
       return
     }
     do {
@@ -246,10 +268,51 @@ final class LiveCheck {
           return
         }
         next("Returning to Files has no invisible action target")
-        finish(nil)
+        model.timer?.invalidate()
+        model.prefs.terminal = directory.appendingPathComponent("missing-terminal.app").path
+        model.selectionChanged(IndexSet(integer: 0))
+      case 21, 25:
+        guard !model.selectionLoading, model.selectionCount == (step == 21 ? 1 : 1200) else {
+          return
+        }
+        try Data("unrelated change".utf8).write(
+          to: root.appendingPathComponent("terminal-event-\(step).txt"))
+        step += 1
+        since = ProcessInfo.processInfo.systemUptime
+      case 22, 26:
+        pollBeforeTerminalAction()
+      case 24:
+        guard model.total == 1200, !model.selectionLoading else { return }
+        model.selectionChanged(IndexSet(integersIn: 0..<1200))
+        step = 25
+        since = ProcessInfo.processInfo.systemUptime
       default: break
       }
     } catch { finish(error.localizedDescription) }
+  }
+  func pollBeforeTerminalAction() {
+    pending = true
+    let ticket = model.displayedGeneration
+    model.engine.perform({ handle in
+      let reply = try decode(cn_poll(handle))
+      if reply.changed == true {
+        guard try decode(cn_rows(handle, ticket, 0, 1)).status == "stale" else {
+          throw messageError("Terminal regression fixture did not invalidate displayed rows")
+        }
+      }
+      return reply
+    }) { [weak self] result in
+      guard let self = self else { return }
+      self.pending = false
+      switch result {
+      case .failure(let error): self.finish(error.localizedDescription)
+      case .success(let reply):
+        guard reply.changed == true else { return }
+        self.step += 1
+        self.since = ProcessInfo.processInfo.systemUptime
+        self.model.actions.perform("terminal")
+      }
+    }
   }
   func checkMigration() throws {
     let directory = self.directory.appendingPathComponent("legacy/LocalStorage")
