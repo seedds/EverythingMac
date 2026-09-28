@@ -60,7 +60,8 @@ and launches it. To build without launching:
 ./run.sh --build-only
 ```
 
-To verify that a direct launch uses the current bundled app icon:
+To verify that a direct launch uses the current app icon with macOS's standard
+size and shape:
 
 ```sh
 ./run.sh --icon-check /tmp/everythingmac-icon-check.json

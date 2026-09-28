@@ -314,9 +314,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var instanceLock: Int32 = -1
   func applicationDidFinishLaunching(_ notification: Notification) {
     // Direct executable launches (run.sh) can retain an older Launch Services icon.
-    // Read this bundle's resource instead of relying on that cached launch icon.
-    if let url = Bundle.main.url(forResource: "icon", withExtension: "icns"),
-      let icon = NSImage(contentsOf: url) {
+    // Resolve this bundle through Icon Services so macOS keeps its standard
+    // padding and rounded shape; assigning the raw ICNS bypasses that styling.
+    if Bundle.main.url(forResource: "icon", withExtension: "icns") != nil {
+      let icon = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+      // NSWorkspace defaults to a 32-point image; request the full resolution
+      // before AppKit rasterizes it for the Dock, including magnification.
+      icon.size = NSSize(width: 1024, height: 1024)
       NSApp.applicationIconImage = icon
     }
     let args = CommandLine.arguments

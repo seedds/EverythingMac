@@ -32,19 +32,19 @@ enum IconCheck {
 
   static func run(output: String) {
     var failure: String?
-    if let url = Bundle.main.url(forResource: "icon", withExtension: "icns"),
-      let expected = NSImage(contentsOf: url) {
+    if Bundle.main.url(forResource: "icon", withExtension: "icns") != nil {
+      let expected = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
       // AppKit can resample/color-convert the assigned image. Compare rendered
       // colors with a small tolerance, rather than encoded image bytes.
       if difference(NSApp.applicationIconImage, expected) > 0.005 {
-        failure = "Running app icon differs from the current bundle icon"
+        failure = "Running app icon differs from the system-rendered bundle icon (artwork, size, or shape)"
       }
     } else {
       failure = "Bundle icon is missing or unreadable"
     }
     do {
       try JSONSerialization.data(withJSONObject: [
-        "checks": failure == nil ? ["Running app icon matches current bundle"] : [],
+        "checks": failure == nil ? ["Running app icon matches system-rendered artwork, size, and shape"] : [],
         "error": failure as Any? ?? NSNull(),
       ], options: [.prettyPrinted, .sortedKeys])
         .write(to: URL(fileURLWithPath: output))
