@@ -304,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var actions: FileActions!
   var benchmark: Benchmark?
   var scrollCheck: ScrollCheck?
+  var selectionCheck: SelectionCheck?
   var selfCheck: SelfCheck?
   var liveCheck: LiveCheck?
   var statusItem: NSStatusItem?
@@ -316,6 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let isolated =
       args.contains("--benchmark") || args.contains("--self-check") || args.contains("--snapshot")
       || args.contains("--live-check") || args.contains("--scroll-check")
+      || args.contains("--selection-check")
     let prefs = Preferences(isolated: isolated)
     model = Model(prefs: prefs)
     model.snapshotOnly = isolated
@@ -384,6 +386,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if let index = args.firstIndex(of: "--live-check"), args.indices.contains(index + 1) {
       liveCheck = LiveCheck(model: model, output: args[index + 1])
       liveCheck?.start()
+      return
+    }
+    if let index = args.firstIndex(of: "--selection-check"), args.indices.contains(index + 1) {
+      selectionCheck = SelectionCheck(model: model, window: window, output: args[index + 1])
+      selectionCheck?.start()
       return
     }
     if FileManager.default.fileExists(atPath: model.snapshot) || isolated {

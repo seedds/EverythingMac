@@ -238,18 +238,23 @@ extension Model {
         self.displayedGeneration == ticket
       else { return }
       if case .success(let reply) = result, reply.status == "ok" {
-        var indices = IndexSet()
-        for pair in reply.ranges ?? [] where pair.count == 2 {
-          indices.insert(integersIn: pair[0]..<pair[1])
-        }
-        self.restoredSelection = indices
+        self.applyRestoredSelection(reply)
         self.revision &+= 1
-        if indices.isEmpty {
-          self.selectedPaths = []
-          self.selectionCount = 0
+        if self.selectionCount > 0 && self.actions.preview.isVisible {
+          self.resolveSelection { [weak self] in self?.actions.preview.update($0) }
         }
       }
     }
+  }
+  func applyRestoredSelection(_ reply: Reply) {
+    var indices = IndexSet()
+    for pair in reply.ranges ?? [] where pair.count == 2 {
+      indices.insert(integersIn: pair[0]..<pair[1])
+    }
+    restoredSelection = indices
+    selectedPaths = reply.paths ?? []
+    selectionCount = reply.selection_count ?? indices.count
+    if selectionCount == 0 && actions.preview.isVisible { actions.preview.update([]) }
   }
   func resolveSelection(_ completion: @escaping ([String]) -> Void) {
     guard !selectionLoading, selectionCount > 0 else { return }

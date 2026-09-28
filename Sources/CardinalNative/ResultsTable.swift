@@ -150,17 +150,24 @@ struct ResultsTable: NSViewRepresentable {
       revision = model.revision
       suppressSelection = true
       defer { suppressSelection = false }
-      if replaced { table.deselectAll(nil) }
+      if replaced && !model.backgroundResult { table.deselectAll(nil) }
       // A full reload releases AppKit's old row state when the count
       // changes dramatically. Repeated same-count searches can reuse
       // visible cells without rebuilding their constraints.
-      if table.numberOfRows != model.total { table.reloadData() }
+      if table.numberOfRows != model.total {
+        if replaced && model.backgroundResult {
+          table.noteNumberOfRowsChanged()
+        } else {
+          table.reloadData()
+        }
+      }
       if replaced && !model.backgroundResult && model.total > 0 { table.scrollRowToVisible(0) }
       if let restored = model.restoredSelection {
-        table.selectRowIndexes(
-          restored.intersection(IndexSet(integersIn: 0..<model.total)), byExtendingSelection: false)
+        let selection = restored.intersection(IndexSet(integersIn: 0..<model.total))
+        if selection != table.selectedRowIndexes {
+          table.selectRowIndexes(selection, byExtendingSelection: false)
+        }
         model.restoredSelection = nil
-        model.selectionChanged(table.selectedRowIndexes)
       }
       let range = table.rows(in: table.visibleRect)
       if range.location != NSNotFound && range.location < model.total {

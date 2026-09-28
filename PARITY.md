@@ -171,3 +171,23 @@ Validation: the bridge regression failed before the fix and passed afterward;
 1,793 Rust workspace tests, 10 rendered snapshot checks (including deferred size
 and dates), and three focused live F9 checks passed. The initial sandboxed Rust
 run could not create filesystem event streams; the unrestricted rerun passed.
+
+## Stable selection during live changes — 0.1.37
+
+Previously, a live search published new rows and cleared the table selection
+before asynchronously restoring it. A focused real-window test reproduced three
+visible selection gaps across file creation, modification, and deletion updates.
+
+Background searches now finish remapping selection before publishing rows and
+selection together. The table retains its row views and only adjusts selection
+when the selected indices actually change. Restoration supplies the count and a
+bounded path sample without resetting selection as though the user had clicked.
+A newer click takes precedence over an in-flight refresh. Deleted selections and
+selections cleared by a new search are removed from the backend too.
+
+Validation: `--selection-check` completed seven scenarios with zero highlight or
+selection-count gaps across 3,309 observations. It covers unrelated creation and
+deletion, selected-file modification, a click during refresh, selected-file
+deletion, a new search, and a subsequent refresh after clearing selection.
+All six bridge tests and all 23 full live UI checks passed, including sorting,
+Quick Look with 1,200 selected files, Events/Files switching, and F9 races.

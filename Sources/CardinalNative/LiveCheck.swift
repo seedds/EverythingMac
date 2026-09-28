@@ -238,13 +238,13 @@ final class LiveCheck {
             return
           }
           self.model.actions.preview.show(paths)
-          self.selectionBeforeSort = self.model.selectionEpoch
+          self.selectionBeforeSort = self.model.displayedGeneration
           self.model.sort(by: "filename")
           self.next("Large explicit selection resolves every path")
           self.pending = false
         }
       case 18:
-        guard model.selectionEpoch > selectionBeforeSort, !model.selectionLoading else { return }
+        guard model.displayedGeneration > selectionBeforeSort, !model.selectionLoading else { return }
         guard model.actions.preview.urls.count == 1200 else { return }
         next("Quick Look retains all selected files after sort")
         model.activeTab = "events"

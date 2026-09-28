@@ -334,37 +334,75 @@ final class Model: ObservableObject {
       sortLimit: prefs.sortLimit
     ) { [weak self] result in
       guard let self = self, !self.closed, self.generation == ticket else { return }
-      self.searching = false
       switch result {
       case .success(let (reply, rows, _)):
-        guard reply.status == "ok" else { return }
-        self.selectionLoading = false
-        self.backgroundResult = background
-        self.restoredSelection = nil
-        if !background {
-          self.selectedPaths = []
-          self.selectionCount = 0
-          self.selectionEpoch &+= 1
-        }
-        self.highlights = reply.highlights ?? []
-        self.displayedSensitive = self.sensitive
-        self.backendMS = reply.search_ms ?? 0
-        self.total = reply.total ?? 0
-        self.displayedGeneration = ticket
-        self.cancelMetadata()
-        self.rows = Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0) })
-        self.pendingPages.removeAll()
-        self.pendingDraw = ticket
-        let skipped = reply.skipped_cloud_files ?? 0
-        self.status =
-          "\(self.total) results · Rust \(String(format: "%.1f", self.backendMS)) ms"
-          + (skipped > 0 ? " · \(skipped) cloud files skipped" : "")
-        self.revision &+= 1
-        if background { self.restoreSelection() }
+        guard reply.status == "ok" else { self.searching = false; return }
+        self.finishSearch(reply, rows: rows, ticket: ticket, background: background)
       case .failure(let error):
+        self.searching = false
         self.error = error.localizedDescription
         self.status = "Search failed; previous results retained"
       }
+    }
+  }
+
+  // Keep the displayed rows and highlight together until remapping is complete.
+  // A click while the search runs wins: reconcile after its queued selection write.
+  func finishSearch(_ reply: Reply, rows: [Row], ticket: UInt64, background: Bool) {
+    guard !closed, generation == ticket else { return }
+    guard background else {
+      publishSearch(reply, rows: rows, ticket: ticket, selection: nil)
+      return
+    }
+    let epoch = selectionEpoch
+    engine.perform({ try decode(cn_selected($0, ticket, false)) }) { [weak self] result in
+      guard let self = self, !self.closed, self.generation == ticket else { return }
+      guard self.selectionEpoch == epoch else {
+        self.finishSearch(reply, rows: rows, ticket: ticket, background: true)
+        return
+      }
+      switch result {
+      case .success(let selection) where selection.status == "ok":
+        self.publishSearch(reply, rows: rows, ticket: ticket, selection: selection)
+      default:
+        self.searching = false
+        self.error = "Cannot restore selection; previous results retained."
+      }
+    }
+  }
+
+  private func publishSearch(_ reply: Reply, rows: [Row], ticket: UInt64, selection: Reply?) {
+    searching = false
+    selectionLoading = false
+    backgroundResult = selection != nil
+    restoredSelection = nil
+    if let selection = selection {
+      applyRestoredSelection(selection)
+    } else {
+      selectedPaths = []
+      selectionCount = 0
+      selectionEpoch &+= 1
+      // A new user search clears both the UI and the retained backend identities,
+      // so a later background refresh cannot resurrect the old selection.
+      engine.perform({ handle in
+        try "[]".withCString { empty in try decode(cn_select(handle, ticket, empty, empty)) }
+      }) { _ in }
+    }
+    highlights = reply.highlights ?? []
+    displayedSensitive = sensitive
+    backendMS = reply.search_ms ?? 0
+    total = reply.total ?? 0
+    displayedGeneration = ticket
+    cancelMetadata()
+    self.rows = Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0) })
+    pendingPages.removeAll()
+    pendingDraw = ticket
+    let skipped = reply.skipped_cloud_files ?? 0
+    status = "\(total) results · Rust \(String(format: "%.1f", backendMS)) ms"
+      + (skipped > 0 ? " · \(skipped) cloud files skipped" : "")
+    revision &+= 1
+    if selection != nil, selectionCount > 0, actions.preview.isVisible {
+      resolveSelection { [weak self] in self?.actions.preview.update($0) }
     }
   }
 

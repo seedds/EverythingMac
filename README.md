@@ -257,6 +257,17 @@ The checks use a deliberately missing terminal application to verify that F9
 reaches terminal validation after the displayed result rows become stale, without
 opening an external app.
 
+To check that live file changes preserve the selected row without flickering:
+
+```bash
+./run.sh --selection-check /tmp/cardinal-selection.json
+python3 -c 'import json; r=json.load(open("/tmp/cardinal-selection.json")); assert r["error"] is None, r'
+```
+
+This uses disposable files and the real table. It checks continuous selection
+through live updates, a new click during refresh, selected-file deletion, and
+clearing selection when starting a new search.
+
 To verify stable lifecycle status widths across all English states:
 
 ```bash

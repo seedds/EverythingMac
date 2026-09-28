@@ -480,6 +480,7 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
         // Remap only after a new search or filesystem update. Repeated actions on
         // unchanged rows read only the selected positions, even in a broad query.
         if state.selection_generation != Some(generation) {
+            let mut surviving = std::collections::HashSet::new();
             state.selection_positions = if state.selection.is_empty() {
                 vec![]
             } else {
@@ -491,17 +492,28 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
                         state
                             .cache
                             .node_path(*id)
-                            .filter(|path| state.selection.contains(&path_identity(path)))
+                            .filter(|path| {
+                                let identity = path_identity(path);
+                                if state.selection.contains(&identity) {
+                                    surviving.insert(identity);
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
                             .map(|_| i)
                     })
                     .collect()
             };
+            state.selection = surviving;
             state.selection_generation = Some(generation);
         }
         let mut ranges: Vec<[usize; 2]> = Vec::new();
         let mut selected_paths = Vec::new();
         for &i in &state.selection_positions {
-            if paths && let Some(path) = state.cache.node_path(state.results[i]) {
+            if (paths || selected_paths.len() < 128)
+                && let Some(path) = state.cache.node_path(state.results[i])
+            {
                 selected_paths.push(path);
             }
             if let Some(last) = ranges.last_mut()
@@ -512,7 +524,8 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
                 ranges.push([i, i + 1]);
             }
         }
-        Ok(json!({"status":"ok","ranges":ranges,"paths":selected_paths}))
+        Ok(json!({"status":"ok","ranges":ranges,"paths":selected_paths,
+            "selection_count":state.selection_positions.len()}))
     })
 }
 

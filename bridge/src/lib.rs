@@ -446,9 +446,29 @@ mod tests {
             ));
             assert_eq!(selected["selection_count"], 300);
             assert_eq!(selected["paths"].as_array().unwrap().len(), 128);
+            let restored = reply(live::cn_selected(engine, 2, false));
+            assert_eq!(restored["ranges"], json!([[0, 300]]));
+            assert_eq!(restored["selection_count"], 300);
+            assert_eq!(restored["paths"].as_array().unwrap().len(), 128);
+            // A removed result is pruned during restoration, without a second
+            // cn_select round trip or resurrecting it when it appears again.
+            let removed = {
+                let mut state = (*engine).0.lock().unwrap();
+                state.generation = 3;
+                state.results.remove(0)
+            };
             assert_eq!(
-                reply(live::cn_selected(engine, 2, false))["ranges"],
-                json!([[0, 300]])
+                reply(live::cn_selected(engine, 3, false))["selection_count"],
+                299
+            );
+            {
+                let mut state = (*engine).0.lock().unwrap();
+                state.generation = 4;
+                state.results.insert(0, removed);
+            }
+            assert_eq!(
+                reply(live::cn_selected(engine, 4, false))["selection_count"],
+                299
             );
             // A queued filesystem poll may invalidate rows before a selection lookup.
             {
