@@ -56,8 +56,12 @@ final class FileActions {
   weak var model: Model?
   let preview = PreviewController()
   let queue = DispatchQueue(label: "cardinal.native.file-actions", qos: .userInitiated)
-  init(_ model: Model) {
+  let trashItem: (URL) throws -> Void
+  init(_ model: Model, trashItem: @escaping (URL) throws -> Void = {
+    try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
+  }) {
     self.model = model
+    self.trashItem = trashItem
     preview.navigate = { [weak model] in model?.tableAction?($0) }
   }
   func perform(_ action: String, paths explicitPaths: [String]? = nil) {
@@ -102,7 +106,8 @@ final class FileActions {
         forType: .string)
     case "rename": rename(paths)
     case "trash":
-      run { for url in urls { try FileManager.default.trashItem(at: url, resultingItemURL: nil) } }
+      let trashItem = self.trashItem
+      run { for url in urls { try trashItem(url) } }
     case "terminal":
       let app = model.prefs.terminal
       run {

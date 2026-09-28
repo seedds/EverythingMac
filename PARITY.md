@@ -191,3 +191,24 @@ deletion, selected-file modification, a click during refresh, selected-file
 deletion, a new search, and a subsequent refresh after clearing selection.
 All six bridge tests and all 23 full live UI checks passed, including sorting,
 Quick Look with 1,200 selected files, Events/Files switching, and F9 races.
+
+## F8 after index invalidation — 0.1.38
+
+A focused live-event check reproduced the exact "The index changed" warning
+before Trash ran. Explicit actions were resolving selection through the displayed
+result generation, which a filesystem poll can invalidate even when the selected
+files are unchanged.
+
+The bridge now retains compact selected node IDs alongside path identities.
+Explicit actions use `cn_selection_paths`, independent of the current result-row
+generation, and verify each resolved path still belongs to the retained selection.
+Display restoration continues using generation-checked row ranges. New selections
+and index replacements still invalidate pending Swift action replies. Selection
+clearing and rescans clear or remap the retained node IDs as well.
+
+Validation: the focused F8 check moved exactly one selected file, then all 130
+selected files (beyond the UI's 128-path sample), after real filesystem events made
+the displayed rows stale. All files were restored using macOS Trash recovery URLs;
+unselected fixtures were untouched. Six bridge tests cover stale generations,
+reused-node rejection, clearing, and engine replacement. All 23 live UI checks and
+all seven selection-stability scenarios passed, with zero highlight/count gaps.

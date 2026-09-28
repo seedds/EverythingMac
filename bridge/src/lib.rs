@@ -33,6 +33,7 @@ struct State {
     sort: Option<sort::SortStatePayload>,
     sort_limit: usize,
     selection: std::collections::HashSet<[u64; 2]>,
+    selection_nodes: Vec<SlabIndex>,
     selection_positions: Vec<usize>,
     selection_generation: Option<u64>,
 }
@@ -53,6 +54,7 @@ impl State {
             sort: None,
             sort_limit: 20000,
             selection: Default::default(),
+            selection_nodes: vec![],
             selection_positions: vec![],
             selection_generation: None,
         }
@@ -476,6 +478,44 @@ mod tests {
                 state.generation = 0;
                 state.results.clear();
             }
+            let action = reply(live::cn_selection_paths(engine));
+            assert_eq!(action["status"], "ok");
+            assert_eq!(action["paths"].as_array().unwrap().len(), 299);
+            // A stale/reused node slot must not turn an unselected path into
+            // an action target, even though the action ignores result generations.
+            let saved = {
+                let mut state = (*engine).0.lock().unwrap();
+                std::mem::replace(&mut state.selection_nodes[0], removed)
+            };
+            assert_eq!(reply(live::cn_selection_paths(engine))["status"], "error");
+            (*engine).0.lock().unwrap().selection_nodes[0] = saved;
+            let mut replacement = ptr::null_mut();
+            assert_eq!(
+                reply(cn_engine_open(cpath.as_ptr(), &mut replacement))["status"],
+                "ok"
+            );
+            assert_eq!(
+                reply(live::cn_transfer_selection(engine, replacement))["status"],
+                "ok"
+            );
+            assert_eq!(
+                reply(live::cn_selection_paths(replacement))["paths"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                299
+            );
+            assert!(
+                reply(live::cn_selection_paths(engine))["paths"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                reply(live::cn_transfer_selection(replacement, engine))["status"],
+                "ok"
+            );
+            cn_engine_close(replacement);
             assert_eq!(
                 reply(live::cn_select(
                     engine,
@@ -487,6 +527,12 @@ mod tests {
             );
             assert!(
                 reply(live::cn_selected(engine, 0, true))["paths"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                reply(live::cn_selection_paths(engine))["paths"]
                     .as_array()
                     .unwrap()
                     .is_empty()

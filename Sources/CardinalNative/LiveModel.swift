@@ -259,15 +259,16 @@ extension Model {
   func resolveSelection(_ completion: @escaping ([String]) -> Void) {
     guard !selectionLoading, selectionCount > 0 else { return }
     let epoch = selectionEpoch
-    let ticket = displayedGeneration
-    engine.perform({ try decode(cn_selected($0, ticket, true)) }) { [weak self] result in
+    let index = indexEpoch
+    engine.perform({ try decode(cn_selection_paths($0)) }) { [weak self] result in
       guard let self = self, !self.closed, self.selectionEpoch == epoch,
-        self.displayedGeneration == ticket
+        self.indexEpoch == index
       else { return }
-      if case .success(let reply) = result, reply.status == "ok" {
+      switch result {
+      case .success(let reply) where reply.status == "ok":
         completion(reply.paths ?? [])
-      } else {
-        self.error = "The index changed. Wait for the current results and select the files again."
+      case .failure(let error): self.error = error.localizedDescription
+      default: self.error = "Cannot resolve the selected files. Select them again."
       }
     }
   }

@@ -257,6 +257,17 @@ The checks use a deliberately missing terminal application to verify that F9
 reaches terminal validation after the displayed result rows become stale, without
 opening an external app.
 
+To reproduce F8 after an index update, for one and 130 selected files:
+
+```bash
+./run.sh --live-check /tmp/cardinal-native-trash-check.json --trash-check
+```
+
+This trashes only disposable fixture files, verifies that unselected files remain,
+and restores each fixture from the recovery location returned by macOS Trash.
+The larger selection exceeds the UI's 128-path sample, checking that every
+selected file is resolved even when the displayed result generation is stale.
+
 To check that live file changes preserve the selected row without flickering:
 
 ```bash

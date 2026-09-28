@@ -17,6 +17,11 @@ final class LiveCheck {
   var pending = false
   var selectionBeforeSort: UInt64 = 0
   let terminalValidationError = "Choose an installed terminal application in Preferences."
+  var trashCheck: Bool { CommandLine.arguments.contains("--trash-check") }
+  var actionSelectionSize: Int { trashCheck ? 130 : 1200 }
+  var trashActions: FileActions?
+  var trashExpected = Set<String>()
+  var trashReceipts: [(URL, URL)] = []
   init(model: Model, output: String) {
     self.model = model
     self.output = output
@@ -37,12 +42,25 @@ final class LiveCheck {
       model.prefs.includes = model.prefs.root + "/ignored/keep"
       model.query = "alpha"
       // Focused entry point for the terminal race, skipping unrelated UI checks.
-      if CommandLine.arguments.contains("--terminal-check") {
-        for i in 0..<1200 {
+      if CommandLine.arguments.contains("--terminal-check") || CommandLine.arguments.contains("--trash-check") {
+        for i in 0..<actionSelectionSize {
           try Data("terminal".utf8).write(to: root.appendingPathComponent("preview-item-\(i).txt"))
         }
         model.query = "preview-item"
         step = 20
+      }
+      if trashCheck {
+        trashActions = FileActions(model, trashItem: { [weak self] url in
+          guard let self = self, self.trashExpected.contains(url.path) else {
+            throw messageError("Trash attempted to target an unselected fixture")
+          }
+          var destination: NSURL?
+          try FileManager.default.trashItem(at: url, resultingItemURL: &destination)
+          guard let destination = destination as URL? else {
+            throw messageError("Trash did not return a recovery location")
+          }
+          self.trashReceipts.append((url, destination))
+        })
       }
       model.scan()
       timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
@@ -81,6 +99,24 @@ final class LiveCheck {
       } else {
         finish(error)
       }
+      return
+    }
+    if trashCheck && (step == 23 || step == 27) {
+      guard model.status == "File action completed" else { return }
+      do {
+        guard Set(trashReceipts.map { $0.0.path }) == trashExpected,
+          trashReceipts.allSatisfy({ !FileManager.default.fileExists(atPath: $0.0.path) }),
+          FileManager.default.fileExists(atPath: root.appendingPathComponent("beta.txt").path)
+        else { throw messageError("Trash did not move exactly the selected files") }
+        try restoreTrashedFixtures()
+        if step == 23 {
+          next("F8 trashes exactly one selected file after live row invalidation; fixture restored")
+          model.submit(background: true)
+        } else {
+          next("F8 trashes all 130 selected files beyond the 128-path UI sample; fixtures restored")
+          finish(nil)
+        }
+      } catch { finish(error.localizedDescription) }
       return
     }
     do {
@@ -260,11 +296,16 @@ final class LiveCheck {
         }
         next("Returning to Files has no invisible action target")
         model.timer?.invalidate()
+        if trashCheck { model.live = false }
         model.prefs.terminal = directory.appendingPathComponent("missing-terminal.app").path
         model.selectionChanged(IndexSet(integer: 0))
       case 21, 25:
-        guard !model.selectionLoading, model.selectionCount == (step == 21 ? 1 : 1200) else {
+        guard !model.selectionLoading, model.selectionCount == (step == 21 ? 1 : actionSelectionSize) else {
           return
+        }
+        if trashCheck {
+          trashExpected = step == 21 ? Set(model.selectedPaths)
+            : Set((0..<actionSelectionSize).map { model.root + "/preview-item-\($0).txt" })
         }
         try Data("unrelated change".utf8).write(
           to: root.appendingPathComponent("terminal-event-\(step).txt"))
@@ -273,8 +314,8 @@ final class LiveCheck {
       case 22, 26:
         pollBeforeTerminalAction()
       case 24:
-        guard model.total == 1200, !model.selectionLoading else { return }
-        model.selectionChanged(IndexSet(integersIn: 0..<1200))
+        guard model.total == actionSelectionSize, !model.selectionLoading else { return }
+        model.selectionChanged(IndexSet(integersIn: 0..<actionSelectionSize))
         step = 25
         since = ProcessInfo.processInfo.systemUptime
       default: break
@@ -301,7 +342,12 @@ final class LiveCheck {
         guard reply.changed == true else { return }
         self.step += 1
         self.since = ProcessInfo.processInfo.systemUptime
-        self.model.actions.perform("terminal")
+        if self.trashCheck {
+          self.model.status = "Testing Trash…"
+          self.trashActions?.perform("trash")
+        } else {
+          self.model.actions.perform("terminal")
+        }
       }
     }
   }
@@ -335,13 +381,26 @@ final class LiveCheck {
   func finish(_ error: String?) {
     timer?.invalidate()
     timer = nil
+    var reportError = error
+    if trashCheck {
+      // Recovery waits for any in-flight fixture action before moving its receipts.
+      trashActions?.queue.sync {}
+      do { try restoreTrashedFixtures() }
+      catch { reportError = "Fixture recovery failed: \(error.localizedDescription)" }
+    }
     let report: [String: Any] = [
-      "checks": checks, "error": error as Any? ?? NSNull(), "fixture": directory.path,
+      "checks": checks, "error": reportError as Any? ?? NSNull(), "fixture": directory.path,
     ]
     do {
       try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         .write(to: URL(fileURLWithPath: output))
     } catch { fputs("Live check output failed: \(error)\n", stderr) }
     model.close { _ in NSApp.terminate(nil) }
+  }
+  func restoreTrashedFixtures() throws {
+    while let (original, trashed) = trashReceipts.last {
+      try FileManager.default.moveItem(at: trashed, to: original)
+      trashReceipts.removeLast()
+    }
   }
 }

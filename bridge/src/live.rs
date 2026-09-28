@@ -421,6 +421,7 @@ pub unsafe extern "C" fn cn_select(
             .map_err(|_| "Engine faulted; reopen index")?;
         // An unsuccessful replacement must never leave the previous file actionable.
         state.selection.clear();
+        state.selection_nodes.clear();
         state.selection_positions.clear();
         state.selection_generation = None;
         let mut sample = Vec::new();
@@ -429,8 +430,10 @@ pub unsafe extern "C" fn cn_select(
                 return Ok(json!({"status":"stale"}));
             };
             for path in paths {
-                if state.cache.node_index_for_path(&path).is_some() {
-                    state.selection.insert(path_identity(&path));
+                if let Some(id) = state.cache.node_index_for_path(&path)
+                    && state.selection.insert(path_identity(&path))
+                {
+                    state.selection_nodes.push(id);
                     if sample.len() < 128 {
                         sample.push(path);
                     }
@@ -446,7 +449,10 @@ pub unsafe extern "C" fn cn_select(
             for [start, end] in ranges {
                 for i in start..end {
                     if let Some(path) = state.cache.node_path(state.results[i]) {
-                        state.selection.insert(path_identity(&path));
+                        if state.selection.insert(path_identity(&path)) {
+                            let id = state.results[i];
+                            state.selection_nodes.push(id);
+                        }
                         state.selection_positions.push(i);
                         if sample.len() < 128 {
                             sample.push(path);
@@ -506,6 +512,11 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
                     .collect()
             };
             state.selection = surviving;
+            state.selection_nodes = state
+                .selection_positions
+                .iter()
+                .map(|&i| state.results[i])
+                .collect();
             state.selection_generation = Some(generation);
         }
         let mut ranges: Vec<[usize; 2]> = Vec::new();
@@ -529,6 +540,35 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
     })
 }
 
+/// Resolve an explicit action from retained selection identities, not result rows.
+/// # Safety
+/// Engine must be live and calls serialized. Reused slab slots must never target
+/// a different path after filesystem events invalidate the displayed generation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cn_selection_paths(engine: *mut Engine) -> Buffer {
+    guarded(|| {
+        let engine = unsafe { engine.as_ref() }.ok_or("No index loaded")?;
+        let state = engine
+            .0
+            .lock()
+            .map_err(|_| "Engine faulted; reopen index")?;
+        let paths: Vec<_> = state
+            .selection_nodes
+            .iter()
+            .filter_map(|&id| {
+                state
+                    .cache
+                    .node_path(id)
+                    .filter(|path| state.selection.contains(&path_identity(path)))
+            })
+            .collect();
+        if paths.len() != state.selection.len() {
+            return Err("One or more selected files moved or disappeared. Select the remaining files again.".into());
+        }
+        Ok(json!({"status":"ok", "paths":paths}))
+    })
+}
+
 /// # Safety
 /// Distinct valid serialized handles; move only stable path identities across a rescan.
 #[unsafe(no_mangle)]
@@ -541,7 +581,22 @@ pub unsafe extern "C" fn cn_transfer_selection(from: *mut Engine, to: *mut Engin
             let new = unsafe { to.as_ref() }.ok_or("No destination engine")?;
             let mut old = old.0.lock().map_err(|_| "Old engine faulted")?;
             let mut new = new.0.lock().map_err(|_| "New engine faulted")?;
+            new.selection_nodes = old
+                .selection_nodes
+                .iter()
+                .filter_map(|&id| {
+                    old.cache
+                        .node_path(id)
+                        .filter(|path| old.selection.contains(&path_identity(path)))
+                        .and_then(|path| new.cache.node_index_for_path(&path))
+                })
+                .collect();
             new.selection = std::mem::take(&mut old.selection);
+            new.selection_positions.clear();
+            new.selection_generation = None;
+            old.selection_nodes.clear();
+            old.selection_positions.clear();
+            old.selection_generation = None;
         }
         Ok(json!({"status":"ok"}))
     })
