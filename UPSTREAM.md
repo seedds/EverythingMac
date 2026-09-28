@@ -17,6 +17,7 @@ EverythingMac is inspired by [Everything for Windows](https://www.voidtools.com/
 It adds a native SwiftUI/AppKit interface and improvements to sorting performance,
 metadata indexing, scrolling, live selection, file actions, and saved preferences.
 
-The original Cardinal icon was replaced in version 0.1.43 with the artwork supplied
-for this project. Its source is `Resources/EverythingMac.png`; macOS icon
-representations are packaged in `Resources/icon.icns`.
+The original Cardinal icon was replaced in version 0.1.43. Version 0.1.44 uses
+the blue document and magnifying-glass artwork supplied for this project. Its
+source is `Resources/EverythingMac.png`; macOS icon representations are packaged
+in `Resources/icon.icns`.
