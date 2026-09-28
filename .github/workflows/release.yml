@@ -77,20 +77,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: |
-          python3 scripts/release.py sync-tap homebrew-tap/Casks/cardinal.rb
-          ruby -c homebrew-tap/Casks/cardinal.rb
+          python3 scripts/release.py sync-tap homebrew-tap/Casks/everything.rb
+          ruby -c homebrew-tap/Casks/everything.rb
       - name: Push tap update
         working-directory: homebrew-tap
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: |
-          if git diff --quiet -- Casks/cardinal.rb; then
+          if git diff --quiet -- Casks/everything.rb; then
             echo "Tap already matches the release."
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Casks/cardinal.rb
+          git add Casks/everything.rb
           git diff --cached --check
           git commit -m "Update EverythingMac to $RELEASE_VERSION"
           git push origin HEAD:main

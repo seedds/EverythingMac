@@ -35,6 +35,14 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn(release.LEGACY_REPOSITORY, result)
         self.assertEqual(release.update_cask(result, "0.1.43", "b" * 64), result)
 
+    def test_everything_cask_token_survives_release_updates(self):
+        current = release.update_cask(self.cask, "0.1.48", "b" * 64)
+        current = current.replace('cask "cardinal" do', 'cask "everything" do')
+        result = release.update_cask(current, "0.1.49", "c" * 64)
+        self.assertIn('cask "everything" do', result)
+        self.assertIn('version "0.1.49"', result)
+        self.assertNotIn('cask "cardinal"', result)
+
     def test_release_asset_names_before_and_after_rename(self):
         self.assertEqual(release.asset_name("0.1.42"), "Cardinal-Native-0.1.42-arm64.dmg")
         self.assertEqual(release.asset_name("0.1.43"), "EverythingMac-0.1.43-arm64.dmg")

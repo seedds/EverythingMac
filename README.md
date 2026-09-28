@@ -16,7 +16,7 @@ for measured sorting improvements.
 <img src="Resources/EverythingMac.png" alt="EverythingMac app icon" width="160" />
 
 Download the [latest native release](https://github.com/seedds/EverythingMac/releases/latest).
-The `seedds/tap/cardinal` Homebrew cask follows releases from this repository.
+The `seedds/tap/everything` Homebrew cask follows releases from this repository.
 The older `seedds/cardinal` repository contains the previous Tauri app.
 
 The native application is a **local release candidate**. Core desktop workflows
@@ -26,20 +26,20 @@ some external application integrations still need deployment validation.
 ## Install with Homebrew
 
 ```bash
-brew install --cask seedds/tap/cardinal
+brew install --cask seedds/tap/everything
 ```
 
 To upgrade an existing installation:
 
 ```bash
 brew update
-brew upgrade --cask seedds/tap/cardinal
+brew upgrade --cask seedds/tap/everything
 ```
 
-Version 0.1.43 renames Cardinal Native to **EverythingMac.app** and introduces the
-new icon. The existing `seedds/tap/cardinal` cask installs EverythingMac, so the
-upgrade command stays the same. The bundle identifier and data directory remain
-unchanged to preserve preferences and indexes.
+The cask is named `everything` (formerly `cardinal`). Homebrew’s rename mapping
+allows existing installations to migrate. After `brew tap seedds/tap`, you can
+also use `brew install --cask everything`. The app remains **EverythingMac.app**,
+with the same bundle identifier and data directory to preserve preferences and indexes.
 Quit the previous app before launching EverythingMac. When migrating from the
 older Tauri app, preferences are imported on first launch and the original data
 store is kept separate. Grant EverythingMac Full Disk Access if needed. The release supports Apple Silicon and is
