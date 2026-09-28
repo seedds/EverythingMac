@@ -34,7 +34,7 @@ extension Model {
     }
   }
   func poll() {
-    guard live, ready, !snapshotOnly, !closed, !searching, !scanning, !polling, !saving,
+    guard ready, !snapshotOnly, !closed, !searching, !scanning, !polling, !saving,
       !selectionLoading
     else { return }
     polling = true
@@ -52,6 +52,11 @@ extension Model {
         self.indexedCount = reply.total ?? self.indexedCount
         self.processedEventCount = Int(clamping: reply.processed_events ?? 0)
         self.indexStatus = "\(reply.total ?? 0) indexed · \(reply.processed_events ?? 0) events"
+        if reply.metadata_indexing == true {
+          self.indexStatus += " · Indexing file dates…"
+        } else if !self.live {
+          self.indexStatus += " · Live updates paused"
+        }
         if reply.needs_rescan == true {
           self.scan(useCurrentConfig: true)
           return

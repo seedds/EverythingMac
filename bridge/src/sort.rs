@@ -196,4 +196,32 @@ mod tests {
             "directories stay ahead when size and names match, while files fall back to path order"
         );
     }
+
+    #[test]
+    fn indexed_dates_sort_by_timestamp_in_both_directions() {
+        for key in [SortKeyPayload::Mtime, SortKeyPayload::Ctime] {
+            for direction in [SortDirectionPayload::Asc, SortDirectionPayload::Desc] {
+                let make = |id, name, modified, created| {
+                    entry_with_metadata(
+                        id,
+                        name,
+                        SlabNodeMetadataCompact::some(NodeMetadata {
+                            r#type: NodeFileType::File,
+                            size: 1,
+                            mtime: std::num::NonZeroU64::new(modified),
+                            ctime: std::num::NonZeroU64::new(created),
+                        }),
+                    )
+                };
+                let mut entries = vec![make(0, "/a", 200, 100), make(1, "/z", 100, 200)];
+                sort_entries(&mut entries, &SortStatePayload { key, direction });
+                let first = match (key, direction) {
+                    (SortKeyPayload::Mtime, SortDirectionPayload::Asc)
+                    | (SortKeyPayload::Ctime, SortDirectionPayload::Desc) => 1,
+                    _ => 0,
+                };
+                assert_eq!(entries[0].slab_index.get(), first);
+            }
+        }
+    }
 }

@@ -137,8 +137,17 @@ column-width reset. Dragging results exports file URLs. Standard file icons load
 lazily into a bounded cache. Search results never generate content thumbnails; Quick Look opens only when explicitly requested.
 
 Scrolling loads filenames and paths directly from the index. Size and dates load
-separately for visible rows; slow filesystem metadata cannot hold up a whole page.
+from indexed metadata, with a separate visible-row fallback while indexing is incomplete;
+slow filesystem metadata cannot hold up a whole page.
 Metadata requests for rows that scroll out of view are cancelled when possible.
+
+Modified and Created dates (plus size from the same metadata read) are indexed in
+the background and saved in the native checkpoint. Existing indexes are filled in
+automatically without a full rescan. File-change events keep these values current.
+The index details popover shows **Indexing file dates…** while this work is running;
+unavailable dates remain unknown. Sorting uses indexed values only, so date ordering
+fills in as indexing progresses. The existing sorting limit still applies.
+Read-only snapshot mode does not start background indexing.
 
 ## Indexing and storage
 

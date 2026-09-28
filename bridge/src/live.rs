@@ -126,6 +126,10 @@ pub unsafe extern "C" fn cn_watch(
         if enabled {
             watch(&mut state);
         }
+        drop(state);
+        // Registering a live/native index also migrates snapshots whose dates
+        // have not yet been collected. Snapshot-only tools never call cn_watch.
+        metadata::start(&engine.0);
         Ok(json!({"status":"ok"}))
     })
 }
@@ -140,7 +144,7 @@ pub unsafe extern "C" fn cn_poll(engine: *mut Engine) -> Buffer {
             .0
             .lock()
             .map_err(|_| "Engine faulted; reopen index")?;
-        let mut changed = false;
+        let mut changed = std::mem::take(&mut state.metadata.changed);
         for _ in 0..16 {
             let events = match state.watcher.as_ref().map(|w| w.try_recv()) {
                 Some(Ok(events)) => events,
@@ -186,6 +190,7 @@ pub unsafe extern "C" fn cn_poll(engine: *mut Engine) -> Buffer {
         Ok(
             json!({"status":"ok", "changed":changed, "needs_rescan":state.needs_rescan,
             "total":state.cache.get_total_files(), "processed_events":state.processed_events,
+            "metadata_indexing":state.metadata.active(),
             "events":state.events}),
         )
     })
@@ -257,10 +262,10 @@ pub unsafe extern "C" fn cn_scan(
         };
         let total = cache.get_total_files();
         unsafe {
-            *out = Box::into_raw(Box::new(Engine(Mutex::new(State::new(
+            *out = Box::into_raw(Box::new(Engine(Arc::new(Mutex::new(State::new(
                 cache,
                 root.clone(),
-            )))));
+            ))))));
         }
         Ok(
             json!({"status":"ok", "root":root, "total":total, "ignores":ignores, "includes":includes,

@@ -1,5 +1,6 @@
 //! Throwaway C bridge for the native UI experiment. See include/cardinal_native.h.
 mod live;
+mod metadata;
 mod sort;
 
 use search_cache::{SearchCache, SearchOptions, SearchQuery, SlabIndex, read_cache_from_file};
@@ -10,14 +11,14 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     ptr,
-    sync::{Mutex, atomic::AtomicBool},
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::Instant,
 };
 
 static STOP: AtomicBool = AtomicBool::new(false);
 const MAX_PAGE: usize = 256;
 
-pub struct Engine(Mutex<State>);
+pub struct Engine(Arc<Mutex<State>>);
 struct State {
     cache: SearchCache,
     results: Vec<SlabIndex>,
@@ -36,6 +37,7 @@ struct State {
     selection_nodes: Vec<SlabIndex>,
     selection_positions: Vec<usize>,
     selection_generation: Option<u64>,
+    metadata: metadata::Indexing,
 }
 impl State {
     fn new(cache: SearchCache, root: std::path::PathBuf) -> Self {
@@ -57,6 +59,7 @@ impl State {
             selection_nodes: vec![],
             selection_positions: vec![],
             selection_generation: None,
+            metadata: Default::default(),
         }
     }
 }
@@ -117,7 +120,10 @@ pub unsafe extern "C" fn cn_engine_open(path: *const c_char, out: *mut *mut Engi
         let includes = storage.include_paths.clone();
         let cache = SearchCache::from_persistent_storage(storage, &STOP);
         let total = cache.get_total_files();
-        let engine = Box::new(Engine(Mutex::new(State::new(cache, root.clone()))));
+        let engine = Box::new(Engine(Arc::new(Mutex::new(State::new(
+            cache,
+            root.clone(),
+        )))));
         unsafe {
             *out = Box::into_raw(engine);
         }
@@ -205,7 +211,9 @@ pub unsafe extern "C" fn cn_search(
         }
         let mut results = outcome.nodes.unwrap();
         if let Some(sort) = state.sort.filter(|_| results.len() <= state.sort_limit) {
-            let nodes = state.cache.expand_file_nodes(&results);
+            // Dates are indexed in the background; interactive sorting must never
+            // fetch metadata from every matching file (including slow volumes).
+            let nodes = state.cache.expand_cached_file_nodes(&results);
             let mut entries: Vec<_> = results
                 .into_iter()
                 .zip(nodes)
@@ -302,7 +310,7 @@ mod tests {
         ];
         let mut state = State::new(cache, temp.path().to_path_buf());
         state.results = results;
-        let engine = Box::into_raw(Box::new(Engine(Mutex::new(state))));
+        let engine = Box::into_raw(Box::new(Engine(Arc::new(Mutex::new(state)))));
         unsafe {
             let page = reply(cn_rows(engine, 0, 0, 128));
             assert_eq!(page["rows"].as_array().unwrap().len(), 1);
@@ -337,6 +345,169 @@ mod tests {
             cn_buffer_free(buffer);
         }
         value
+    }
+
+    #[test]
+    fn date_index_backfills_legacy_snapshots_persists_and_tracks_events() {
+        use cardinal_sdk::{EventFlag, FsEvent};
+        use std::time::{Duration, UNIX_EPOCH};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        let file = root.join("date-target.txt");
+        fs::write(&file, "original").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_600_000_000)),
+            )
+            .unwrap();
+        let created = fs::symlink_metadata(&file)
+            .unwrap()
+            .created()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let old = temp.path().join("legacy.db");
+        SearchCache::walk_fs(&root).flush_to_file(&old).unwrap();
+        let old_bytes = fs::read(&old).unwrap();
+        let source = CString::new(old.to_str().unwrap()).unwrap();
+        let destination = CString::new(temp.path().join("native.db").to_str().unwrap()).unwrap();
+        let query = CString::new("date-target").unwrap();
+        let empty = CString::new("").unwrap();
+        unsafe {
+            let mut engine = ptr::null_mut();
+            assert_eq!(
+                reply(cn_engine_open(source.as_ptr(), &mut engine))["status"],
+                "ok"
+            );
+            let search = |generation| {
+                let request = cn_request_new();
+                assert_eq!(
+                    reply(cn_search(
+                        engine,
+                        request,
+                        generation,
+                        query.as_ptr(),
+                        empty.as_ptr(),
+                        false
+                    ))["total"],
+                    1
+                );
+                cn_request_free(request);
+                reply(cn_rows(engine, generation, 0, 128))["rows"][0].clone()
+            };
+            // All five sorts must leave unindexed metadata alone, including dates.
+            for (i, key) in ["filename", "fullPath", "size", "mtime", "ctime"]
+                .iter()
+                .enumerate()
+            {
+                let sort = CString::new(format!(r#"{{"key":"{key}","direction":"asc"}}"#)).unwrap();
+                assert_eq!(
+                    reply(live::cn_sort(engine, sort.as_ptr(), 20000))["status"],
+                    "ok"
+                );
+                assert_eq!(search(i as u64 + 1)["metadata_loaded"], false);
+            }
+            // Backfill also works with FSEvents paused; no watcher is needed for migration.
+            assert_eq!(
+                reply(live::cn_watch(engine, false, destination.as_ptr()))["status"],
+                "ok"
+            );
+            let started = Instant::now();
+            loop {
+                let polled = reply(live::cn_poll(engine));
+                if polled["metadata_indexing"] == false {
+                    break;
+                }
+                assert!(started.elapsed() < Duration::from_secs(3));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let row = search(10);
+            assert_eq!(row["modified"], 1_600_000_000_u64);
+            assert_eq!(row["created"], created);
+            let (id, stale_metadata) = {
+                let mut state = (*engine).0.lock().unwrap();
+                let id = state.cache.node_index_for_path(&file).unwrap();
+                (id, state.cache.expand_cached_file_nodes(&[id])[0].metadata)
+            };
+            fs::write(&file, "modified contents").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+                )
+                .unwrap();
+            {
+                let mut state = (*engine).0.lock().unwrap();
+                let event_id = state.cache.last_event_id() + 1;
+                state
+                    .cache
+                    .handle_fs_events(vec![FsEvent {
+                        path: file.clone(),
+                        id: event_id,
+                        flag: EventFlag::ItemModified,
+                    }])
+                    .unwrap();
+                assert!(
+                    !state
+                        .cache
+                        .store_indexed_metadata(id, &file, stale_metadata),
+                    "A late background read must not overwrite a newer event"
+                );
+                state.dirty = true;
+            }
+            let updated = search(11);
+            assert_eq!(updated["modified"], 1_700_000_000_u64);
+            assert_eq!(updated["created"], created);
+            assert_eq!(reply(live::cn_checkpoint(engine))["status"], "ok");
+            cn_engine_close(engine);
+            assert_eq!(fs::read(&old).unwrap(), old_bytes);
+            fs::remove_file(&file).unwrap();
+            let mut reopened = ptr::null_mut();
+            assert_eq!(
+                reply(cn_engine_open(destination.as_ptr(), &mut reopened))["status"],
+                "ok"
+            );
+            let sort = CString::new(r#"{"key":"ctime","direction":"asc"}"#).unwrap();
+            assert_eq!(
+                reply(live::cn_sort(reopened, sort.as_ptr(), 20000))["status"],
+                "ok"
+            );
+            let request = cn_request_new();
+            assert_eq!(
+                reply(cn_search(
+                    reopened,
+                    request,
+                    1,
+                    query.as_ptr(),
+                    empty.as_ptr(),
+                    false
+                ))["total"],
+                1
+            );
+            cn_request_free(request);
+            let restored = reply(cn_rows(reopened, 1, 0, 128))["rows"][0].clone();
+            assert_eq!(restored["created"], created);
+            assert_eq!(restored["modified"], 1_700_000_000_u64);
+            assert!(
+                (*reopened)
+                    .0
+                    .lock()
+                    .unwrap()
+                    .cache
+                    .pending_metadata_ids()
+                    .is_empty()
+            );
+            cn_engine_close(reopened);
+        }
     }
 
     #[test]

@@ -952,6 +952,38 @@ impl SearchCache {
         self.expand_file_nodes_inner::<false>(nodes)
     }
 
+    /// IDs only: collect work for a background metadata indexer without filesystem I/O.
+    pub fn pending_metadata_ids(&self) -> Vec<SlabIndex> {
+        self.file_nodes
+            .iter()
+            .filter_map(|(id, node)| node.metadata.is_none().then_some(id))
+            .collect()
+    }
+
+    /// Resolve an outstanding job immediately before dispatching its filesystem read.
+    pub fn pending_metadata_path(&self, id: SlabIndex) -> Option<PathBuf> {
+        if self.file_nodes.get(id)?.metadata.is_none() {
+            self.node_path(id)
+        } else {
+            None
+        }
+    }
+
+    /// Ignore late reads if a filesystem event removed, replaced, or refreshed the node.
+    /// The existing snapshot format already persists size, creation and modification dates.
+    pub fn store_indexed_metadata(
+        &mut self,
+        id: SlabIndex,
+        path: &Path,
+        metadata: SlabNodeMetadataCompact,
+    ) -> bool {
+        if self.pending_metadata_path(id).as_deref() != Some(path) {
+            return false;
+        }
+        self.file_nodes[id].metadata = metadata;
+        true
+    }
+
     fn expand_file_nodes_inner<const FETCH_META: bool>(
         &mut self,
         nodes: &[SlabIndex],

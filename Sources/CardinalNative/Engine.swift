@@ -27,6 +27,7 @@ struct Reply: Decodable {
   let includes: [String]?
   let changed: Bool?
   let needs_rescan: Bool?
+  let metadata_indexing: Bool?
   let processed_events: UInt64?
   let events: [FileEvent]?
   let paths: [String]?

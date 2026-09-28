@@ -225,3 +225,30 @@ Validation: the disk-backed `--sort-check` passed all 15 combinations of five
 columns and ascending/descending/unsorted states, checking fresh preferences,
 models, and table indicators after each click. Existing/invalid preference cases
 and all 10 rendered saved-index UI checks also passed.
+
+## Background date indexing — 0.1.40
+
+Modified and Created dates are filled into the existing persistent metadata fields
+by two background workers, independent of search and scan queues. This also records
+size, which comes from the same filesystem metadata call. Registering a native
+checkpoint starts the backfill for old or newly scanned indexes; read-only snapshots
+remain unchanged. Live events refresh metadata as before. Sorting now consumes
+indexed values without fetching metadata from every matching file. Missing values
+remain unknown until indexed; the 20,000-result limit remains in effect.
+
+Workers release the engine lock and ownership before filesystem reads, so a blocked
+volume cannot block searches or keep an old index alive after close/replacement.
+Late replies are rejected if an event already removed, replaced, or refreshed the
+node. The pool is globally bounded across engine replacements. Filesystem waits can
+delay background completion, but the app continues using the available index.
+Collected values are checkpointed normally, including on quit, so interrupted work
+resumes from the remaining missing metadata on the next launch.
+
+Validation: all 1,796 Rust workspace tests passed (including nine bridge tests),
+23 live UI checks, 16 preference/sort checks, and seven selection-stability scenarios
+with zero highlight/count gaps. New regressions verify legacy backfill while live
+monitoring is paused, birth/modified dates against filesystem values, event updates,
+late-result rejection, checkpoint/reopen with the source file removed, timestamp
+sorting in both directions, and a deliberately blocked metadata read that neither
+locks nor retains the engine. All five sorts are checked to avoid fetching missing
+metadata during interactive searches.
