@@ -351,7 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
     )
-    window.title = "Cardinal Native"
+    window.title = "EverythingMac"
     window.delegate = self
     window.preview = actions.preview
     window.contentView = NSHostingView(rootView: ContentView(model: model, prefs: prefs))
@@ -408,9 +408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       menu.addItem(item)
       return child
     }
-    let app = submenu("Cardinal Native")
+    let app = submenu("EverythingMac")
     app.addItem(
-      withTitle: "About Cardinal Native",
+      withTitle: "About EverythingMac",
       action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
     let preferences = app.addItem(
       withTitle: "Preferences…", action: #selector(showPreferences),
@@ -420,7 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       withTitle: "Hide", action: #selector(NSApplication.hide(_:)),
       keyEquivalent: "h")
     app.addItem(
-      withTitle: "Quit Cardinal Native", action: #selector(NSApplication.terminate(_:)),
+      withTitle: "Quit EverythingMac", action: #selector(NSApplication.terminate(_:)),
       keyEquivalent: "q")
     let edit = submenu("Edit")
     for (title, action, key) in [
@@ -471,10 +471,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     guard model.prefs.tray && !model.snapshotOnly else { return }
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     item.button?.image = NSImage(
-      systemSymbolName: "magnifyingglass", accessibilityDescription: "Cardinal Native")
+      systemSymbolName: "magnifyingglass", accessibilityDescription: "EverythingMac")
     let menu = NSMenu()
     let open = menu.addItem(
-      withTitle: "Open Cardinal Native", action: #selector(showWindow),
+      withTitle: "Open EverythingMac", action: #selector(showWindow),
       keyEquivalent: "")
     open.target = self
     menu.addItem(
@@ -499,7 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       GetApplicationEventTarget(), 0, &hotKey)
     if result != noErr {
       model.shortcutMessage =
-        "Command-Shift-Space is already in use. Quit the other Cardinal app to use this shortcut here."
+        "Command-Shift-Space is already in use. Quit the other EverythingMac or Cardinal app to use this shortcut here."
     }
   }
   func key(_ event: NSEvent) -> NSEvent? {

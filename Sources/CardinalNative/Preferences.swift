@@ -205,7 +205,7 @@ struct PreferencesView: View {
         FileActions.openPrivacySettings()
       }
       Text(
-        "Enable Full Disk Access for Cardinal Native and relaunch."
+        "Enable Full Disk Access for EverythingMac and relaunch."
       ).font(.caption).foregroundColor(.secondary)
       if let error = error { Text(error).foregroundColor(.red) }
       HStack {

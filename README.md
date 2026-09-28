@@ -1,8 +1,19 @@
-# Cardinal Native
+# EverythingMac
 
-Cardinal Native is a macOS file-search application built with **SwiftUI controls,
-an AppKit results table, and Cardinal’s existing Rust search engine**. This repository contains the standalone native app and its Rust engine.
-See [UPSTREAM.md](UPSTREAM.md) for attribution.
+**EverythingMac** is a native macOS file-search app derived from
+[Cardinal](https://github.com/cardisoft/cardinal) and the
+[seedds Cardinal fork](https://github.com/seedds/cardinal), with many improvements
+to performance, reliability, and the macOS interface. It is inspired by
+[Everything for Windows](https://www.voidtools.com/).
+
+EverythingMac combines SwiftUI controls, an AppKit results table, and Cardinal’s
+Rust search engine. Improvements include reusable sort indexes with unlimited
+column sorting, indexed file dates, faster scrolling, stable selection during
+live updates, more reliable file actions, and persistent sorting preferences.
+See [UPSTREAM.md](UPSTREAM.md) for attribution and [the performance report](MAINTAINED-SORT-PERFORMANCE.md)
+for measured sorting improvements.
+
+<img src="Resources/EverythingMac.png" alt="EverythingMac app icon" width="160" />
 
 Download the [latest native release](https://github.com/seedds/cardinal_native/releases/latest).
 The `seedds/tap/cardinal` Homebrew cask follows releases from this repository.
@@ -18,17 +29,20 @@ some external application integrations still need deployment validation.
 brew install --cask seedds/tap/cardinal
 ```
 
-To upgrade from the previous Tauri app:
+To upgrade an existing installation:
 
 ```bash
 brew update
 brew upgrade --cask seedds/tap/cardinal
 ```
 
-Version 0.1.28 replaces the tap's Tauri app with **Cardinal Native.app**.
-Quit the old Cardinal app before launching the native app. Its saved preferences
-are imported on first launch, and native data is stored separately. Grant the
-native app Full Disk Access if needed. The release supports Apple Silicon and is
+Version 0.1.43 renames Cardinal Native to **EverythingMac.app** and introduces the
+new icon. The existing `seedds/tap/cardinal` cask installs EverythingMac, so the
+upgrade command stays the same. The bundle identifier and data directory remain
+unchanged to preserve preferences and indexes.
+Quit the previous app before launching EverythingMac. When migrating from the
+older Tauri app, preferences are imported on first launch and the original data
+store is kept separate. Grant EverythingMac Full Disk Access if needed. The release supports Apple Silicon and is
 ad-hoc signed, not notarized; macOS may require approval in Privacy & Security.
 
 ## Quick start
@@ -46,10 +60,13 @@ and launches it. To build without launching:
 ./run.sh --build-only
 ```
 
+The supplied icon source is `Resources/EverythingMac.png`. To rebuild its macOS
+icon sizes, run `./scripts/build-icon.sh`.
+
 | Item | Value |
 | --- | --- |
-| Application name | Cardinal Native |
-| Built application | `build/Cardinal Native.app` |
+| Application name | EverythingMac |
+| Built application | `build/EverythingMac.app` |
 | Bundle identifier | `com.cardinal.native-prototype` |
 | Deployment target | macOS 12 |
 | Validated hardware | Apple Silicon, M4 Pro |
@@ -207,7 +224,7 @@ existing filesystem reads. A snapshot is not a frozen copy of file contents.
 
 ### macOS permissions
 
-Cardinal Native needs its own filesystem permissions. For protected locations,
+EverythingMac needs its own filesystem permissions. For protected locations,
 enable it under **System Settings → Privacy & Security → Full Disk Access**, then
 relaunch. The app provides permission guidance and a link to System Settings.
 
@@ -381,7 +398,7 @@ After benchmarking, rebuild the ordinary Tauri binary with
 ./scripts/package-native.sh
 ```
 
-Output: `build/Cardinal-Native-<VERSION>-arm64.dmg`, using the root `VERSION` file.
+Output: `build/EverythingMac-<VERSION>-arm64.dmg`, using the root `VERSION` file.
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. It does not install,

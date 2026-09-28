@@ -9,11 +9,31 @@ class ReleaseTests(unittest.TestCase):
         self.cask = ('cask "cardinal" do\n  version "0.1.34"\n'
                      f'  sha256 "{"a" * 64}"\n'
                      f'  url "{release.DOWNLOAD_ROOT}/v#{{version}}/Cardinal-Native-#{{version}}-arm64.dmg"\n'
-                     '  app "Cardinal Native.app"\nend\n')
+                     '  name "Cardinal Native"\n  app "Cardinal Native.app"\nend\n')
 
     def test_update_preserves_app_and_url(self):
         result = release.update_cask(self.cask, "0.1.35", "b" * 64)
         self.assertEqual(result, self.cask.replace('"0.1.34"', '"0.1.35"').replace("a" * 64, "b" * 64))
+
+    def test_rename_migrates_existing_cask_and_preserves_token(self):
+        old = self.cask.replace('"0.1.34"', '"0.1.42"')
+        result = release.update_cask(old, "0.1.43", "b" * 64)
+        self.assertIn('cask "cardinal" do', result)
+        self.assertIn('name "EverythingMac"', result)
+        self.assertIn('app "EverythingMac.app"', result)
+        self.assertIn('/EverythingMac-#{version}-arm64.dmg', result)
+        self.assertNotIn('Cardinal Native', result)
+        self.assertEqual(release.update_cask(result, "0.1.43", "b" * 64), result)
+        self.assertIn('version "0.1.44"', release.update_cask(result, "0.1.44", "c" * 64))
+
+    def test_release_asset_names_before_and_after_rename(self):
+        self.assertEqual(release.asset_name("0.1.42"), "Cardinal-Native-0.1.42-arm64.dmg")
+        self.assertEqual(release.asset_name("0.1.43"), "EverythingMac-0.1.43-arm64.dmg")
+
+    def test_wrong_app_cannot_be_silently_migrated(self):
+        with self.assertRaises(ValueError):
+            release.update_cask(self.cask.replace('app "Cardinal Native.app"', 'app "Other.app"'),
+                                "0.1.43", "b" * 64)
 
     def test_retry_is_idempotent(self):
         result = release.update_cask(self.cask, "0.1.35", "b" * 64)

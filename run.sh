@@ -17,11 +17,11 @@ SWIFT_BUILD_DIR="${CARDINAL_SWIFT_BUILD_DIR:-/private/tmp/cardinal-native-${UID}
 export CLANG_MODULE_CACHE_PATH="$SWIFT_BUILD_DIR/clang-module-cache"
 export SWIFT_MODULECACHE_PATH="$SWIFT_BUILD_DIR/swift-module-cache"
 swift build -c release --disable-sandbox --scratch-path "$SWIFT_BUILD_DIR" --cache-path "$SWIFT_BUILD_DIR/cache" -Xlinker -L -Xlinker "$REPO_DIR/target/release"
-APP="$PROTOTYPE_DIR/build/Cardinal Native.app"
+APP="$PROTOTYPE_DIR/build/EverythingMac.app"
 # Recreate generated resources so removed assets cannot survive an incremental build.
 rm -rf "$APP/Contents/Resources"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$SWIFT_BUILD_DIR/release/CardinalNativePrototype" "$APP/Contents/MacOS/CardinalNativePrototype"
+cp "$SWIFT_BUILD_DIR/release/EverythingMac" "$APP/Contents/MacOS/EverythingMac"
 cp "$REPO_DIR/Resources/icon.icns" "$APP/Contents/Resources/icon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -30,8 +30,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleIdentifier</key><string>com.cardinal.native-prototype</string>
 <key>CFBundleDevelopmentRegion</key><string>en</string>
 <key>CFBundleLocalizations</key><array><string>en</string></array>
-<key>CFBundleName</key><string>Cardinal Native</string>
-<key>CFBundleExecutable</key><string>CardinalNativePrototype</string>
+<key>CFBundleName</key><string>EverythingMac</string>
+<key>CFBundleDisplayName</key><string>EverythingMac</string>
+<key>CFBundleExecutable</key><string>EverythingMac</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>${VERSION}</string>
 <key>CFBundleShortVersionString</key><string>${VERSION}</string>
@@ -44,5 +45,5 @@ codesign --force --sign - "$APP"
 if [[ "${1:-}" == "--build-only" ]]; then
   echo "$APP"
 else
-  exec "$APP/Contents/MacOS/CardinalNativePrototype" "$@"
+  exec "$APP/Contents/MacOS/EverythingMac" "$@"
 fi

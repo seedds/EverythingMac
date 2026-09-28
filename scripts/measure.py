@@ -32,7 +32,7 @@ def processes():
 existing = set(processes())
 env = os.environ.copy()
 if args.kind == 'native':
-    command = [str(root / 'build/Cardinal Native.app/Contents/MacOS/CardinalNativePrototype'),
+    command = [str(root / 'build/EverythingMac.app/Contents/MacOS/EverythingMac'),
                '--index', str(Path(args.index).resolve()), '--benchmark', str(output)]
 else:
     command = [str(root / 'build/Cardinal Tauri Baseline.app/Contents/MacOS/cardinal')]

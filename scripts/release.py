@@ -41,8 +41,17 @@ def check_latest(version):
         raise ValueError("Refusing to release or sync a version older than the latest release")
 
 
+def app_name(version):
+    return "EverythingMac" if version_tuple(version) >= (0, 1, 43) else "Cardinal Native"
+
+
 def asset_name(version):
-    return f"Cardinal-Native-{version}-arm64.dmg"
+    return f"{app_name(version).replace(' ', '-')}-{version}-arm64.dmg"
+
+
+def cask_url(version):
+    prefix = app_name(version).replace(" ", "-")
+    return f"{DOWNLOAD_ROOT}/v#{{version}}/{prefix}-#{{version}}-arm64.dmg"
 
 
 def published_checksum(version):
@@ -78,11 +87,19 @@ def update_cask(source, version, checksum):
         raise ValueError("Expected exactly one cask version and checksum")
     if version_tuple(versions[0]) > version_tuple(version):
         raise ValueError("Refusing to downgrade the Homebrew cask")
-    expected_url = f'{DOWNLOAD_ROOT}/v#{{version}}/Cardinal-Native-#{{version}}-arm64.dmg'
-    if f'  url "{expected_url}"' not in source:
-        raise ValueError("Cask does not point to this repository's versioned DMG")
-    source = re.sub(r'^  version "[^"]+"$', f'  version "{version}"', source, flags=re.MULTILINE)
-    return re.sub(r'^  sha256 "[^"]+"$', f'  sha256 "{checksum}"', source, flags=re.MULTILINE)
+    old_name = app_name(versions[0])
+    fields = {"url": cask_url(versions[0]), "name": old_name, "app": f"{old_name}.app"}
+    for field, expected in fields.items():
+        values = re.findall(rf'^  {field} "([^\"]+)"$', source, re.MULTILINE)
+        if values != [expected]:
+            raise ValueError(f"Cask {field} does not match this repository's release")
+    replacements = {
+        "version": version, "sha256": checksum, "url": cask_url(version),
+        "name": app_name(version), "app": f"{app_name(version)}.app",
+    }
+    for field, value in replacements.items():
+        source = re.sub(rf'^  {field} "[^\"]+"$', f'  {field} "{value}"', source, flags=re.MULTILINE)
+    return source
 
 
 def main():
@@ -105,7 +122,7 @@ def main():
                 raise ValueError("Existing tag does not point to the checked-out source")
             if not metadata:
                 gh("release", "create", tag, "--repo", REPOSITORY, "--draft", "--target", head,
-                   "--title", f"Cardinal Native {version}", "--generate-notes")
+                   "--title", f"{app_name(version)} {version}", "--generate-notes")
             gh("release", "upload", tag, f"build/{asset_name(version)}", "--repo", REPOSITORY, "--clobber")
             gh("release", "edit", tag, "--repo", REPOSITORY, "--draft=false", "--latest")
         checksum = published_checksum(version)
