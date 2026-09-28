@@ -61,7 +61,7 @@ and launches it. To build without launching:
 ```
 
 To verify that a direct launch uses the current app icon with macOS's standard
-size and shape:
+size and shape, including the default icon shown when a runtime override is removed:
 
 ```sh
 ./run.sh --icon-check /tmp/everythingmac-icon-check.json

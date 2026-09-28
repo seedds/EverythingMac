@@ -32,19 +32,36 @@ enum IconCheck {
 
   static func run(output: String) {
     var failure: String?
-    if Bundle.main.url(forResource: "icon", withExtension: "icns") != nil {
+    if let file = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
+      Bundle.main.url(forResource: file, withExtension: nil) != nil {
       let expected = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-      // AppKit can resample/color-convert the assigned image. Compare rendered
-      // colors with a small tolerance, rather than encoded image bytes.
-      if difference(NSApp.applicationIconImage, expected) > 0.005 {
+      // Native Dock and Finder rendering have slightly different insets and
+      // antialiasing. Allow those differences, while rejecting old artwork or
+      // the unstyled square source image.
+      if difference(NSApp.applicationIconImage, expected) > 0.025 {
         failure = "Running app icon differs from the system-rendered bundle icon (artwork, size, or shape)"
+        try? bitmap(NSApp.applicationIconImage).representation(using: .png, properties: [:])?
+          .write(to: URL(fileURLWithPath: output + ".actual.png"))
+        try? bitmap(expected).representation(using: .png, properties: [:])?
+          .write(to: URL(fileURLWithPath: output + ".expected.png"))
+      } else {
+        // Clearing a runtime override exposes the bundle icon used when the
+        // process goes away. This catches a workaround that hides stale artwork
+        // during execution but lets it flash again when the app quits.
+        NSApp.applicationIconImage = nil
+        if difference(NSApp.applicationIconImage, expected) > 0.025 {
+          failure = "Default bundle icon is stale when the runtime override is removed"
+        }
       }
     } else {
       failure = "Bundle icon is missing or unreadable"
     }
     do {
       try JSONSerialization.data(withJSONObject: [
-        "checks": failure == nil ? ["Running app icon matches system-rendered artwork, size, and shape"] : [],
+        "checks": failure == nil ? [
+          "Running app icon matches system-rendered artwork, size, and shape",
+          "Default bundle icon stays current without a runtime override",
+        ] : [],
         "error": failure as Any? ?? NSNull(),
       ], options: [.prettyPrinted, .sortedKeys])
         .write(to: URL(fileURLWithPath: output))

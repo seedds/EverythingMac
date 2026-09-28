@@ -17,9 +17,12 @@ SWIFT_BUILD_DIR="${CARDINAL_SWIFT_BUILD_DIR:-/private/tmp/cardinal-native-${UID}
 export CLANG_MODULE_CACHE_PATH="$SWIFT_BUILD_DIR/clang-module-cache"
 export SWIFT_MODULECACHE_PATH="$SWIFT_BUILD_DIR/swift-module-cache"
 swift build -c release --disable-sandbox --scratch-path "$SWIFT_BUILD_DIR" --cache-path "$SWIFT_BUILD_DIR/cache" -Xlinker -L -Xlinker "$REPO_DIR/target/release"
-APP="$PROTOTYPE_DIR/build/EverythingMac.app"
-# Recreate generated resources so removed assets cannot survive an incremental build.
-rm -rf "$APP/Contents/Resources"
+mkdir -p "$PROTOTYPE_DIR/build"
+# Icon Services can retain the first launch icon for an in-place bundle, even
+# after its resources and registration change. Assemble a fresh bundle identity.
+APP_STAGE="$(mktemp -d "$PROTOTYPE_DIR/build/app.XXXXXX")"
+trap 'rm -rf "$APP_STAGE"' EXIT
+APP="$APP_STAGE/EverythingMac.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SWIFT_BUILD_DIR/release/EverythingMac" "$APP/Contents/MacOS/EverythingMac"
 cp "$REPO_DIR/Resources/icon.icns" "$APP/Contents/Resources/icon.icns"
@@ -42,6 +45,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 codesign --force --sign - "$APP"
+rm -rf "$PROTOTYPE_DIR/build/EverythingMac.app"
+mv "$APP" "$PROTOTYPE_DIR/build/EverythingMac.app"
+rmdir "$APP_STAGE"
+trap - EXIT
+APP="$PROTOTYPE_DIR/build/EverythingMac.app"
 if [[ "${1:-}" == "--build-only" ]]; then
   echo "$APP"
 else
