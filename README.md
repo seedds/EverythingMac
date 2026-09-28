@@ -149,6 +149,13 @@ unavailable dates remain unknown. Sorting uses indexed values only, so date orde
 fills in as indexing progresses. The existing sorting limit still applies.
 Read-only snapshot mode does not start background indexing.
 
+Sorting reuses compact ID orders for Name, Path, Size, Modified, and Created.
+These orders are prepared when the index opens; small searches use integer ranks
+and broad searches filter an existing order. File events and metadata updates
+refresh affected entries. The snapshot format and default 20,000-result sorting
+limit are unchanged. See [the measured comparison](MAINTAINED-SORT-PERFORMANCE.md)
+for query latency, startup cost, and memory use.
+
 ## Indexing and storage
 
 Normal launch loads the native index when one exists. Otherwise it reads the

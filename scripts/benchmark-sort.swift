@@ -66,8 +66,13 @@ do {
   let query = args[2], key = args[3], limit = Int(args[4])!, repetitions = Int(args[5])!
   precondition(limit > 0 && repetitions > 0)
   var engine: OpaquePointer?
+  let loadSampler = MemorySampler()
+  loadSampler.start()
+  let loadCPUStart = cpuMilliseconds()
   let loaded = try args[1].withCString { try reply(cn_engine_open($0, &engine)) }
   defer { cn_engine_close(engine) }
+  let loadCPU = cpuMilliseconds() - loadCPUStart
+  let loadPeakRSS = loadSampler.stop()
   let loadedRSS = rss()
   let descriptor = key == "none" ? "null" : "{\"key\":\"\(key)\",\"direction\":\"asc\"}"
   _ = try descriptor.withCString { try reply(cn_sort(engine, $0, limit)) }
@@ -76,7 +81,8 @@ do {
     let report: [String: Any] = [
       "query": query, "sort_key": key, "sort_limit": limit,
       "index_entries": loaded["total"]!, "load_ms": loaded["load_ms"]!,
-      "loaded_rss_bytes": loadedRSS, "samples": samples,
+      "loaded_rss_bytes": loadedRSS, "load_peak_rss_bytes": loadPeakRSS,
+      "load_cpu_ms": loadCPU, "samples": samples,
     ]
     try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
       .write(to: URL(fileURLWithPath: args[6]), options: .atomic)

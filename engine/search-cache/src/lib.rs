@@ -10,6 +10,7 @@ mod query_preprocessor;
 mod segment;
 mod slab;
 mod slab_node;
+mod sort_index;
 mod type_and_size;
 
 pub use cache::*;
@@ -21,6 +22,7 @@ pub use persistent::*;
 pub use segment::*;
 pub use slab::*;
 pub use slab_node::*;
+pub use sort_index::SortColumn;
 pub use type_and_size::*;
 
 #[cfg(test)]

@@ -34,6 +34,7 @@ static NEVER_STOPPED: AtomicBool = AtomicBool::new(false);
 
 pub struct SearchCache {
     pub(crate) file_nodes: FileNodes,
+    pub(crate) sort_indexes: crate::sort_index::SortIndexes,
     last_event_id: u64,
     rescan_count: u64,
     pub(crate) name_index: NameIndex,
@@ -313,6 +314,7 @@ impl SearchCache {
             name_index,
             stop: cancel,
             skipped_cloud_files: Default::default(),
+            sort_indexes: Default::default(),
             #[cfg(test)]
             content_metadata_flags: Default::default(),
             #[cfg(test)]
@@ -341,6 +343,7 @@ impl SearchCache {
             name_index: NameIndex::default(),
             stop: cancel,
             skipped_cloud_files: Default::default(),
+            sort_indexes: Default::default(),
             #[cfg(test)]
             content_metadata_flags: Default::default(),
             #[cfg(test)]
@@ -667,6 +670,7 @@ impl SearchCache {
         let name = node.name();
         let index = self.file_nodes.insert(node);
         self.name_index.add_index(name, index, &self.file_nodes);
+        self.sort_indexes.changed(index, true);
         index
     }
 
@@ -839,6 +843,7 @@ impl SearchCache {
     fn remove_node(&mut self, index: SlabIndex) {
         fn remove_single_node(cache: &mut SearchCache, index: SlabIndex) {
             if let Some(node) = cache.file_nodes.try_remove(index) {
+                cache.sort_indexes.changed(index, true);
                 let removed = cache.name_index.remove_index(node.name(), index);
                 assert!(removed, "inconsistent name index and node");
             }
@@ -981,6 +986,7 @@ impl SearchCache {
             return false;
         }
         self.file_nodes[id].metadata = metadata;
+        self.sort_indexes.changed(id, false);
         true
     }
 
@@ -1005,6 +1011,7 @@ impl SearchCache {
                                     Err(_) => SlabNodeMetadataCompact::unaccessible(),
                                 };
                                 node.metadata = metadata;
+                                self.sort_indexes.changed(node_index, false);
                                 metadata
                             }
                             _ => node.metadata,

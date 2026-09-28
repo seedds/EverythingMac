@@ -40,7 +40,8 @@ struct State {
     metadata: metadata::Indexing,
 }
 impl State {
-    fn new(cache: SearchCache, root: std::path::PathBuf) -> Self {
+    fn new(mut cache: SearchCache, root: std::path::PathBuf) -> Self {
+        cache.prepare_sort_indexes();
         Self {
             cache,
             root: root.clone(),
@@ -210,17 +211,18 @@ pub unsafe extern "C" fn cn_search(
             return Ok(json!({"status":"cancelled"}));
         }
         let mut results = outcome.nodes.unwrap();
-        if let Some(sort) = state.sort.filter(|_| results.len() <= state.sort_limit) {
-            // Dates are indexed in the background; interactive sorting must never
-            // fetch metadata from every matching file (including slow volumes).
-            let nodes = state.cache.expand_cached_file_nodes(&results);
-            let mut entries: Vec<_> = results
-                .into_iter()
-                .zip(nodes)
-                .map(|(id, node)| sort::SortEntry::new(id, node))
-                .collect();
-            sort::sort_entries(&mut entries, &sort);
-            results = entries.into_iter().map(|e| e.slab_index).collect();
+        if let Some(sort) = state.sort.filter(|_| results.len() <= state.sort_limit)
+            && state
+                .cache
+                .sort_results(
+                    &mut results,
+                    sort.key.into(),
+                    matches!(sort.direction, sort::SortDirectionPayload::Desc),
+                    token,
+                )
+                .is_none()
+        {
+            return Ok(json!({"status":"cancelled"}));
         }
         if token.is_cancelled().is_none() {
             return Ok(json!({"status":"cancelled"}));

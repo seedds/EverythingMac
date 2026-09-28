@@ -1084,6 +1084,7 @@ impl SearchCache {
             Err(_) => SlabNodeMetadataCompact::unaccessible(),
         };
         self.file_nodes[index].metadata = metadata;
+        self.sort_indexes.changed(index, false);
         metadata
     }
 }

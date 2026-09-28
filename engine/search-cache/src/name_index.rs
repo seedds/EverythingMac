@@ -68,6 +68,10 @@ pub struct NameIndex {
 }
 
 impl NameIndex {
+    pub(crate) fn groups(&self) -> impl Iterator<Item = &SortedSlabIndices> {
+        self.map.values()
+    }
+
     pub fn len(&self) -> usize {
         self.map.len()
     }
