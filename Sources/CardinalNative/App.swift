@@ -313,7 +313,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var monitor: Any?
   var instanceLock: Int32 = -1
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // Direct executable launches (run.sh) can retain an older Launch Services icon.
+    // Read this bundle's resource instead of relying on that cached launch icon.
+    if let url = Bundle.main.url(forResource: "icon", withExtension: "icns"),
+      let icon = NSImage(contentsOf: url) {
+      NSApp.applicationIconImage = icon
+    }
     let args = CommandLine.arguments
+    if let index = args.firstIndex(of: "--icon-check"), args.indices.contains(index + 1) {
+      IconCheck.run(output: args[index + 1])
+      return
+    }
     let isolated =
       args.contains("--benchmark") || args.contains("--self-check") || args.contains("--snapshot")
       || args.contains("--live-check") || args.contains("--scroll-check")

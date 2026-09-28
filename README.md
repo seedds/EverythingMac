@@ -60,6 +60,14 @@ and launches it. To build without launching:
 ./run.sh --build-only
 ```
 
+To verify that a direct launch uses the current bundled app icon:
+
+```sh
+./run.sh --icon-check /tmp/everythingmac-icon-check.json
+```
+
+This startup check exits without opening the index or changing preferences.
+
 The supplied icon source is `Resources/EverythingMac.png`. To rebuild its macOS
 icon sizes, run `./scripts/build-icon.sh`.
 
