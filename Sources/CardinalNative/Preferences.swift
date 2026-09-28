@@ -23,7 +23,6 @@ final class Preferences: ObservableObject {
   @Published var theme = "system"
   @Published var tray = false
   @Published var terminal = "/System/Applications/Utilities/Terminal.app"
-  @Published var sortLimit = 20000
   var sortKey = ""
   var sortAscending = true
   @Published var migration = ""
@@ -50,7 +49,6 @@ final class Preferences: ObservableObject {
     theme = v["theme"] as? String ?? theme
     tray = v["tray"] as? Bool ?? tray
     terminal = v["terminal"] as? String ?? terminal
-    sortLimit = max(1, v["sortLimit"] as? Int ?? sortLimit)
     let savedSort = v["sortKey"] as? String ?? ""
     sortKey = Self.sortColumns.values.contains(savedSort) ? savedSort : ""
     sortAscending = v["sortAscending"] as? Bool ?? true
@@ -63,7 +61,7 @@ final class Preferences: ObservableObject {
     let values: [String: Any] = [
       "root": root, "ignores": ignores, "includes": includes,
       "theme": theme, "tray": tray,
-      "terminal": terminal, "sortLimit": max(1, sortLimit), "columns": tableColumns,
+      "terminal": terminal, "columns": tableColumns,
       "sortKey": sortKey, "sortAscending": sortAscending,
     ]
     try FileManager.default.createDirectory(
@@ -119,7 +117,6 @@ final class Preferences: ObservableObject {
     theme = values["cardinal.theme"] ?? theme
     tray = values["cardinal.trayIconEnabled"] == "true"
     terminal = values["cardinal.terminalApp"] ?? terminal
-    sortLimit = max(1, Int(values["cardinal.sortThreshold"] ?? "") ?? sortLimit)
     migration =
       values.isEmpty
       ? "No existing preferences found."
@@ -147,7 +144,6 @@ final class Preferences: ObservableObject {
     value.split(separator: "\n").map { normalized(String($0)) }.filter { !$0.isEmpty }
   }
   func validate() throws {
-    sortLimit = max(1, sortLimit)
     guard Self.expand(root).hasPrefix("/")
     else { throw messageError("Choose an existing absolute monitor root.") }
     guard (Self.paths(ignores) + Self.paths(includes)).allSatisfy({ $0.hasPrefix("/") }) else {
@@ -200,10 +196,6 @@ struct PreferencesView: View {
           .font(.caption).foregroundColor(.secondary)
       }
       HStack {
-        Text("Sorting limit")
-        TextField("20000", value: $prefs.sortLimit, formatter: NumberFormatter()).frame(width: 120)
-      }
-      HStack {
         Button("Import existing Cardinal preferences") {
           prefs.importLegacy()
         }
@@ -221,7 +213,6 @@ struct PreferencesView: View {
           prefs.theme = "system"
           prefs.tray = false
           prefs.terminal = "/System/Applications/Utilities/Terminal.app"
-          prefs.sortLimit = 20000
         }
         Spacer()
         Button("Close") { presentation.wrappedValue.dismiss() }

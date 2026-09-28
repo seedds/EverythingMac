@@ -105,13 +105,13 @@ final class Engine {
 
   func search(
     query: String, directory: String, sensitive: Bool, generation: UInt64,
-    submitted: Double, firstRow: Int = 0, sort: String = "null", sortLimit: Int = 20000,
+    submitted: Double, firstRow: Int = 0, sort: String = "null",
     completion: @escaping (Result<(Reply, [Row], Double), Error>) -> Void
   ) {
     let request = SearchRequest()
     queue.async {
       let result = Result { () throws -> (Reply, [Row], Double) in
-        _ = try sort.withCString { try decode(cn_sort(self.handle, $0, sortLimit)) }
+        _ = try sort.withCString { try decode(cn_sort(self.handle, $0)) }
         let reply = try query.withCString { q in
           try directory.withCString { d in
             try decode(cn_search(self.handle, request.pointer, generation, q, d, sensitive))
@@ -335,8 +335,7 @@ final class Model: ObservableObject {
       generation: ticket, submitted: submittedAt,
       firstRow: background ? (visibleStart / 128) * 128 : 0,
       sort: sortKey.isEmpty
-        ? "null" : jsonString(["key": sortKey, "direction": sortAscending ? "asc" : "desc"]),
-      sortLimit: prefs.sortLimit
+        ? "null" : jsonString(["key": sortKey, "direction": sortAscending ? "asc" : "desc"])
     ) { [weak self] result in
       guard let self = self, !self.closed, self.generation == ticket else { return }
       switch result {

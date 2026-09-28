@@ -217,9 +217,8 @@ all seven selection-stability scenarios passed, with zero highlight/count gaps.
 
 Header clicks now save the sort column and direction to native preferences,
 including the third-click unsorted state. New models restore this choice before
-their first search, and new tables restore the matching header arrow. The existing
-sorting limit still applies. Missing or unrecognized saved column keys fall back
-to unsorted order.
+their first search, and new tables restore the matching header arrow. Missing or
+unrecognized saved column keys fall back to unsorted order.
 
 Validation: the disk-backed `--sort-check` passed all 15 combinations of five
 columns and ascending/descending/unsorted states, checking fresh preferences,
@@ -252,3 +251,17 @@ late-result rejection, checkpoint/reopen with the source file removed, timestamp
 sorting in both directions, and a deliberately blocked metadata read that neither
 locks nor retains the engine. All five sorts are checked to avoid fetching missing
 metadata during interactive searches.
+
+## Unlimited column sorting — 0.1.42
+
+All matching rows participate in column sorting. The preferences field, saved
+limit, legacy threshold import, UI warning, and backend limit parameter are
+removed. Old preferences containing a limit are accepted but the value is ignored
+and dropped on the next save. Column and direction preferences still persist.
+
+Regression coverage checks ascending, descending, and backend order with 20,001
+actual matches; header clicks above 20,000; and removal of an obsolete saved limit.
+
+The focused `--tab-check` also covers a background refresh on the Events tab.
+The live harness waits for a Files-table draw only while Files is visible, avoiding
+a false timeout when hidden results have a pending draw and selection is already clear.

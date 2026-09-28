@@ -59,12 +59,12 @@ final class MemorySampler {
 
 do {
   let args = CommandLine.arguments
-  guard args.count == 7 else {
-    fputs("Usage: benchmark-sort INDEX QUERY KEY LIMIT REPETITIONS OUTPUT.json\nKEY: filename/fullPath/size/mtime/ctime/none\n", stderr)
+  guard args.count == 6 else {
+    fputs("Usage: benchmark-sort INDEX QUERY KEY REPETITIONS OUTPUT.json\nKEY: filename/fullPath/size/mtime/ctime/none\n", stderr)
     exit(2)
   }
-  let query = args[2], key = args[3], limit = Int(args[4])!, repetitions = Int(args[5])!
-  precondition(limit > 0 && repetitions > 0)
+  let query = args[2], key = args[3], repetitions = Int(args[4])!
+  precondition(repetitions > 0)
   var engine: OpaquePointer?
   let loadSampler = MemorySampler()
   loadSampler.start()
@@ -75,17 +75,17 @@ do {
   let loadPeakRSS = loadSampler.stop()
   let loadedRSS = rss()
   let descriptor = key == "none" ? "null" : "{\"key\":\"\(key)\",\"direction\":\"asc\"}"
-  _ = try descriptor.withCString { try reply(cn_sort(engine, $0, limit)) }
+  _ = try descriptor.withCString { try reply(cn_sort(engine, $0)) }
   var samples: [[String: Any]] = []
   func save() throws {
     let report: [String: Any] = [
-      "query": query, "sort_key": key, "sort_limit": limit,
+      "query": query, "sort_key": key,
       "index_entries": loaded["total"]!, "load_ms": loaded["load_ms"]!,
       "loaded_rss_bytes": loadedRSS, "load_peak_rss_bytes": loadPeakRSS,
       "load_cpu_ms": loadCPU, "samples": samples,
     ]
     try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-      .write(to: URL(fileURLWithPath: args[6]), options: .atomic)
+      .write(to: URL(fileURLWithPath: args[5]), options: .atomic)
   }
   try save()
   for iteration in 0..<repetitions {
@@ -111,14 +111,14 @@ do {
     precondition(rowValues.count == min(total, 128))
     samples.append([
       "iteration": iteration, "matches": total,
-      "sort_applied": key != "none" && total <= limit,
+      "sort_applied": key != "none",
       "search_only_ms": result["search_ms"]!, "search_and_sort_ms": searchAndSortMS,
       "first_page_ms": firstPageMS, "cpu_ms": cpuMS,
       "rss_before_bytes": beforeRSS, "rss_peak_bytes": peakRSS, "rss_after_bytes": rss(),
       "first_page_metadata_loaded": rowValues.filter { $0["metadata_loaded"] as? Bool == true }.count,
     ])
     try save()
-    fputs("\(query.isEmpty ? "<all>" : query) \(key) limit=\(limit) #\(iteration): \(total) matches, \(Int(firstPageMS)) ms\n", stderr)
+    fputs("\(query.isEmpty ? "<all>" : query) \(key) #\(iteration): \(total) matches, \(Int(firstPageMS)) ms\n", stderr)
   }
 } catch {
   fputs("Sort benchmark failed: \(error)\n", stderr)

@@ -32,7 +32,6 @@ struct State {
     events: std::collections::VecDeque<Value>,
     processed_events: u64,
     sort: Option<sort::SortStatePayload>,
-    sort_limit: usize,
     selection: std::collections::HashSet<[u64; 2]>,
     selection_nodes: Vec<SlabIndex>,
     selection_positions: Vec<usize>,
@@ -55,7 +54,6 @@ impl State {
             events: Default::default(),
             processed_events: 0,
             sort: None,
-            sort_limit: 20000,
             selection: Default::default(),
             selection_nodes: vec![],
             selection_positions: vec![],
@@ -211,7 +209,7 @@ pub unsafe extern "C" fn cn_search(
             return Ok(json!({"status":"cancelled"}));
         }
         let mut results = outcome.nodes.unwrap();
-        if let Some(sort) = state.sort.filter(|_| results.len() <= state.sort_limit)
+        if let Some(sort) = state.sort
             && state
                 .cache
                 .sort_results(
@@ -350,6 +348,63 @@ mod tests {
     }
 
     #[test]
+    fn sorting_applies_to_every_result_above_the_former_limit() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        const COUNT: usize = 20_001;
+        for i in 0..COUNT {
+            fs::File::create(temp.path().join(format!("item-{i:05}.unlimited-sort"))).unwrap();
+        }
+        let root = temp.path().canonicalize().unwrap();
+        let cache = SearchCache::walk_fs(&root);
+        let engine = Box::into_raw(Box::new(Engine(Arc::new(Mutex::new(State::new(
+            cache, root,
+        ))))));
+        let query = CString::new(".unlimited-sort").unwrap();
+        let empty = CString::new("").unwrap();
+        unsafe {
+            for (i, descriptor) in [
+                r#"{"key":"filename","direction":"desc"}"#,
+                r#"{"key":"filename","direction":"asc"}"#,
+                "null",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let sort = CString::new(descriptor).unwrap();
+                assert_eq!(reply(live::cn_sort(engine, sort.as_ptr()))["status"], "ok");
+                let request = cn_request_new();
+                let generation = i as u64 + 1;
+                let result = reply(cn_search(
+                    engine,
+                    request,
+                    generation,
+                    query.as_ptr(),
+                    empty.as_ptr(),
+                    false,
+                ));
+                cn_request_free(request);
+                assert_eq!(result["total"], COUNT);
+                for position in [0, COUNT - 1] {
+                    let row = reply(cn_rows(engine, generation, position, 1));
+                    let name = if i == 0 {
+                        COUNT - 1 - position
+                    } else {
+                        position
+                    };
+                    assert!(
+                        row["rows"][0]["path"]
+                            .as_str()
+                            .unwrap()
+                            .ends_with(&format!("/item-{name:05}.unlimited-sort"))
+                    );
+                }
+            }
+            cn_engine_close(engine);
+        }
+    }
+
+    #[test]
     fn date_index_backfills_legacy_snapshots_persists_and_tracks_events() {
         use cardinal_sdk::{EventFlag, FsEvent};
         use std::time::{Duration, UNIX_EPOCH};
@@ -409,10 +464,7 @@ mod tests {
                 .enumerate()
             {
                 let sort = CString::new(format!(r#"{{"key":"{key}","direction":"asc"}}"#)).unwrap();
-                assert_eq!(
-                    reply(live::cn_sort(engine, sort.as_ptr(), 20000))["status"],
-                    "ok"
-                );
+                assert_eq!(reply(live::cn_sort(engine, sort.as_ptr()))["status"], "ok");
                 assert_eq!(search(i as u64 + 1)["metadata_loaded"], false);
             }
             // Backfill also works with FSEvents paused; no watcher is needed for migration.
@@ -480,7 +532,7 @@ mod tests {
             );
             let sort = CString::new(r#"{"key":"ctime","direction":"asc"}"#).unwrap();
             assert_eq!(
-                reply(live::cn_sort(reopened, sort.as_ptr(), 20000))["status"],
+                reply(live::cn_sort(reopened, sort.as_ptr()))["status"],
                 "ok"
             );
             let request = cn_request_new();
@@ -783,7 +835,7 @@ mod tests {
             );
             cn_request_free(request);
             let sort = CString::new(r#"{"key":"size","direction":"desc"}"#).unwrap();
-            assert_eq!(reply(cn_sort(engine, sort.as_ptr(), 20000))["status"], "ok");
+            assert_eq!(reply(cn_sort(engine, sort.as_ptr()))["status"], "ok");
             let query = CString::new(".txt").unwrap();
             let empty = CString::new("").unwrap();
             let request = cn_request_new();

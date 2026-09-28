@@ -17,6 +17,7 @@ final class LiveCheck {
   var pending = false
   var selectionBeforeSort: UInt64 = 0
   let terminalValidationError = "Choose an installed terminal application in Preferences."
+  var tabCheck: Bool { CommandLine.arguments.contains("--tab-check") }
   var trashCheck: Bool { CommandLine.arguments.contains("--trash-check") }
   var actionSelectionSize: Int { trashCheck ? 130 : 1200 }
   var trashActions: FileActions?
@@ -41,13 +42,13 @@ final class LiveCheck {
       model.prefs.ignores = model.prefs.root + "/ignored"
       model.prefs.includes = model.prefs.root + "/ignored/keep"
       model.query = "alpha"
-      // Focused entry point for the terminal race, skipping unrelated UI checks.
-      if CommandLine.arguments.contains("--terminal-check") || CommandLine.arguments.contains("--trash-check") {
+      // Focused entry points for file-action and tab-transition races.
+      if CommandLine.arguments.contains("--terminal-check") || CommandLine.arguments.contains("--trash-check") || tabCheck {
         for i in 0..<actionSelectionSize {
           try Data("terminal".utf8).write(to: root.appendingPathComponent("preview-item-\(i).txt"))
         }
         model.query = "preview-item"
-        step = 20
+        step = tabCheck ? 16 : 20
       }
       if trashCheck {
         trashActions = FileActions(model, trashItem: { [weak self] url in
@@ -79,11 +80,13 @@ final class LiveCheck {
   }
   func tick() {
     guard !pending else { return }
-    if ProcessInfo.processInfo.systemUptime - since > 25 {
-      finish("Timeout at \(step): \(model.status); \(model.error ?? "")")
+    if ProcessInfo.processInfo.systemUptime - since > (tabCheck ? 8 : 25) {
+      finish("Timeout at \(step): \(model.status); \(model.error ?? ""); tab=\(model.activeTab), selection=\(model.selectionCount), loading=\(model.selectionLoading), pendingDraw=\(String(describing: model.pendingDraw))")
       return
     }
-    guard model.ready, !model.searching, !model.scanning, model.pendingDraw == nil else { return }
+    // Events has no Files table to acknowledge a background result draw.
+    guard model.ready, !model.searching, !model.scanning,
+      model.activeTab != "files" || model.pendingDraw == nil else { return }
     if let error = model.error {
       // A deliberately missing terminal proves F9 reached terminal validation
       // without opening an external app or failing on stale result generations.
@@ -284,6 +287,8 @@ final class LiveCheck {
         guard model.actions.preview.urls.count == 1200 else { return }
         next("Quick Look retains all selected files after sort")
         model.activeTab = "events"
+        // A live refresh can complete after the Files table has been hidden.
+        if tabCheck { model.submit(background: true) }
       case 19:
         guard !model.selectionLoading, model.selectionCount == 0 else { return }
         model.activeTab = "files"
@@ -295,6 +300,7 @@ final class LiveCheck {
           return
         }
         next("Returning to Files has no invisible action target")
+        if tabCheck { finish(nil); return }
         model.timer?.invalidate()
         if trashCheck { model.live = false }
         model.prefs.terminal = directory.appendingPathComponent("missing-terminal.app").path
@@ -374,7 +380,7 @@ final class LiveCheck {
     let before = try Data(contentsOf: path)
     let prefs = Preferences(isolated: true)
     prefs.importLegacy(directory: directory.path)
-    guard prefs.root == root.path, prefs.theme == "dark", prefs.sortLimit == 4321,
+    guard prefs.root == root.path, prefs.theme == "dark",
       prefs.ignores == "/tmp/ignored", try Data(contentsOf: path) == before
     else { throw messageError("Preference import mismatch or source write") }
   }

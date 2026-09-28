@@ -26,7 +26,7 @@ CNBuffer cn_watch(CNEngine *engine, bool enabled, const char *checkpoint);
 CNBuffer cn_poll(CNEngine *engine);
 CNBuffer cn_scan(const char *root, const char *ignores, const char *includes, const CNRequest *request, CNEngine **out);
 CNBuffer cn_checkpoint(CNEngine *engine);
-CNBuffer cn_sort(CNEngine *engine, const char *sort, size_t limit);
+CNBuffer cn_sort(CNEngine *engine, const char *sort);
 CNBuffer cn_paths(CNEngine *engine, uint64_t generation, const char *indices);
 CNBuffer cn_locate(CNEngine *engine, uint64_t generation, const char *paths);
 CNBuffer cn_select(CNEngine *engine, uint64_t generation, const char *ranges, const char *cached);

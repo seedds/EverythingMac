@@ -1,5 +1,7 @@
 # Indexed sorting performance — Cardinal Native 0.1.40
 
+Historical report for 0.1.40. Version 0.1.42 removes the sorting cap and its setting. To reproduce these historical capped comparisons, use the scripts and code from the corresponding release tag.
+
 Measured on 2026-09-28 using the user's real, fully backfilled index. Indexed sorting removes the earlier filesystem stalls, but sorting millions of matches still takes seconds and substantially increases memory use. The app's sorting limit and preferences were not changed.
 
 ## First sort after opening the indexed snapshot

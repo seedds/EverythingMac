@@ -1,5 +1,7 @@
 # Maintained sorting performance — Cardinal Native 0.1.41
 
+Historical report for 0.1.41. Version 0.1.42 removes the sorting cap and its setting. To reproduce these historical capped comparisons, use the scripts and code from the corresponding release tag.
+
 Measured on 2026-09-28 on the same M4 Pro (14 cores, 48 GiB RAM, macOS 27.0) and the exact same fully indexed **4,621,437-entry snapshot** as the 0.1.40 benchmark. The default 20,000-result cap and saved preferences are unchanged; uncapped measurements use the benchmark API only.
 
 ## First sort after opening

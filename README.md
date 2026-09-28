@@ -92,7 +92,7 @@ remain visible while a replacement search runs.
 Click a column header to cycle through ascending, descending, and backend order.
 The chosen column and direction (including unsorted order) are saved immediately
 and restored with the header arrow when the app opens again.
-Sorting is subject to the limit configured in Preferences. The Events tab uses
+Column sorting applies to all matching results, with no result-count limit. The Events tab uses
 the same top search field rather than adding a second search bar.
 
 ### Layout principles
@@ -146,14 +146,13 @@ the background and saved in the native checkpoint. Existing indexes are filled i
 automatically without a full rescan. File-change events keep these values current.
 The index details popover shows **Indexing file dates…** while this work is running;
 unavailable dates remain unknown. Sorting uses indexed values only, so date ordering
-fills in as indexing progresses. The existing sorting limit still applies.
+fills in as indexing progresses. There is no sorting limit.
 Read-only snapshot mode does not start background indexing.
 
 Sorting reuses compact ID orders for Name, Path, Size, Modified, and Created.
 These orders are prepared when the index opens; small searches use integer ranks
 and broad searches filter an existing order. File events and metadata updates
-refresh affected entries. The snapshot format and default 20,000-result sorting
-limit are unchanged. See [the measured comparison](MAINTAINED-SORT-PERFORMANCE.md)
+refresh affected entries. The snapshot format is unchanged. Sorting has no result-count limit or limit setting. See [the measured comparison](MAINTAINED-SORT-PERFORMANCE.md)
 for query latency, startup cost, and memory use.
 
 ## Indexing and storage
@@ -182,8 +181,7 @@ The original Cardinal index and preferences are not overwritten.
 
 Use **Index folder…** in Index details to choose a monitored root, and the bottom
 rescan button to rebuild the current scope. Preferences contains include/ignore
-paths, appearance, menu bar visibility, terminal application,
-and sorting limit. Include paths override ignored ancestors.
+paths, appearance, menu bar visibility, and terminal application. Include paths override ignored ancestors.
 
 The app processes filesystem events and writes checkpoints during idle intervals
 and before quitting. Cancelling a scan retains the previous index. If macOS blocks
@@ -264,6 +262,12 @@ FSEvents, filters, selection, rename, Trash/recovery, Quick Look, saved-scope
 restoration, English-only packaging, preference import, and tab switching. A successful JSON
 report contains `"error": null`; inspect the report rather than relying only on
 the process exit status.
+
+To check selection clearing when a background refresh completes on the Events tab:
+
+```bash
+./run.sh --live-check /tmp/cardinal-native-tab-check.json --tab-check
+```
 
 To run only the F9/live-update regression checks (single and 1,200-file selections):
 

@@ -24,6 +24,7 @@ enum SortCheck {
     do {
       for (column, key) in Preferences.sortColumns.sorted(by: { $0.key < $1.key }) {
         let model = Model(prefs: Preferences(fileURL: file))
+        model.total = 25_001 // Header sorting must work above the former cap.
         let (table, coordinator) = table(for: model)
         let header = table.tableColumns.first { $0.identifier.rawValue == column }!
         for click in 1...3 {
@@ -54,9 +55,19 @@ enum SortCheck {
       }
       try Data("{\"sortLimit\":1234}".utf8).write(to: file, options: .atomic)
       let legacy = Model(prefs: Preferences(fileURL: file))
-      guard legacy.sortKey.isEmpty, legacy.sortAscending, legacy.prefs.sortLimit == 1234 else {
+      guard legacy.sortKey.isEmpty, legacy.sortAscending else {
         throw messageError("Existing preferences without sort fields did not retain defaults")
       }
+      legacy.total = 25_001
+      legacy.sort(by: "mtime")
+      guard legacy.error == nil, legacy.sortKey == "mtime" else {
+        throw messageError("An obsolete saved limit blocked sorting")
+      }
+      let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+      guard saved["sortLimit"] == nil else {
+        throw messageError("Obsolete sorting limit was saved again")
+      }
+      checks.append("Obsolete sorting limit is ignored and removed on save")
       try Data("{\"sortKey\":\"invalid\"}".utf8).write(to: file, options: .atomic)
       guard Model(prefs: Preferences(fileURL: file)).sortKey.isEmpty else {
         throw messageError("Invalid saved sort column was accepted")

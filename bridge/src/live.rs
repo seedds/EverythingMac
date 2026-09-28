@@ -317,7 +317,7 @@ pub unsafe extern "C" fn cn_checkpoint(engine: *mut Engine) -> Buffer {
 /// # Safety
 /// Valid handle and UTF-8 JSON sort descriptor (or null).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cn_sort(engine: *mut Engine, sort: *const c_char, limit: usize) -> Buffer {
+pub unsafe extern "C" fn cn_sort(engine: *mut Engine, sort: *const c_char) -> Buffer {
     guarded(|| {
         let sort: Option<sort::SortStatePayload> =
             serde_json::from_str(&unsafe { text(sort)? }).map_err(|e| e.to_string())?;
@@ -327,7 +327,6 @@ pub unsafe extern "C" fn cn_sort(engine: *mut Engine, sort: *const c_char, limit
             .lock()
             .map_err(|_| "Engine faulted; reopen index")?;
         state.sort = sort;
-        state.sort_limit = limit.max(1);
         Ok(json!({"status":"ok"}))
     })
 }

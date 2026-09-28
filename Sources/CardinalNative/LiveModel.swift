@@ -184,10 +184,6 @@ extension Model {
     }
   }
   func sort(by key: String) {
-    guard total <= prefs.sortLimit else {
-      error = "Sorting is limited to \(prefs.sortLimit) results. Adjust the limit in Preferences."
-      return
-    }
     if sortKey != key {
       sortKey = key
       sortAscending = true

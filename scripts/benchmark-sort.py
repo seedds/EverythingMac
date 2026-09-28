@@ -18,21 +18,21 @@ args.output.mkdir(parents=True, exist_ok=True)
 queries = [("small", "cardinal"), ("medium", ".swift"), ("large", ".js"),
            ("larger", ".py"), ("broad", "a"), ("all", "")]
 queries = [(name, query) for name, query in queries if name in args.names.split(",")]
-cases = [(name, query, "filename", 20000) for name, query in queries]
-cases += [(name, query, key, 1000000000)
+cases = [(name, query, "none") for name, query in queries]
+cases += [(name, query, key)
           for name, query in queries
           for key in args.keys.split(",")]
-for number, (name, query, key, limit) in enumerate(cases, 1):
-    output = args.output / f"{name}-{key}-{limit}.json"
+for number, (name, query, key) in enumerate(cases, 1):
+    output = args.output / f"{name}-{key}.json"
     if args.resume and output.exists():
         continue
-    print(f"Case {number}/{len(cases)}: {name} {key} limit={limit}", flush=True)
+    print(f"Case {number}/{len(cases)}: {name} {key}", flush=True)
     try:
-        subprocess.run([args.binary, args.index, query, key, str(limit), "6", str(output)],
+        subprocess.run([args.binary, args.index, query, key, "6", str(output)],
                        check=True, timeout=args.timeout)
     except subprocess.TimeoutExpired:
         report = json.loads(output.read_text()) if output.exists() else {}
-        report.update(query=query, sort_key=key, sort_limit=limit,
+        report.update(query=query, sort_key=key,
                       status="timed_out", process_timeout_seconds=args.timeout)
         output.write_text(json.dumps(report, indent=2) + "\n")
         print(f"Timed out after {args.timeout} seconds", flush=True)

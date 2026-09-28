@@ -1,5 +1,7 @@
 # Sorting limit performance — 2026-09-28
 
+Historical report for 0.1.39. Version 0.1.42 removes the sorting cap and its setting. To reproduce these historical capped comparisons, use the scripts and code from the corresponding release tag.
+
 This is the **0.1.39 baseline**, recorded before background date indexing and
 cache-only sorting were implemented. The measurements below describe that earlier
 implementation. For comparisons with newer builds, use a checkpoint whose date
