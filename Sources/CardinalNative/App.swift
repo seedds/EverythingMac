@@ -453,7 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
   @objc func showPreferences() { model.preferencesOpen = true }
   @objc func showUpdates() {
-    NSWorkspace.shared.open(URL(string: "https://github.com/seedds/cardinal_native/releases")!)
+    NSWorkspace.shared.open(URL(string: "https://github.com/seedds/EverythingMac/releases")!)
   }
   @objc func showWindow() {
     window.makeKeyAndOrderFront(nil)

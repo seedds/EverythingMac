@@ -9,7 +9,8 @@ import subprocess
 import sys
 from urllib.request import urlopen
 
-REPOSITORY = "seedds/cardinal_native"
+REPOSITORY = "seedds/EverythingMac"
+LEGACY_REPOSITORY = "seedds/cardinal_native"
 DOWNLOAD_ROOT = f"https://github.com/{REPOSITORY}/releases/download"
 
 
@@ -49,9 +50,9 @@ def asset_name(version):
     return f"{app_name(version).replace(' ', '-')}-{version}-arm64.dmg"
 
 
-def cask_url(version):
+def cask_url(version, repository=REPOSITORY):
     prefix = app_name(version).replace(" ", "-")
-    return f"{DOWNLOAD_ROOT}/v#{{version}}/{prefix}-#{{version}}-arm64.dmg"
+    return f"https://github.com/{repository}/releases/download/v#{{version}}/{prefix}-#{{version}}-arm64.dmg"
 
 
 def published_checksum(version):
@@ -88,14 +89,19 @@ def update_cask(source, version, checksum):
     if version_tuple(versions[0]) > version_tuple(version):
         raise ValueError("Refusing to downgrade the Homebrew cask")
     old_name = app_name(versions[0])
-    fields = {"url": cask_url(versions[0]), "name": old_name, "app": f"{old_name}.app"}
+    fields = {
+        "url": [cask_url(versions[0]), cask_url(versions[0], LEGACY_REPOSITORY)],
+        "homepage": [f"https://github.com/{REPOSITORY}", f"https://github.com/{LEGACY_REPOSITORY}"],
+        "name": [old_name], "app": [f"{old_name}.app"],
+    }
     for field, expected in fields.items():
         values = re.findall(rf'^  {field} "([^\"]+)"$', source, re.MULTILINE)
-        if values != [expected]:
+        if len(values) != 1 or values[0] not in expected:
             raise ValueError(f"Cask {field} does not match this repository's release")
     replacements = {
         "version": version, "sha256": checksum, "url": cask_url(version),
         "name": app_name(version), "app": f"{app_name(version)}.app",
+        "homepage": f"https://github.com/{REPOSITORY}",
     }
     for field, value in replacements.items():
         source = re.sub(rf'^  {field} "[^\"]+"$', f'  {field} "{value}"', source, flags=re.MULTILINE)

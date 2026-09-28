@@ -9,6 +9,7 @@ class ReleaseTests(unittest.TestCase):
         self.cask = ('cask "cardinal" do\n  version "0.1.34"\n'
                      f'  sha256 "{"a" * 64}"\n'
                      f'  url "{release.DOWNLOAD_ROOT}/v#{{version}}/Cardinal-Native-#{{version}}-arm64.dmg"\n'
+                     f'  homepage "https://github.com/{release.REPOSITORY}"\n'
                      '  name "Cardinal Native"\n  app "Cardinal Native.app"\nend\n')
 
     def test_update_preserves_app_and_url(self):
@@ -25,6 +26,14 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn('Cardinal Native', result)
         self.assertEqual(release.update_cask(result, "0.1.43", "b" * 64), result)
         self.assertIn('version "0.1.44"', release.update_cask(result, "0.1.44", "c" * 64))
+
+    def test_repository_rename_migrates_existing_download_and_homepage(self):
+        branded = release.update_cask(self.cask, "0.1.43", "b" * 64)
+        old = branded.replace(release.REPOSITORY, release.LEGACY_REPOSITORY)
+        result = release.update_cask(old, "0.1.43", "b" * 64)
+        self.assertEqual(result, branded)
+        self.assertNotIn(release.LEGACY_REPOSITORY, result)
+        self.assertEqual(release.update_cask(result, "0.1.43", "b" * 64), result)
 
     def test_release_asset_names_before_and_after_rename(self):
         self.assertEqual(release.asset_name("0.1.42"), "Cardinal-Native-0.1.42-arm64.dmg")
@@ -56,7 +65,7 @@ class ReleaseTests(unittest.TestCase):
             release.update_cask(self.cask, "0.1.35", "invalid")
 
     def test_rejects_wrong_repo_and_duplicate_fields(self):
-        for source in [self.cask.replace("cardinal_native", "cardinal"), self.cask + '  version "0.1.34"\n']:
+        for source in [self.cask.replace(release.REPOSITORY, "seedds/unrelated"), self.cask + '  version "0.1.34"\n']:
             with self.assertRaises(ValueError):
                 release.update_cask(source, "0.1.35", "b" * 64)
 

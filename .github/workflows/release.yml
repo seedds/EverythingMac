@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'seedds/cardinal_native' && github.ref == 'refs/heads/main'
+    if: github.repository == 'seedds/EverythingMac' && github.ref == 'refs/heads/main'
     runs-on: macos-15
     timeout-minutes: 40
     permissions:

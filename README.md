@@ -15,7 +15,7 @@ for measured sorting improvements.
 
 <img src="Resources/EverythingMac.png" alt="EverythingMac app icon" width="160" />
 
-Download the [latest native release](https://github.com/seedds/cardinal_native/releases/latest).
+Download the [latest native release](https://github.com/seedds/EverythingMac/releases/latest).
 The `seedds/tap/cardinal` Homebrew cask follows releases from this repository.
 The older `seedds/cardinal` repository contains the previous Tauri app.
 
@@ -70,7 +70,7 @@ icon sizes, run `./scripts/build-icon.sh`.
 | Bundle identifier | `com.cardinal.native-prototype` |
 | Deployment target | macOS 12 |
 | Validated hardware | Apple Silicon, M4 Pro |
-| Source repository | [seedds/cardinal_native](https://github.com/seedds/cardinal_native) |
+| Source repository | [seedds/EverythingMac](https://github.com/seedds/EverythingMac) |
 
 ### Requirements
 
