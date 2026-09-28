@@ -212,3 +212,16 @@ the displayed rows stale. All files were restored using macOS Trash recovery URL
 unselected fixtures were untouched. Six bridge tests cover stale generations,
 reused-node rejection, clearing, and engine replacement. All 23 live UI checks and
 all seven selection-stability scenarios passed, with zero highlight/count gaps.
+
+## Persistent column sorting — 0.1.39
+
+Header clicks now save the sort column and direction to native preferences,
+including the third-click unsorted state. New models restore this choice before
+their first search, and new tables restore the matching header arrow. The existing
+sorting limit still applies. Missing or unrecognized saved column keys fall back
+to unsorted order.
+
+Validation: the disk-backed `--sort-check` passed all 15 combinations of five
+columns and ascending/descending/unsorted states, checking fresh preferences,
+models, and table indicators after each click. Existing/invalid preference cases
+and all 10 rendered saved-index UI checks also passed.

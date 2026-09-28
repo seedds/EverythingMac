@@ -190,8 +190,13 @@ extension Model {
       sortAscending = false
     } else {
       sortKey = ""
+      sortAscending = true
     }
+    prefs.sortKey = sortKey
+    prefs.sortAscending = sortAscending
     submit(background: true)
+    do { try prefs.save() }
+    catch { self.error = "Could not save the sort preference: \(error.localizedDescription)" }
   }
   func selectionChanged(_ indices: IndexSet) {
     selectionEpoch &+= 1

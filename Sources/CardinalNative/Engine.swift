@@ -222,7 +222,11 @@ final class Model: ObservableObject {
   var navigatingHistory = false
   var closeCompletions: [(Error?) -> Void] = []
   var closeFinished = false
-  init(prefs: Preferences = Preferences(isolated: true)) { self.prefs = prefs }
+  init(prefs: Preferences = Preferences(isolated: true)) {
+    self.prefs = prefs
+    sortKey = prefs.sortKey
+    sortAscending = prefs.sortAscending
+  }
   var rows: [Int: Row] = [:]
   var highlights: [String] = []
   var displayedSensitive = false

@@ -574,6 +574,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 @main struct Main {
   static func main() {
+    if let index = CommandLine.arguments.firstIndex(of: "--sort-check"),
+      CommandLine.arguments.indices.contains(index + 1) {
+      SortCheck.run(output: CommandLine.arguments[index + 1])
+      return
+    }
     if CommandLine.arguments.contains("--probe") {
       Probe.run()
       return

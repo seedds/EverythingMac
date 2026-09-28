@@ -90,6 +90,8 @@ the Index details popover offers 0, 100, and 300 ms for comparison. Existing row
 remain visible while a replacement search runs.
 
 Click a column header to cycle through ascending, descending, and backend order.
+The chosen column and direction (including unsorted order) are saved immediately
+and restored with the header arrow when the app opens again.
 Sorting is subject to the limit configured in Preferences. The Events tab uses
 the same top search field rather than adding a second search bar.
 
@@ -285,6 +287,13 @@ To verify stable lifecycle status widths across all English states:
 swiftc -parse-as-library Sources/CardinalNative/LifecycleStatus.swift \
   scripts/check-status-layout.swift -o /tmp/cardinal-status-layout-check
 /tmp/cardinal-status-layout-check
+```
+
+To verify sort persistence and header arrows for every column, using temporary
+preferences and fresh app models without changing your saved settings:
+
+```bash
+./run.sh --sort-check /tmp/cardinal-sort.json
 ```
 
 For the saved-index window checks, create a fresh fixture directory:

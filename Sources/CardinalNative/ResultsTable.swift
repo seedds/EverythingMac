@@ -109,6 +109,7 @@ struct ResultsTable: NSViewRepresentable {
     scroll.hasVerticalScroller = true
     scroll.hasHorizontalScroller = true
     context.coordinator.table = table
+    context.coordinator.updateSortIndicator()
     scroll.contentView.postsBoundsChangedNotifications = true
     context.coordinator.scrollObserver = NotificationCenter.default.addObserver(
       forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
@@ -134,6 +135,7 @@ struct ResultsTable: NSViewRepresentable {
     let actions: FileActions
     var suppressSelection = false
     var scrollObserver: NSObjectProtocol?
+    var displayedSort: String?
     init(_ model: Model) {
       self.model = model
       actions = model.actions
@@ -143,6 +145,7 @@ struct ResultsTable: NSViewRepresentable {
     }
     func update() {
       guard let table = table else { return }
+      updateSortIndicator()
       guard revision != model.revision else { return }
       let replaced = generation != model.displayedGeneration
       generation = model.displayedGeneration
@@ -305,18 +308,20 @@ struct ResultsTable: NSViewRepresentable {
       model.selectionChanged(table.selectedRowIndexes)
     }
     func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
-      let key = [
-        "Name": "filename", "Path": "fullPath", "Size": "size", "Modified": "mtime",
-        "Created": "ctime",
-      ][tableColumn.identifier.rawValue]!
+      let key = Preferences.sortColumns[tableColumn.identifier.rawValue]!
       model.sort(by: key)
-      for column in tableView.tableColumns { tableView.setIndicatorImage(nil, in: column) }
-      if !model.sortKey.isEmpty {
-        tableView.setIndicatorImage(
-          NSImage(
-            named: model.sortAscending
-              ? NSImage.touchBarGoUpTemplateName : NSImage.touchBarGoDownTemplateName),
-          in: tableColumn)
+      updateSortIndicator()
+    }
+    func updateSortIndicator() {
+      guard let table = table else { return }
+      let state = "\(model.sortKey):\(model.sortAscending)"
+      guard displayedSort != state else { return }
+      displayedSort = state
+      for column in table.tableColumns {
+        let selected = Preferences.sortColumns[column.identifier.rawValue] == model.sortKey
+        let image = selected ? NSImage(named: model.sortAscending
+          ? NSImage.touchBarGoUpTemplateName : NSImage.touchBarGoDownTemplateName) : nil
+        table.setIndicatorImage(image, in: column)
       }
     }
     func tableViewColumnDidResize(_ notification: Notification) {

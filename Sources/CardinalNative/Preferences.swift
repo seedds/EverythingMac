@@ -9,6 +9,9 @@ final class Preferences: ObservableObject {
   ).expandingTildeInPath
   static let index = directory + "/cardinal.db"
   static let file = directory + "/preferences.json"
+  static let sortColumns = [
+    "Name": "filename", "Path": "fullPath", "Size": "size", "Modified": "mtime", "Created": "ctime",
+  ]
   static let defaultIgnores = [
     "/Volumes", "~/Library/CloudStorage", "~/Library/Biome", "~/Library/Caches", "~/Library/Logs",
     "~/Library/Metadata", "/Library/Caches", "/System/Library/Caches", "/private/var",
@@ -21,18 +24,22 @@ final class Preferences: ObservableObject {
   @Published var tray = false
   @Published var terminal = "/System/Applications/Utilities/Terminal.app"
   @Published var sortLimit = 20000
+  var sortKey = ""
+  var sortAscending = true
   @Published var migration = ""
   var onApply: (() -> Void)?
   var tableColumns: [String: Double] = [:]
   let isolated: Bool
-  init(isolated: Bool = false) {
+  let storageURL: URL
+  init(isolated: Bool = false, fileURL: URL? = nil) {
     self.isolated = isolated
+    storageURL = fileURL ?? URL(fileURLWithPath: Self.file)
     guard !isolated else { return }
-    if let data = try? Data(contentsOf: URL(fileURLWithPath: Self.file)),
+    if let data = try? Data(contentsOf: storageURL),
       let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     {
       apply(values)
-    } else {
+    } else if fileURL == nil {
       importLegacy()
     }
   }
@@ -44,6 +51,9 @@ final class Preferences: ObservableObject {
     tray = v["tray"] as? Bool ?? tray
     terminal = v["terminal"] as? String ?? terminal
     sortLimit = max(1, v["sortLimit"] as? Int ?? sortLimit)
+    let savedSort = v["sortKey"] as? String ?? ""
+    sortKey = Self.sortColumns.values.contains(savedSort) ? savedSort : ""
+    sortAscending = v["sortAscending"] as? Bool ?? true
     tableColumns = v["columns"] as? [String: Double] ?? [:]
   }
   func save() throws {
@@ -54,11 +64,12 @@ final class Preferences: ObservableObject {
       "root": root, "ignores": ignores, "includes": includes,
       "theme": theme, "tray": tray,
       "terminal": terminal, "sortLimit": max(1, sortLimit), "columns": tableColumns,
+      "sortKey": sortKey, "sortAscending": sortAscending,
     ]
     try FileManager.default.createDirectory(
-      atPath: Self.directory, withIntermediateDirectories: true)
+      at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys])
-      .write(to: URL(fileURLWithPath: Self.file), options: .atomic)
+      .write(to: storageURL, options: .atomic)
     NSApp.appearance =
       theme == "system" ? nil : NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
   }
