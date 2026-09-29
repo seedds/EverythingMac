@@ -1,6 +1,7 @@
 import AppKit
 import CNative
 import Foundation
+import Observation
 
 struct Row: Decodable {
   let index: Int
@@ -178,87 +179,110 @@ struct Sample: Codable {
   let rows: Int
 }
 
-final class Model: ObservableObject {
-  @Published var query = ""
-  @Published var directory = ""
-  @Published var sensitive = false
-  @Published var debounce = 100
-  @Published var total = 0
-  @Published var indexedCount = 0
-  @Published var processedEventCount = 0
-  @Published var status = "Choose or load a saved index."
-  @Published var snapshot = Preferences.snapshotIndex
-  @Published var snapshotDate = ""
-  @Published var ready = false
-  @Published var searching = false
-  @Published var revision: UInt64 = 0
-  @Published var error: String?
+@Observable final class Model {
+  var query = ""
+  var directory = ""
+  var sensitive = false { didSet { if sensitive != oldValue { filterEvents() } } }
+  var debounce = 100
+  var total = 0
+  var indexedCount = 0
+  var processedEventCount = 0
+  var status = "Choose or load a saved index."
+  var snapshot = Preferences.snapshotIndex
+  var snapshotDate = ""
+  var ready = false
+  var searching = false
+  /// Result-table content version. Not published: the table is notified directly
+  /// so row loads never re-render the SwiftUI window.
+  @ObservationIgnored var revision: UInt64 = 0 { didSet { scheduleTableUpdate() } }
+  /// Rows whose data changed since the table last applied `revision`.
+  @ObservationIgnored var dirtyRows = IndexSet()
+  @ObservationIgnored var tableUpdate: (() -> Void)?
+  @ObservationIgnored private var tableUpdateScheduled = false
+  var error: String?
   let engine = Engine()
-  lazy var actions = FileActions(self)
-  @Published var hasFullDiskAccess = true
-  @Published var shortcutMessage: String?
-  @Published var recordingShortcut = false
+  @ObservationIgnored lazy var actions = FileActions(self)
+  var hasFullDiskAccess = true
+  var shortcutMessage: String?
+  var recordingShortcut = false
   let library: SearchLibrary
-  @Published var libraryOpen = false
-  var suppressedHistoryState: SearchState?
-  var observedSearchState: SearchState?
-  var successfulSearchState: SearchState?
-  var successfulSearchTicket: UInt64?
-  var recordRequestedState: SearchState?
-  var historyRecordWork: DispatchWorkItem?
+  var libraryOpen = false
+  /// Selected Settings tab; kept on the model so it survives Settings sessions.
+  var settingsTab = "general"
+  /// The results table has keyboard focus; gates file commands in the menu bar.
+  var resultsFocused = false
+  @ObservationIgnored var suppressedHistoryState: SearchState?
+  @ObservationIgnored var observedSearchState: SearchState?
+  @ObservationIgnored var successfulSearchState: SearchState?
+  @ObservationIgnored var successfulSearchTicket: UInt64?
+  @ObservationIgnored var recordRequestedState: SearchState?
+  @ObservationIgnored var historyRecordWork: DispatchWorkItem?
   let prefs: Preferences
-  @Published var live = false
-  @Published var scanning = false
-  @Published var indexStatus = "Saved index"
-  @Published var events: [FileEvent] = []
-  @Published var eventFilter = ""
-  @Published var activeTab = "files"
-  @Published var selectionLoading = false
-  @Published var selectedPaths: [String] = []
-  @Published var selectionCount = 0
-  @Published var sortKey = ""
-  @Published var sortAscending = true
+  var live = false
+  var scanning = false
+  var indexStatus = "Saved index"
+  var events: [FileEvent] = [] { didSet { filterEvents() } }
+  var eventFilter = "" { didSet { if eventFilter != oldValue { filterEvents() } } }
+  /// Events shown on the Events tab, recomputed only when its inputs change.
+  private(set) var filteredEvents: [FileEvent] = []
+  var activeTab = "files"
+  var selectionLoading = false {
+    didSet { if oldValue && !selectionLoading { selectionDidLoad?() } }
+  }
+  /// Called on the main thread after selectionLoading becomes false.
+  @ObservationIgnored var selectionDidLoad: (() -> Void)?
+  @ObservationIgnored var selectedPaths: [String] = []
+  var selectionCount = 0
+  var sortKey = ""
+  var sortAscending = true
   var snapshotOnly = true
-  var checkpointPath = Preferences.index
-  var root = ""
-  var loadedIgnores: [String] = []
-  var loadedIncludes: [String] = []
-  var loadedPatterns: [String] = []
-  var timer: Timer?
-  var polling = false
-  var saving = false
-  var refreshPending = false
-  var lastRefresh = 0.0
-  var lastSave = ProcessInfo.processInfo.systemUptime
-  var indexEpoch: UInt64 = 0
-  var selectionEpoch: UInt64 = 0
-  var restoredSelection: IndexSet?
-  var backgroundResult = false
-  var visibleStart = 0
-  var tableAction: ((String) -> Void)?
-  var focusSearch: (() -> Void)?
-  var historyCursor = -1
-  var navigationHistory: [SearchState] = []
-  var closeCompletions: [(Error?) -> Void] = []
-  var closeFinished = false
+  @ObservationIgnored var checkpointPath = Preferences.index
+  @ObservationIgnored var root = ""
+  @ObservationIgnored var loadedIgnores: [String] = []
+  @ObservationIgnored var loadedIncludes: [String] = []
+  @ObservationIgnored var loadedPatterns: [String] = []
+  @ObservationIgnored var timer: Timer?
+  @ObservationIgnored var polling = false
+  @ObservationIgnored var lastPoll = 0.0
+  /// processed_events when `events` was last fetched; nil after an index swap.
+  @ObservationIgnored var eventsFetchedAt: UInt64?
+  @ObservationIgnored var saving = false
+  @ObservationIgnored var refreshPending = false
+  @ObservationIgnored var lastRefresh = 0.0
+  @ObservationIgnored var lastSave = ProcessInfo.processInfo.systemUptime
+  @ObservationIgnored var indexEpoch: UInt64 = 0
+  @ObservationIgnored var selectionEpoch: UInt64 = 0
+  @ObservationIgnored var restoredSelection: IndexSet?
+  @ObservationIgnored var backgroundResult = false
+  @ObservationIgnored var visibleStart = 0
+  @ObservationIgnored var tableAction: ((String) -> Void)?
+  @ObservationIgnored var focusSearch: (() -> Void)?
+  @ObservationIgnored var historyCursor = -1
+  @ObservationIgnored var navigationHistory: [SearchState] = []
+  @ObservationIgnored var closeCompletions: [(Error?) -> Void] = []
+  @ObservationIgnored var closeFinished = false
   init(prefs: Preferences = Preferences(isolated: true)) {
     self.prefs = prefs
     library = SearchLibrary(url: prefs.isolated ? nil : prefs.storageURL.deletingLastPathComponent().appendingPathComponent("search-library.json"))
     sortKey = prefs.sortKey
     sortAscending = prefs.sortAscending
+    debounce = prefs.debounce
     library.willRemoveHistory = { [weak self] state in self?.suppressHistoryRecording(state) }
+    // Surface library errors in the main window, including one from loading.
+    error = library.error
+    library.onError = { [weak self] in self?.error = $0 }
   }
-  var rows: [Int: Row] = [:]
-  var highlights: [String] = []
-  var displayedSensitive = false
-  var generation: UInt64 = 0
-  var displayedGeneration: UInt64 = 0
-  var inputAt = 0.0
-  var submittedAt = 0.0
+  @ObservationIgnored var rows: [Int: Row] = [:]
+  @ObservationIgnored var highlights: [String] = []
+  @ObservationIgnored var displayedSensitive = false
+  @ObservationIgnored var generation: UInt64 = 0
+  @ObservationIgnored var displayedGeneration: UInt64 = 0
+  @ObservationIgnored var inputAt = 0.0
+  @ObservationIgnored var submittedAt = 0.0
   var backendMS = 0.0
-  var lastSample: Sample?
-  var pendingDraw: UInt64?
-  var pendingPages = Set<Int>()
+  @ObservationIgnored var lastSample: Sample?
+  @ObservationIgnored var pendingDraw: UInt64?
+  @ObservationIgnored var pendingPages = Set<Int>()
   let metadataQueue: OperationQueue = {
     let queue = OperationQueue()
     queue.name = "everything.mac.row-metadata"
@@ -266,11 +290,29 @@ final class Model: ObservableObject {
     queue.maxConcurrentOperationCount = 2
     return queue
   }()
-  var pendingMetadata: [Int: RowMetadataOperation] = [:]
-  var debounceWork: DispatchWorkItem?
-  var onDraw: ((Sample) -> Void)?
-  var loadedMS = 0.0
-  var closed = false
+  @ObservationIgnored var pendingMetadata: [Int: RowMetadataOperation] = [:]
+  @ObservationIgnored var debounceWork: DispatchWorkItem?
+  @ObservationIgnored var onDraw: ((Sample) -> Void)?
+  @ObservationIgnored var loadedMS = 0.0
+  @ObservationIgnored var closed = false
+
+  private func filterEvents() {
+    let filter = eventFilter
+    let options: String.CompareOptions = sensitive ? [] : [.caseInsensitive]
+    filteredEvents = filter.isEmpty
+      ? events : events.filter { $0.path.range(of: filter, options: options) != nil }
+  }
+
+  /// Coalesces page and metadata arrivals into one table pass per main-loop turn.
+  func scheduleTableUpdate() {
+    guard !tableUpdateScheduled else { return }
+    tableUpdateScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+      self.tableUpdateScheduled = false
+      self.tableUpdate?()
+    }
+  }
 
   func load() {
     debounceWork?.cancel()
@@ -305,6 +347,7 @@ final class Model: ObservableObject {
         self.loadedMS = reply.load_ms ?? 0
         self.indexedCount = reply.total ?? 0
         self.processedEventCount = 0
+        self.resetEvents()
         self.ready = true
         if !self.snapshotOnly {
           self.setLive()
@@ -435,6 +478,8 @@ final class Model: ObservableObject {
     status = "\(total) results · Rust \(String(format: "%.1f", backendMS)) ms"
       + (skipped > 0 ? " · \(skipped) cloud files skipped" : "")
     revision &+= 1
+    // New results are shown without waiting for the coalesced pass.
+    tableUpdate?()
     if selection != nil, selectionCount > 0, actions.preview.isVisible {
       resolveSelection { [weak self] in self?.actions.preview.update($0) }
     }
@@ -449,7 +494,10 @@ final class Model: ObservableObject {
     engine.rows(generation: ticket, start: start) { [weak self] loaded in
       guard let self = self, !self.closed, self.displayedGeneration == ticket else { return }
       self.pendingPages.remove(start)
-      for row in loaded { self.rows[row.index] = row }
+      for row in loaded {
+        self.rows[row.index] = row
+        self.dirtyRows.insert(row.index)
+      }
       // Keep at most 8 pages. Never allocate models for the full result set.
       if self.rows.count > 1024 {
         self.rows = self.rows.filter { abs($0.key - start) < 512 }

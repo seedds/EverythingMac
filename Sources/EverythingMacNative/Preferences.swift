@@ -2,8 +2,9 @@ import AppKit
 import CNative
 import Darwin
 import SwiftUI
+import UniformTypeIdentifiers
 
-final class Preferences: ObservableObject {
+@Observable final class Preferences {
   static let directory = NSString(
     string: "~/Library/Application Support/com.everything.mac"
   ).expandingTildeInPath
@@ -13,24 +14,25 @@ final class Preferences: ObservableObject {
   static let sortColumns = [
     "Name": "filename", "Path": "fullPath", "Size": "size", "Modified": "mtime", "Created": "ctime",
   ]
-  @Published var root = "/"
-  @Published var ignores = ""
-  @Published var includes = ""
-  @Published var patterns = ""
-  @Published var shortcut: ActivationShortcut? = .standard
+  var root = "/"
+  var ignores = ""
+  var includes = ""
+  var patterns = ""
+  var shortcut: ActivationShortcut? = .standard
   var patternLines: [String] { patterns.isEmpty ? [] : patterns.components(separatedBy: "\n") }
-  var applyShortcut: ((ActivationShortcut?) throws -> Void)?
-  @Published var theme = "system"
-  @Published var tray = false
-  @Published var terminal = ""
+  @ObservationIgnored var applyShortcut: ((ActivationShortcut?) throws -> Void)?
+  var theme = "system"
+  var tray = false
+  var terminal = ""
+  /// Search-as-you-type delay in milliseconds.
+  var debounce = 100
   var terminalApplication: String {
     let path = terminal.trimmingCharacters(in: .whitespacesAndNewlines)
     return path.isEmpty ? "/System/Applications/Utilities/Terminal.app" : path
   }
-  var sortKey = ""
-  var sortAscending = true
-  var onApply: (() -> Void)?
-  var tableColumns: [String: Double] = [:]
+  @ObservationIgnored var sortKey = ""
+  @ObservationIgnored var sortAscending = true
+  @ObservationIgnored var tableColumns: [String: Double] = [:]
   let isolated: Bool
   let storageURL: URL
   init(isolated: Bool = false, fileURL: URL? = nil) {
@@ -61,6 +63,7 @@ final class Preferences: ObservableObject {
     theme = v["theme"] as? String ?? theme
     tray = v["tray"] as? Bool ?? tray
     terminal = v["terminal"] as? String ?? terminal
+    if let delay = v["debounce"] as? Int, [0, 100, 300].contains(delay) { debounce = delay }
     let savedSort = v["sortKey"] as? String ?? ""
     sortKey = Self.sortColumns.values.contains(savedSort) ? savedSort : ""
     sortAscending = v["sortAscending"] as? Bool ?? true
@@ -72,21 +75,32 @@ final class Preferences: ObservableObject {
       "theme": theme, "tray": tray, "patterns": patterns,
       "shortcutEnabled": shortcut != nil, "shortcutKey": shortcut?.key ?? 0,
       "shortcutModifiers": shortcut?.modifiers ?? 0,
-      "terminal": terminal, "columns": tableColumns,
+      "terminal": terminal, "debounce": debounce, "columns": tableColumns,
       "sortKey": sortKey, "sortAscending": sortAscending,
     ]
   }
+  /// Commits the index scope from a Settings draft. Other settings apply immediately
+  /// through `update`, so the draft never overwrites them.
   func commit(_ draft: Preferences) throws {
     try draft.validate()
     let previous = values
-    try applyShortcut?(draft.shortcut)
-    apply(draft.values)
+    root = draft.root
+    ignores = draft.ignores
+    includes = draft.includes
+    patterns = draft.patterns
     do { try save() } catch {
       apply(previous)
-      try? applyShortcut?(shortcut)
       throw error
     }
-    onApply?()
+  }
+  /// Applies a General setting immediately, restoring the previous values if saving fails.
+  func update(_ change: (Preferences) -> Void) throws {
+    let previous = values
+    change(self)
+    do { try save() } catch {
+      apply(previous)
+      throw error
+    }
   }
   func save() throws {
     NSApp.appearance =
@@ -96,8 +110,6 @@ final class Preferences: ObservableObject {
       at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys])
       .write(to: storageURL, options: .atomic)
-    NSApp.appearance =
-      theme == "system" ? nil : NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
   }
   func restoreDefaults() {
     root = "/"
@@ -108,6 +120,7 @@ final class Preferences: ObservableObject {
     theme = "system"
     tray = false
     terminal = ""
+    debounce = 100
   }
   static func expand(_ value: String) -> String {
     NSString(string: value.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
@@ -151,99 +164,209 @@ func messageError(_ message: String) -> NSError {
 }
 
 struct PreferencesView: View {
-  @ObservedObject var prefs: Preferences
-  @ObservedObject var model: Model
+  var prefs: Preferences
+  @Bindable var model: Model
   var close: () -> Void
-  @StateObject private var draft: Preferences
+  /// Index scope edits; committed only by Apply & Rebuild.
+  @State private var draft: Preferences
+  @State private var error: String?
   init(prefs: Preferences, model: Model, close: @escaping () -> Void) {
     self.prefs = prefs
     self.model = model
     self.close = close
     let copy = Preferences(isolated: true)
     copy.apply(prefs.values)
-    _draft = StateObject(wrappedValue: copy)
+    _draft = State(initialValue: copy)
   }
-  @State var error: String?
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Settings").font(.title2.bold())
-      TextField("Monitor root path", text: $draft.root)
-      HStack {
-        VStack(alignment: .leading) {
-          Text("Ignore paths")
-          TextEditor(text: $draft.ignores).frame(height: 110)
-        }
-        VStack(alignment: .leading) {
-          Text("Include paths")
-          TextEditor(text: $draft.includes).frame(height: 110)
+    TabView(selection: $model.settingsTab) {
+      general.tabItem { Label("General", systemImage: "gearshape") }.tag("general")
+      index.tabItem { Label("Index", systemImage: "externaldrive") }.tag("index")
+      privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
+    }
+    .frame(width: 560)
+  }
+
+  /// Saves one General setting, reporting a failure instead of losing it silently.
+  private func update(_ change: (Preferences) -> Void) {
+    do {
+      try prefs.update(change)
+      error = nil
+    } catch { self.error = error.localizedDescription }
+  }
+  private func setting<Value>(_ key: ReferenceWritableKeyPath<Preferences, Value>) -> Binding<Value> {
+    Binding(get: { prefs[keyPath: key] }, set: { value in update { $0[keyPath: key] = value } })
+  }
+  private var shortcut: Binding<ActivationShortcut?> {
+    Binding(get: { prefs.shortcut }, set: { value in
+      do {
+        try prefs.applyShortcut?(value)
+        update { $0.shortcut = value }
+      } catch { self.error = error.localizedDescription }
+    })
+  }
+  private var debounce: Binding<Int> {
+    Binding(get: { model.debounce }, set: { value in
+      model.debounce = value
+      update { $0.debounce = value }
+    })
+  }
+  @ViewBuilder private var errorFooter: some View {
+    if let error = error { Text(error).foregroundStyle(.red) }
+  }
+
+  private var general: some View {
+    Form {
+      Section {
+        ShortcutRecorder(shortcut: shortcut, recording: $model.recordingShortcut)
+        Picker("Search delay", selection: debounce) {
+          Text("None").tag(0)
+          Text("100 ms").tag(100)
+          Text("300 ms").tag(300)
         }
       }
-      Text(
-        "One absolute path per line; includes override ignored ancestors."
-      ).font(.caption).foregroundColor(.secondary)
-      Text("Exclude patterns")
-      TextEditor(text: $draft.patterns).frame(height: 65)
-        .accessibilityLabel("Exclude patterns")
-      HStack {
-        Text("Names or globs, one per line. Patterns also apply inside included folders.").font(
-          .caption)
-        Button("Add node_modules exclusion") {
-          if !draft.patternLines.contains("node_modules") {
-            draft.patterns +=
-              (draft.patterns.isEmpty || draft.patterns.hasSuffix("\n") ? "" : "\n")
-              + "node_modules"
+      Section {
+        Picker("Appearance", selection: setting(\.theme)) {
+          Text("System").tag("system")
+          Text("Light").tag("light")
+          Text("Dark").tag("dark")
+        }
+        Toggle("Show menu bar icon", isOn: setting(\.tray))
+      }
+      Section {
+        LabeledContent("Terminal app (F9)") {
+          HStack {
+            Text(FileManager.default.displayName(atPath: prefs.terminalApplication))
+              .foregroundStyle(.secondary)
+            Button("Choose…", action: chooseTerminal)
+              .accessibilityLabel("Choose terminal app for F9")
+            Button("Reset") { update { $0.terminal = "" } }.disabled(prefs.terminal.isEmpty)
           }
         }
+      } footer: {
+        VStack(alignment: .leading) {
+          Text("F9 opens the selected folder or a file’s parent folder.")
+            .foregroundStyle(.secondary)
+          errorFooter
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
-      ShortcutRecorder(shortcut: $draft.shortcut, recording: $model.recordingShortcut)
-      Picker("Appearance", selection: $draft.theme) {
-        ForEach(["system", "light", "dark"], id: \.self) {
-          Text($0.capitalized).tag($0)
+    }
+    .formStyle(.grouped)
+  }
+
+  private func chooseRoot() {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.directoryURL = URL(fileURLWithPath: Preferences.expand(draft.root))
+    panel.prompt = "Choose"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    draft.root = url.path
+  }
+  private func chooseTerminal() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [.application]
+    panel.directoryURL = URL(fileURLWithPath: "/Applications")
+    panel.prompt = "Choose"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    update { $0.terminal = url.path }
+  }
+
+  private var scopeChanged: Bool {
+    draft.root != prefs.root || draft.ignores != prefs.ignores
+      || draft.includes != prefs.includes || draft.patterns != prefs.patterns
+  }
+  private var index: some View {
+    Form {
+      Section {
+        LabeledContent("Index file") {
+          Text(model.snapshot).lineLimit(1).truncationMode(.middle)
+            .help(model.snapshot).textSelection(.enabled)
+        }
+        if !model.snapshotDate.isEmpty {
+          LabeledContent("Last saved", value: model.snapshotDate)
+        }
+        LabeledContent("Status", value: model.indexStatus)
+      }
+      Section {
+        HStack {
+          TextField("Monitor root", text: $draft.root, prompt: Text("Monitor root path"))
+          Button("Choose…", action: chooseRoot)
         }
       }
-      Toggle("Show menu bar icon", isOn: $draft.tray)
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Terminal app (F9)")
-        TextField("Path to a terminal application (.app)", text: $draft.terminal)
-          .accessibilityLabel("Terminal app for F9")
-        Text(
-          "F9 opens the selected folder or a file’s parent folder. Leave empty to use macOS Terminal."
-        )
-        .font(.caption).foregroundColor(.secondary)
+      Section {
+        TextEditor(text: $draft.ignores).frame(height: 56)
+          .font(.body.monospaced()).accessibilityLabel("Ignore paths")
+      } header: { Text("Ignore paths") }
+      Section {
+        TextEditor(text: $draft.includes).frame(height: 56)
+          .font(.body.monospaced()).accessibilityLabel("Include paths")
+      } header: { Text("Include paths") } footer: {
+        Text("One absolute path per line; includes override ignored ancestors.")
+          .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
       }
-      Button("Open Full Disk Access settings") {
-        FileActions.openPrivacySettings()
-      }
-      Text(
-        "Enable Full Disk Access for EverythingMac and relaunch."
-      ).font(.caption).foregroundColor(.secondary)
-      if model.scanning {
-        Text("Finish or cancel the current scan before saving preferences.").font(.caption)
-          .foregroundColor(.secondary)
-      }
-      if let error = error { Text(error).foregroundColor(.red) }
-      HStack {
-        Button("Restore defaults") {
-          draft.restoreDefaults()
+      Section {
+        TextEditor(text: $draft.patterns).frame(height: 55)
+          .font(.body.monospaced()).accessibilityLabel("Exclude patterns")
+      } header: {
+        HStack {
+          Text("Exclude patterns")
+          Spacer()
+          Button("Add node_modules") {
+            if !draft.patternLines.contains("node_modules") {
+              draft.patterns +=
+                (draft.patterns.isEmpty || draft.patterns.hasSuffix("\n") ? "" : "\n")
+                + "node_modules"
+            }
+          }
+          .buttonStyle(.link).controlSize(.small)
         }
-        Spacer()
-        Button("Cancel", action: close).keyboardShortcut(.cancelAction)
-        Button(
-          (draft.patternLines != model.loadedPatterns || draft.root != prefs.root
-            || draft.ignores != prefs.ignores || draft.includes != prefs.includes)
-            && !model.snapshotOnly ? "Save and Rebuild" : "Save"
-        ) {
-          do {
-            // Search stays usable while Settings is open. Keep any newer table
-            // layout and sort changes when committing this settings draft.
-            draft.tableColumns = prefs.tableColumns
-            draft.sortKey = prefs.sortKey
-            draft.sortAscending = prefs.sortAscending
-            try model.savePreferences(draft)
-            close()
-          } catch { self.error = error.localizedDescription }
-        }.keyboardShortcut(.defaultAction).disabled(model.scanning)
+      } footer: {
+        Text("Names or globs, one per line. Patterns also apply inside included folders.")
+          .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
       }
-    }.padding(20).frame(width: 650).background(Color(nsColor: .windowBackgroundColor))
+      Section {
+        HStack {
+          Button("Restore Defaults") {
+            draft.root = "/"
+            draft.ignores = ""
+            draft.includes = ""
+            draft.patterns = ""
+          }
+          Spacer()
+          if model.scanning {
+            Text("Finish or cancel the current scan first.").foregroundStyle(.secondary)
+          }
+          Button("Revert") { draft.apply(prefs.values) }.disabled(!scopeChanged)
+          Button(model.snapshotOnly ? "Apply" : "Apply & Rebuild") {
+            do {
+              try model.savePreferences(draft)
+              error = nil
+            } catch { self.error = error.localizedDescription }
+          }
+          .keyboardShortcut(.defaultAction)
+          .disabled(model.scanning || !(scopeChanged || draft.patternLines != model.loadedPatterns))
+        }
+      } footer: { errorFooter.frame(maxWidth: .infinity, alignment: .leading) }
+    }
+    .formStyle(.grouped)
+    // Tall enough to show every index field without scrolling.
+    .frame(height: 720)
+  }
+
+  private var privacy: some View {
+    Form {
+      Section {
+        LabeledContent("Full Disk Access") {
+          Button("Open System Settings…") { FileActions.openPrivacySettings() }
+        }
+      } footer: {
+        Text("Enable Full Disk Access for EverythingMac, then relaunch it to search protected files.")
+          .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+    .formStyle(.grouped)
   }
 }

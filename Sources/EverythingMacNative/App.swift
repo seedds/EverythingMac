@@ -5,11 +5,10 @@ import Darwin
 import SwiftUI
 
 struct ContentView: View {
-  @ObservedObject var model: Model
-  @ObservedObject var prefs: Preferences
-  @FocusState var searchFocused: Bool
-  @FocusState var directoryFocused: Bool
-  @State private var indexDetailsOpen = false
+  @Bindable var model: Model
+  var prefs: Preferences
+  @State private var focusQuery: (() -> Void)?
+  @State private var eventSelection = Set<FileEvent.ID>()
 
   private var searchText: Binding<String> {
     model.activeTab == "files" ? $model.query : $model.eventFilter
@@ -19,280 +18,194 @@ struct ContentView: View {
       || (!model.ready && model.error == nil)
   }
   private var lifecycle: String {
-    model.scanning ? "Updating" : model.ready ? "Ready" : "Initializing"
+    model.scanning ? "Updating"
+      : !model.ready ? "Initializing"
+      : !model.live && !model.snapshotOnly ? "Paused" : "Ready"
   }
 
   var body: some View {
     VStack(spacing: 0) {
-      searchBar.padding(10).zIndex(2)
+      searchBar.padding(10)
       notices
+      Divider()
       if model.activeTab == "files" {
-        ResultsTable(model: model).overlay(alignment: .center) {
+        ResultsTable(model: model).overlay {
           if model.ready && !model.searching && model.total == 0 && model.error == nil {
-            Text("No matching files").foregroundColor(.secondary)
+            ContentUnavailableView.search(text: model.query)
           }
         }
       } else {
-        eventsList
+        eventsTable
       }
       Divider()
       GeometryReader { geometry in
         statusBar(showShortcuts: geometry.size.width >= 1100)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-      }.frame(height: 36)
-        .background(Color(nsColor: .windowBackgroundColor))
+      }.frame(height: 32)
+        .background(.bar)
     }
-    .background(Color(nsColor: .textBackgroundColor))
     .frame(minWidth: 800, minHeight: 420)
     .onAppear {
-      model.focusSearch = { searchFocused = true }
-      searchFocused = true
+      model.focusSearch = { focusQuery?() }
+      focusQuery?()
     }
-    .onReceive(model.library.$error) { if let error = $0 { model.error = error } }
-    .onChange(of: model.query) { _ in model.changed() }
-    .onChange(of: model.directory) { _ in model.changed() }
-    .onChange(of: model.activeTab) { _ in
+    .onChange(of: model.query) { model.changed() }
+    .onChange(of: model.directory) { model.changed() }
+    .onChange(of: model.sensitive) { model.changed() }
+    .onChange(of: model.activeTab) {
       model.restoredSelection = nil
       model.selectionChanged(IndexSet())
       model.actions.preview.hide()
-      if model.activeTab == "events" { model.tableAction = nil }
-      searchFocused = true
+      eventSelection = []
+      if model.activeTab == "events" {
+        model.tableAction = nil
+        model.resultsFocused = false
+      }
+      focusQuery?()
     }
   }
 
   private var searchBar: some View {
-    HStack(spacing: 6) {
-      Button {
-        model.sensitive.toggle()
-        model.changed()
-      } label: {
-        Text("Aa").font(.system(size: 12, weight: .medium))
-          .foregroundColor(model.sensitive ? .accentColor : .secondary)
-          .frame(width: 34, height: 32)
-          .background(
-            RoundedRectangle(cornerRadius: 9).fill(
-              model.sensitive
-                ? Color.accentColor.opacity(0.13) : Color(nsColor: .controlBackgroundColor))
-          )
-          .overlay(
-            RoundedRectangle(cornerRadius: 9).strokeBorder(
-              model.sensitive
-                ? Color.accentColor.opacity(0.5) : Color(nsColor: .separatorColor).opacity(0.4)))
-      }.buttonStyle(.plain)
-        .help("Case sensitive")
-        .accessibilityLabel("Case sensitive")
-        .accessibilityValue(model.sensitive ? "On" : "Off")
+    HStack(spacing: 8) {
+      Toggle(isOn: $model.sensitive) {
+        Text("Aa").font(.system(size: 12, weight: .medium)).frame(width: 18)
+      }
+      .toggleStyle(.button)
+      .help("Case sensitive")
+      .accessibilityLabel("Case sensitive")
       Button { model.libraryOpen.toggle() } label: {
         Image(systemName: "clock.arrow.circlepath")
-      }.help("Search Library").accessibilityLabel("Search Library")
-        .popover(isPresented: $model.libraryOpen) { SearchLibraryView(model: model, library: model.library) }
-      TextField(
-        model.activeTab == "files" ? "Search for files and folders…" : "Filter events by path or name…",
-        text: searchText
-      )
-      .textFieldStyle(.plain).focused($searchFocused)
-      .onSubmit {
-        if model.activeTab == "files" {
+      }
+      .help("Search Library").accessibilityLabel("Search Library")
+      .popover(isPresented: $model.libraryOpen) {
+        SearchLibraryView(model: model, library: model.library)
+      }
+      SearchField(
+        text: searchText,
+        placeholder: model.activeTab == "files"
+          ? "Search for files and folders" : "Filter events by path or name",
+        accessibilityLabel: model.activeTab == "files" ? "Search" : "Filter events",
+        onSubmit: {
+          guard model.activeTab == "files" else { return }
           model.rememberQuery()
           model.submit()
-        }
-      }
-      .padding(.horizontal, 10).frame(height: 32)
-      .background(searchFieldBackground)
-      .help("Enter: search · Down: results · Option-Up/Down: history")
-      TextField("Folder scope…", text: $model.directory)
-        .textFieldStyle(.plain).focused($directoryFocused)
-        .onSubmit { model.rememberQuery(); model.submit() }
-        .padding(.horizontal, 10).frame(width: 215, height: 32)
-        .background(searchFieldBackground)
-        .disabled(model.activeTab != "files")
-        .accessibilityLabel("Folder scope")
-        .help("Filter file results by folder. Clear this field to search all folders.")
-    }.font(.system(size: 13))
-  }
-
-  private var searchFieldBackground: some View {
-    RoundedRectangle(cornerRadius: 9).fill(Color(nsColor: .controlBackgroundColor))
-      .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.accentColor.opacity(0.18)))
+        },
+        focus: { focus in DispatchQueue.main.async { focusQuery = focus } }
+      )
+      .help("Return: search · Down Arrow: results · Option-Up/Down Arrow: history")
+      SearchField(
+        text: $model.directory, placeholder: "Folder scope", symbol: "folder",
+        accessibilityLabel: "Folder scope",
+        onSubmit: { model.rememberQuery(); model.submit() }
+      )
+      .frame(width: 215)
+      .disabled(model.activeTab != "files")
+      .help("Filter file results by folder. Clear this field to search all folders.")
+    }
+    .controlSize(.large)
   }
 
   @ViewBuilder private var notices: some View {
     if !model.snapshotOnly && !model.hasFullDiskAccess {
-      HStack(spacing: 8) {
-        Image(systemName: "lock.shield")
-        Text("Full Disk Access Required")
-          .help(
-            "Enable Full Disk Access to search protected files.")
-        Spacer()
-        Button("Open System Settings") {
-          FileActions.openPrivacySettings()
-        }
-      }.font(.caption).foregroundColor(.orange).padding(.horizontal, 12).padding(.bottom, 8)
+      banner("Full Disk Access is required to search protected files.",
+        symbol: "lock.shield", tint: .orange) {
+        Button("Open System Settings…") { FileActions.openPrivacySettings() }
+      }
     }
     if let error = model.error {
-      HStack {
-        Text(error).foregroundColor(.red).textSelection(.enabled)
-        Spacer()
+      banner(error, symbol: "exclamationmark.triangle.fill", tint: .red) {
         Button("Dismiss") { model.error = nil }
-      }.font(.caption).padding(.horizontal, 12).padding(.bottom, 8)
+      }
     }
     if let message = model.shortcutMessage {
-      Text(message).font(.caption).foregroundColor(.orange)
-        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(
-          .bottom, 8)
+      banner(message, symbol: "keyboard", tint: .orange) {
+        Button("Dismiss") { model.shortcutMessage = nil }
+      }
     }
   }
 
-  private var eventsList: some View {
-    VStack(spacing: 0) {
-      HStack {
-        Text("Time").frame(width: 90, alignment: .leading)
-        Text("Event").frame(width: 180, alignment: .leading)
-        Text("Filename").frame(width: 180, alignment: .leading)
-        Text("Path").frame(maxWidth: .infinity, alignment: .leading)
-      }.font(.system(size: 12, weight: .medium)).foregroundColor(.secondary)
-        .padding(.horizontal, 10).frame(height: 25).background(
-          Color(nsColor: .windowBackgroundColor))
-      List(
-        model.events.filter {
-          model.eventFilter.isEmpty
-            || $0.path.range(
-              of: model.eventFilter, options: model.sensitive ? [] : [.caseInsensitive]) != nil
-        }
-      ) { event in
-        HStack {
-          Text(Date(timeIntervalSince1970: event.time), style: .time).frame(
-            width: 90, alignment: .leading)
-          Text(event.flags).frame(width: 180, alignment: .leading)
-          Text(URL(fileURLWithPath: event.path).lastPathComponent).frame(
-            width: 180, alignment: .leading
-          ).lineLimit(1)
-          Text(URL(fileURLWithPath: event.path).deletingLastPathComponent().path).lineLimit(1)
-            .truncationMode(.middle)
-        }.font(.system(size: 12)).lineLimit(1).frame(height: 24).textSelection(.enabled)
-          .contextMenu {
-            Button("Open") {
-              model.actions.perform("open", paths: [event.path])
-            }
-            Button("Reveal in Finder") {
-              model.actions.perform("reveal", paths: [event.path])
-            }
-            Button("Copy Path") {
-              model.actions.perform("paths", paths: [event.path])
-            }
-          }
-      }.listStyle(.plain)
+  private func banner<Actions: View>(
+    _ message: String, symbol: String, tint: Color, @ViewBuilder actions: () -> Actions
+  ) -> some View {
+    HStack(spacing: 8) {
+      Label {
+        Text(message).textSelection(.enabled).lineLimit(3)
+      } icon: {
+        Image(systemName: symbol).foregroundStyle(tint)
+      }
+      Spacer()
+      actions()
     }
+    .font(.callout).controlSize(.small)
+    .padding(.horizontal, 12).padding(.bottom, 8)
   }
 
-  private func tab(_ key: String, count: Int) -> some View {
-    Button {
-      model.activeTab = key
-    } label: {
-      HStack(spacing: 5) {
-        Text(key.capitalized)
-        Text(count.formatted()).monospacedDigit().foregroundColor(.secondary)
-      }.padding(.horizontal, 9).frame(height: 24)
-        .background(
-          Capsule().fill(model.activeTab == key ? Color(nsColor: .controlBackgroundColor) : .clear))
-    }.buttonStyle(.plain)
-      .accessibilityAddTraits(model.activeTab == key ? [.isSelected] : [])
+  private var eventsTable: some View {
+    Table(model.filteredEvents, selection: $eventSelection) {
+      TableColumn("Time") { event in
+        Text(Date(timeIntervalSince1970: event.time), style: .time).monospacedDigit()
+      }.width(min: 70, ideal: 90)
+      TableColumn("Event", value: \.flags).width(min: 80, ideal: 180)
+      TableColumn("Filename", value: \.name).width(min: 80, ideal: 200)
+      TableColumn("Folder") { event in
+        Text(event.folder).truncationMode(.middle).foregroundStyle(.secondary)
+      }
+    }
+    .contextMenu(forSelectionType: FileEvent.ID.self) { ids in
+      let paths = model.filteredEvents.filter { ids.contains($0.id) }.map(\.path)
+      if !paths.isEmpty {
+        Button("Open") { model.actions.perform("open", paths: paths) }
+        Button("Reveal in Finder") { model.actions.perform("reveal", paths: paths) }
+        Divider()
+        Button("Copy Path") { model.actions.perform("paths", paths: paths) }
+      }
+    } primaryAction: { ids in
+      let paths = model.filteredEvents.filter { ids.contains($0.id) }.map(\.path)
+      if !paths.isEmpty { model.actions.perform("open", paths: paths) }
+    }
   }
 
   private func statusBar(showShortcuts: Bool) -> some View {
     HStack(spacing: 10) {
       LifecycleStatus(
-        busy: busy, hasError: model.error != nil, label: lifecycle
-      ).help(model.indexStatus)
-      HStack(spacing: 1) {
-        tab("files", count: model.indexedCount)
-        tab("events", count: model.processedEventCount)
-      }.padding(2).background(Capsule().fill(Color.primary.opacity(0.06)))
+        busy: busy, hasError: model.error != nil, paused: lifecycle == "Paused", label: lifecycle
+      ).help(indexDetails)
+      ViewTabs(
+        selection: $model.activeTab, files: model.indexedCount,
+        events: model.processedEventCount)
       if model.scanning {
-        Button {
-          cn_cancel_scan()
-        } label: {
-          Image(systemName: "xmark.circle").frame(width: 14, height: 14)
-        }
-        .help("Cancel scan").accessibilityLabel(
-          "Cancel scan")
+        Button { cn_cancel_scan() } label: { Image(systemName: "xmark.circle") }
+          .help("Cancel scan").accessibilityLabel("Cancel scan")
       } else {
-        Button {
-          model.scan(useCurrentConfig: true)
-        } label: {
-          Image(systemName: "arrow.clockwise").frame(width: 14, height: 14)
+        Button { model.scan(useCurrentConfig: true) } label: {
+          Image(systemName: "arrow.clockwise")
         }
         .disabled(!model.ready || model.snapshotOnly)
-        .help("Rescan").accessibilityLabel(
-          "Rescan")
+        .help("Rescan").accessibilityLabel("Rescan")
       }
-      OpenSettingsButton()
-      Button {
-        indexDetailsOpen.toggle()
-      } label: {
-        Image(systemName: "info.circle")
-      }
-      .help("Index details")
-      .accessibilityLabel("Index details")
-      .popover(isPresented: $indexDetailsOpen, arrowEdge: .top) { indexDetails }
       Spacer(minLength: 4)
       if showShortcuts && model.activeTab == "files" {
-        Text(
-          "F2 Rename   F8 Trash   F9 Terminal"
-        )
-        .foregroundColor(.secondary)
+        Text("F2 Rename   F8 Trash   F9 Terminal").foregroundStyle(.secondary)
         Spacer(minLength: 4)
       }
       if model.selectionCount > 0 {
-        Text(
-          "\(model.selectionCount.formatted()) selected"
-        )
-        .foregroundColor(.secondary)
+        Text("\(model.selectionCount.formatted()) selected").foregroundStyle(.secondary)
       }
       if model.activeTab == "files" {
-        Text(
-          "Search: \(model.total.formatted()) · \(Int(model.backendMS.rounded())) ms"
-        )
-        .monospacedDigit().help(model.status)
+        Text("Search: \(model.total.formatted()) · \(Int(model.backendMS.rounded())) ms")
+          .monospacedDigit().help(model.status)
       }
-    }.buttonStyle(.plain).font(.system(size: 11)).lineLimit(1).padding(.horizontal, 12)
+    }
+    .buttonStyle(.borderless).controlSize(.small)
+    .font(.system(size: 11)).lineLimit(1).padding(.horizontal, 12)
   }
 
-  private var indexDetails: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text(
-        model.snapshotOnly
-          ? "Read-only snapshot" : "Live updates"
-      ).font(.headline)
-      Text(model.snapshot).font(.caption).textSelection(.enabled).fixedSize(
-        horizontal: false, vertical: true)
-      Text(model.snapshotDate).font(.caption).foregroundColor(.secondary)
-      Text(model.indexStatus).font(.caption).foregroundColor(.secondary)
-      Text(model.status).font(.caption).foregroundColor(.secondary)
-      Divider()
-      if model.snapshotOnly {
-        Button("Enable live updates") { model.enableLive() }.disabled(
-          !model.ready)
-      } else {
-        Toggle("Live updates", isOn: $model.live)
-          .onChange(of: model.live) { _ in model.setLive() }.disabled(!model.ready)
-      }
-      HStack {
-        Button("Choose index…") {
-          indexDetailsOpen = false
-          model.choose()
-        }
-        Button("Index folder…") {
-          indexDetailsOpen = false
-          model.chooseFolder()
-        }.disabled(model.scanning)
-      }
-      Picker("Delay", selection: $model.debounce) {
-        Text("0 ms").tag(0)
-        Text("100 ms").tag(100)
-        Text("300 ms").tag(300)
-      }
-    }.padding(18).frame(width: 390)
+  /// Index details shown when hovering over the lifecycle status.
+  private var indexDetails: String {
+    [
+      model.snapshotOnly ? "Read-only snapshot" : model.live ? "Live updates" : "Live updates paused",
+      model.snapshot, model.snapshotDate, model.indexStatus,
+    ].filter { !$0.isEmpty }.joined(separator: "\n")
   }
 }
 
@@ -310,7 +223,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   var selfCheck: SelfCheck?
   var liveCheck: LiveCheck?
   var helpWindow: NSWindow?
-  var statusItem: NSStatusItem?
   let shortcutManager = ActivationShortcutManager()
   var handler: EventHandlerRef?
   var monitor: Any?
@@ -370,7 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withBundleIdentifier: "com.everything.mac"
           )
           .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier })?
-          .activate(options: .activateIgnoringOtherApps)
+          .activate()
           NSApp.terminate(nil)
           return
         }
@@ -393,10 +305,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       try self.shortcutManager.apply(shortcut)
       self.model.shortcutMessage = nil
     }
-    prefs.onApply = { [weak self] in
-      self?.configureTray()
-    }
-    configureTray()
     monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self = self else { return event }
       return self.key(event)
@@ -469,26 +377,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   @objc func toggleWindow() {
     guard let window = window else { return }
     if window.isVisible && NSApp.isActive { window.orderOut(nil) } else { showWindow() }
-  }
-  func configureTray() {
-    if let old = statusItem {
-      NSStatusBar.system.removeStatusItem(old)
-      statusItem = nil
-    }
-    guard model.prefs.tray && !model.snapshotOnly else { return }
-    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    item.button?.image = NSImage(
-      systemSymbolName: "magnifyingglass", accessibilityDescription: "EverythingMac")
-    let menu = NSMenu()
-    let open = menu.addItem(
-      withTitle: "Open EverythingMac", action: #selector(showWindow),
-      keyEquivalent: "")
-    open.target = self
-    menu.addItem(
-      withTitle: "Quit", action: #selector(NSApplication.terminate(_:)),
-      keyEquivalent: "")
-    item.menu = menu
-    statusItem = item
   }
   func registerShortcut() {
     var type = EventTypeSpec(
@@ -593,6 +481,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct EverythingMacApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
+  private var model: Model { delegate.model }
+  /// File commands act on the results table only when it has keyboard focus,
+  /// so they never take shortcuts from the search fields.
+  private var canActOnFiles: Bool {
+    model.activeTab == "files" && model.resultsFocused && model.selectionCount > 0
+  }
+  private var liveUpdates: Binding<Bool> {
+    Binding(get: { model.live }, set: { enabled in
+      model.live = enabled
+      model.setLive()
+    })
+  }
+  private var showsMenuBarIcon: Binding<Bool> {
+    Binding(
+      get: { model.prefs.tray && !model.snapshotOnly },
+      set: { inserted in
+        guard !model.snapshotOnly, inserted != model.prefs.tray else { return }
+        do { try model.prefs.update { $0.tray = inserted } }
+        catch { model.error = error.localizedDescription }
+      })
+  }
+
   var body: some Scene {
     WindowGroup("EverythingMac") {
       ContentView(model: delegate.model, prefs: delegate.model.prefs)
@@ -605,6 +515,44 @@ struct EverythingMacApp: App {
           NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: nil)
         }.keyboardShortcut("w")
       }
+      CommandGroup(after: .newItem) {
+        Divider()
+        Button("Open") { model.actions.perform("open") }
+          .keyboardShortcut("o").disabled(!canActOnFiles)
+        Button("Reveal in Finder") { model.actions.perform("reveal") }
+          .keyboardShortcut("r").disabled(!canActOnFiles)
+        Button("Quick Look") { model.actions.perform("preview") }
+          .keyboardShortcut("y").disabled(!canActOnFiles)
+        Button("Copy Path") { model.actions.perform("paths") }
+          .keyboardShortcut("c", modifiers: [.command, .option]).disabled(!canActOnFiles)
+        Divider()
+        Button("Open Index…") { model.choose() }
+          .keyboardShortcut("o", modifiers: [.command, .shift])
+          .disabled(model.scanning || model.closed)
+      }
+      CommandGroup(after: .textEditing) {
+        Button("Find") { model.focusSearch?() }.keyboardShortcut("f")
+      }
+      CommandGroup(before: .toolbar) {
+        Picker("Show", selection: Bindable(model).activeTab) {
+          Text("Files").keyboardShortcut("1").tag("files")
+          Text("Events").keyboardShortcut("2").tag("events")
+        }
+        .pickerStyle(.inline)
+        Divider()
+      }
+      CommandMenu("Index") {
+        if model.snapshotOnly {
+          Button("Enable Live Updates") { model.enableLive() }.disabled(!model.ready)
+        } else {
+          Toggle("Live Updates", isOn: liveUpdates).disabled(!model.ready || model.scanning)
+        }
+        Divider()
+        Button("Rescan") { model.scan(useCurrentConfig: true) }
+          .keyboardShortcut("r", modifiers: [.command, .option])
+          .disabled(!model.ready || model.scanning || model.snapshotOnly)
+        Button("Cancel Scan") { cn_cancel_scan() }.disabled(!model.scanning)
+      }
       CommandGroup(replacing: .help) {
         Button("Search & Shortcuts") { delegate.showSearchHelp() }
           .keyboardShortcut("/")
@@ -613,6 +561,11 @@ struct EverythingMacApp: App {
     }
     Settings {
       SettingsContent(model: delegate.model)
+    }
+    MenuBarExtra("EverythingMac", systemImage: "magnifyingglass", isInserted: showsMenuBarIcon) {
+      Button("Open EverythingMac") { delegate.showWindow() }
+      Divider()
+      Button("Quit EverythingMac") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
   }
 }

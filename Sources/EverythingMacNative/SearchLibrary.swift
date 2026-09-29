@@ -30,16 +30,19 @@ private struct SearchLibraryDocument: Codable {
   var recent: [RecentSearch] = []
 }
 
-final class SearchLibrary: ObservableObject {
-  @Published private(set) var saved: [SavedSearch] = []
-  @Published private(set) var recent: [RecentSearch] = []
-  @Published var error: String?
-  var willRemoveHistory: ((SearchState?) -> Void)?
-  private var writable = true
+@Observable final class SearchLibrary {
+  private(set) var saved: [SavedSearch] = []
+  private(set) var recent: [RecentSearch] = []
+  var error: String? {
+    didSet { if let error = error { onError?(error) } }
+  }
+  @ObservationIgnored var onError: ((String) -> Void)?
+  @ObservationIgnored var willRemoveHistory: ((SearchState?) -> Void)?
+  @ObservationIgnored private var writable = true
   private let url: URL?
   private let queue = DispatchQueue(label: "everything.search-library")
   // Only accessed on queue. A failed write prevents later queued writes from masking it.
-  private var writeFailure: Error?
+  @ObservationIgnored private var writeFailure: Error?
   init(url: URL?) {
     self.url = url
     guard let url = url else { return }
@@ -173,8 +176,8 @@ extension Model {
 }
 
 struct SearchLibraryView: View {
-  @ObservedObject var model: Model
-  @ObservedObject var library: SearchLibrary
+  var model: Model
+  var library: SearchLibrary
   @State private var filter = ""
   @State private var editID: UUID?
   @State private var name = ""

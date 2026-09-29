@@ -42,7 +42,7 @@ enum SortCheck {
           for candidate in newTable.tableColumns {
             let image = newTable.indicatorImage(in: candidate)
             if candidate.identifier.rawValue == column && click != 3 {
-              let expected = ascending ? NSImage.touchBarGoUpTemplateName : NSImage.touchBarGoDownTemplateName
+              let expected = ascending ? "NSAscendingSortIndicator" : "NSDescendingSortIndicator"
               guard image != nil, image?.name() == expected else {
                 throw messageError("\(column) sort arrow did not survive reopening")
               }

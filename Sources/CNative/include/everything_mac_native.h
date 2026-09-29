@@ -25,7 +25,9 @@ void cn_cancel_scan(void);
 // Thread-safe while request is alive; does not access the engine.
 size_t cn_scan_count(const CNRequest *request);
 CNBuffer cn_watch(CNEngine *engine, bool enabled, const char *checkpoint);
-CNBuffer cn_poll(CNEngine *engine);
+// Includes `events` only when include_events is set and processed_events differs
+// from since_processed.
+CNBuffer cn_poll(CNEngine *engine, uint64_t since_processed, bool include_events);
 CNBuffer cn_scan(const char *root, const char *ignores, const char *includes, const char *patterns, const CNRequest *request, CNEngine **out);
 CNBuffer cn_validate_exclusions(const char *patterns);
 CNBuffer cn_checkpoint(CNEngine *engine);

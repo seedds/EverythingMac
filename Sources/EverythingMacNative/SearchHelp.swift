@@ -108,7 +108,7 @@ enum SearchHelp {
 }
 
 struct SearchHelpView: View {
-  @ObservedObject var prefs: Preferences
+  var prefs: Preferences
   let useExample: (String) -> Void
   @State private var filter = ""
   var body: some View {

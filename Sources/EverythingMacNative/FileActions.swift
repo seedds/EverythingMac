@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import Darwin
 import Quartz
 
@@ -64,7 +63,9 @@ final class FileActions {
   let queue = DispatchQueue(label: "everything.mac.file-actions", qos: .userInitiated)
   let trashItem: (URL) throws -> Void
   let pasteboard: NSPasteboard
-  private var pendingCopy: AnyCancellable?
+  private var pendingCopy: DispatchWorkItem? {
+    didSet { oldValue?.cancel() }
+  }
   init(_ model: Model, trashItem: @escaping (URL) throws -> Void = {
     try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
   }, pasteboard: NSPasteboard = .general) {
@@ -84,17 +85,20 @@ final class FileActions {
       let selection = model.selectionEpoch
       let index = model.indexEpoch
       let generation = model.generation
-      pendingCopy = model.$selectionLoading.filter { !$0 }.first()
-        // @Published emits before storage changes; resume on the next main turn.
-        .receive(on: DispatchQueue.main)
-        .sink { [weak self, weak model] _ in
-          guard let self = self, let model = model else { return }
-          self.pendingCopy = nil
-          guard !model.closed, model.activeTab == "files",
-            model.selectionEpoch == selection, model.indexEpoch == index,
-            model.generation == generation else { return }
-          self.perform(action)
-        }
+      let work = DispatchWorkItem { [weak self, weak model] in
+        guard let self = self, let model = model else { return }
+        self.pendingCopy = nil
+        guard !model.closed, model.activeTab == "files",
+          model.selectionEpoch == selection, model.indexEpoch == index,
+          model.generation == generation else { return }
+        self.perform(action)
+      }
+      pendingCopy = work
+      // Resume on the next main turn, after the selection reply has been applied.
+      model.selectionDidLoad = { [weak model] in
+        model?.selectionDidLoad = nil
+        DispatchQueue.main.async(execute: work)
+      }
       return
     }
     guard explicitPaths != nil || !model.selectionLoading else {

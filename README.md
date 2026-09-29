@@ -43,8 +43,8 @@ brew update
 brew upgrade --cask seedds/tap/everything
 ```
 
-The published release targets **Apple Silicon and macOS 12 or later**. Development
-validation has used an M4 Pro on macOS 27; actual macOS 12 and Intel execution
+The published release targets **Apple Silicon and macOS 14 or later**. Development
+validation has used an M4 Pro on macOS 27; actual macOS 14 and Intel execution
 remain unverified. Releases are ad-hoc signed and are not notarized. macOS may
 require approval in Privacy & Security and renewed permissions after an update.
 

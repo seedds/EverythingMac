@@ -7,9 +7,8 @@ final class FileIcons {
   init() {
     basic.countLimit = 512
   }
-  static func key(_ row: Row) -> String {
-    "\(row.path)|\(row.size ?? -1)|\(row.modified ?? 0)|\(row.created ?? 0)|\(row.is_directory)"
-  }
+  // Metadata arriving later must not invalidate an icon already loaded for the path.
+  static func key(_ row: Row) -> String { "\(row.path)|\(row.is_directory)" }
   func image(_ row: Row, completion: @escaping (String, NSImage) -> Void)
     -> NSImage?
   {

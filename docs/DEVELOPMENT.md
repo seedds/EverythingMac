@@ -38,7 +38,7 @@ icon sizes, run `./scripts/build-icon.sh`.
 | Application name | EverythingMac |
 | Built application | `build/EverythingMac.app` |
 | Bundle identifier | `com.everything.mac` |
-| Deployment target | macOS 12 |
+| Deployment target | macOS 14 |
 | Validated hardware | Apple Silicon, M4 Pro |
 | Source repository | [seedds/EverythingMac](https://github.com/seedds/EverythingMac) |
 
@@ -80,7 +80,7 @@ SwiftUI's `App` lifecycle owns the search `WindowGroup`, standard menus, and
 global shortcuts, the menu bar item, and asynchronous index saving before quit.
 The search window forwards delegate callbacks to SwiftUI while intercepting close
 to hide it; a responder adapter preserves Quick Look without a custom window class.
-The macOS 12 deployment target remains supported.
+The deployment target is macOS 14.
 
 Rust owns the full result-ID vector and passive selection identities. Swift keeps
 at most 1,024 row models around the viewport, plus bounded selection samples.
@@ -177,7 +177,8 @@ EVERYTHING_MAC_SELECTION_INDEX=/absolute/path/to/everything-mac.db \
   cargo test -p everything-mac-native-prototype --release selection_refresh_probe -- --ignored --nocapture
 ```
 
-To verify stable lifecycle status widths across all English states:
+To verify that the lifecycle status and Files/Events control keep a fixed width
+across all English states and counts:
 
 ```bash
 swiftc -parse-as-library Sources/EverythingMacNative/LifecycleStatus.swift \
@@ -251,7 +252,7 @@ Output: `build/EverythingMac-<VERSION>-<ARCH>.dmg`, using the root `VERSION` fil
 
 This produces an ad-hoc signed package for the build machine’s architecture.
 The published Homebrew release supports Apple Silicon. This packaging command does not
-install, publish, or notarize the app. The macOS 12 deployment target is a build setting;
+install, publish, or notarize the app. The macOS 14 deployment target is a build setting;
 actual older-macOS and Intel execution have not been validated.
 
 For broader release validation, check cloud-provider behavior, sustained high-churn

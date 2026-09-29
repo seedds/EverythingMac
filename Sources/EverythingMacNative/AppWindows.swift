@@ -43,26 +43,8 @@ final class SearchWindowDelegate: NSObject, NSWindowDelegate {
   }
 }
 
-struct OpenSettingsButton: View {
-  var body: some View {
-    Group {
-      if #available(macOS 14, *) {
-        SettingsLink { Image(systemName: "gearshape") }
-      } else {
-        Button {
-          let selector = NSSelectorFromString(
-            ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 13
-              ? "showSettingsWindow:" : "showPreferencesWindow:")
-          NSApp.sendAction(selector, to: nil, from: nil)
-        } label: { Image(systemName: "gearshape") }
-      }
-    }
-    .help("Open settings").accessibilityLabel("Open settings")
-  }
-}
-
 struct SettingsContent: View {
-  @ObservedObject var model: Model
+  var model: Model
   @State private var window: NSWindow?
   @State private var session = UUID()
   @State private var presented = false

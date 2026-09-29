@@ -359,7 +359,7 @@ final class LiveCheck {
     pending = true
     let ticket = model.displayedGeneration
     model.engine.perform({ handle in
-      let reply = try decode(cn_poll(handle))
+      let reply = try decode(cn_poll(handle, 0, false))
       if reply.changed == true {
         guard try decode(cn_rows(handle, ticket, 0, 1)).status == "stale" else {
           throw messageError("Terminal regression fixture did not invalidate displayed rows")

@@ -1,8 +1,8 @@
-// swift-tools-version: 5.7
+// swift-tools-version: 5.9
 import PackageDescription
 let package = Package(
     name: "EverythingMac",
-    platforms: [.macOS(.v12)],
+    platforms: [.macOS(.v14)],
     products: [.executable(name: "EverythingMac", targets: ["EverythingMacNative"])],
     targets: [
         .systemLibrary(name: "CNative"),

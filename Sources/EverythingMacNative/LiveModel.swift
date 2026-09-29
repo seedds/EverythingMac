@@ -6,6 +6,19 @@ struct FileEvent: Decodable, Identifiable {
   let path: String
   let flags: String
   let time: Double
+  let name: String
+  let folder: String
+  enum CodingKeys: String, CodingKey { case id, path, flags, time }
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    id = try values.decode(UInt64.self, forKey: .id)
+    path = try values.decode(String.self, forKey: .path)
+    flags = try values.decode(String.self, forKey: .flags)
+    time = try values.decode(Double.self, forKey: .time)
+    // String-only parsing, computed once per event rather than per table render.
+    name = (path as NSString).lastPathComponent
+    folder = (path as NSString).deletingLastPathComponent
+  }
 }
 func jsonString<T: Encodable>(_ value: T) -> String {
   String(data: (try? JSONEncoder().encode(value)) ?? Data("null".utf8), encoding: .utf8)!
@@ -17,6 +30,7 @@ extension Model {
     timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
       self?.poll()
     }
+    timer?.tolerance = 0.1
   }
   func setLive() {
     guard ready, !snapshotOnly, !closed else { return }
@@ -37,9 +51,19 @@ extension Model {
     guard ready, !snapshotOnly, !closed, !searching, !scanning, !polling, !saving,
       !selectionLoading
     else { return }
+    // Poll less often while the search window is hidden.
+    let now = ProcessInfo.processInfo.systemUptime
+    let visible = NSApp.windows.contains {
+      $0.identifier?.rawValue == "EverythingMacSearch" && $0.isVisible
+    }
+    guard visible || now - lastPoll >= 2 else { return }
+    lastPoll = now
     polling = true
     let epoch = indexEpoch
-    engine.perform({ try decode(cn_poll($0)) }) { [weak self] result in
+    let includeEvents = activeTab == "events"
+    // UInt64.max never matches the engine's count, forcing a first fetch.
+    let since = includeEvents ? (eventsFetchedAt ?? .max) : 0
+    engine.perform({ try decode(cn_poll($0, since, includeEvents)) }) { [weak self] result in
       guard let self = self else { return }
       self.polling = false
       guard !self.closed, self.indexEpoch == epoch else { return }
@@ -48,15 +72,23 @@ extension Model {
         self.error = e.localizedDescription
         self.live = false
       case .success(let reply):
-        self.events = reply.events ?? []
-        self.indexedCount = reply.total ?? self.indexedCount
-        self.processedEventCount = Int(clamping: reply.processed_events ?? 0)
-        self.indexStatus = "\(reply.total ?? 0) indexed · \(reply.processed_events ?? 0) events"
-        if reply.metadata_indexing == true {
-          self.indexStatus += " · Indexing file sizes and dates…"
-        } else if !self.live {
-          self.indexStatus += " · Live updates paused"
+        let processed = reply.processed_events ?? 0
+        if let events = reply.events, self.activeTab == "events" {
+          self.events = events
+          self.eventsFetchedAt = processed
         }
+        let total = reply.total ?? self.indexedCount
+        if self.indexedCount != total { self.indexedCount = total }
+        if self.processedEventCount != Int(clamping: processed) {
+          self.processedEventCount = Int(clamping: processed)
+        }
+        var status = "\(reply.total ?? 0) indexed · \(processed) events"
+        if reply.metadata_indexing == true {
+          status += " · Indexing file sizes and dates…"
+        } else if !self.live {
+          status += " · Live updates paused"
+        }
+        if self.indexStatus != status { self.indexStatus = status }
         if reply.needs_rescan == true {
           self.scan(useCurrentConfig: true)
           return
@@ -85,6 +117,11 @@ extension Model {
         }
       }
     }
+  }
+  /// A new engine restarts its event counter; drop the previous engine's list.
+  func resetEvents() {
+    events = []
+    eventsFetchedAt = nil
   }
   func refreshCheckpointInformation() {
     let path = checkpointPath
@@ -163,6 +200,7 @@ extension Model {
         self.loadedMS = reply.load_ms ?? 0
         self.indexedCount = reply.total ?? 0
         self.processedEventCount = 0
+        self.resetEvents()
         self.setLive()
         self.startTimer()
         self.submit(background: true)
@@ -174,21 +212,6 @@ extension Model {
         self.error = e.localizedDescription
         self.status = "Scan failed; previous index retained"
       }
-    }
-  }
-  func chooseFolder() {
-    let panel = NSOpenPanel()
-    panel.canChooseDirectories = true
-    panel.canChooseFiles = false
-    panel.allowsMultipleSelection = false
-    if panel.runModal() == .OK, let url = panel.url {
-      prefs.root = url.path
-      snapshotOnly = false
-      live = true
-      do {
-        try prefs.save()
-        scan()
-      } catch { self.error = error.localizedDescription }
     }
   }
   func savePreferences(_ draft: Preferences) throws {

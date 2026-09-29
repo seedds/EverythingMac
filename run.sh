@@ -6,7 +6,7 @@ VERSION="$(cat "$REPO_DIR/VERSION")"
 export PATH="$HOME/.cargo/bin:$PATH"
 export RUSTC="$HOME/.cargo/bin/rustc"
 export CARGO_PROFILE_RELEASE_STRIP=none
-export MACOSX_DEPLOYMENT_TARGET=12.0
+export MACOSX_DEPLOYMENT_TARGET=14.0
 cd "$REPO_DIR"
 cargo build --locked --release -p everything-mac-native-prototype
 cd "$PROTOTYPE_DIR"
@@ -40,7 +40,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleVersion</key><string>${VERSION}</string>
 <key>CFBundleShortVersionString</key><string>${VERSION}</string>
 <key>CFBundleIconFile</key><string>icon.icns</string>
-<key>LSMinimumSystemVersion</key><string>12.0</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST

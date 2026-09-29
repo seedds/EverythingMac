@@ -14,21 +14,18 @@ final class RowMetadataOperation: Operation, @unchecked Sendable {
 
   override func main() {
     guard !isCancelled else { return }
-    let attributes = try? FileManager.default.attributesOfItem(atPath: row.path)
+    // One lstat supplies every column; like attributesOfItem, it does not follow symlinks.
     var info = stat()
-    let allocatedSize: Int64? = lstat(row.path, &info) == 0 ? Int64(info.st_blocks) * 512 : nil
-    func timestamp(_ key: FileAttributeKey) -> UInt32? {
-      guard let date = attributes?[key] as? Date else { return nil }
-      let seconds = date.timeIntervalSince1970
-      return seconds > 0 && seconds <= Double(UInt32.max) ? UInt32(seconds) : nil
+    let found = lstat(row.path, &info) == 0
+    func timestamp(_ seconds: Int) -> UInt32? {
+      found && seconds > 0 && seconds <= Int(UInt32.max) ? UInt32(seconds) : nil
     }
     let result = Row(
       index: row.index, id: row.id, path: row.path,
-      size: (attributes?[.size] as? NSNumber)?.int64Value,
-      allocated_size: allocatedSize,
-      modified: timestamp(.modificationDate), created: timestamp(.creationDate),
-      is_directory: (attributes?[.type] as? FileAttributeType).map { $0 == .typeDirectory }
-        ?? row.is_directory,
+      size: found ? Int64(info.st_size) : nil,
+      allocated_size: found ? Int64(info.st_blocks) * 512 : nil,
+      modified: timestamp(info.st_mtimespec.tv_sec), created: timestamp(info.st_birthtimespec.tv_sec),
+      is_directory: found ? (info.st_mode & S_IFMT) == S_IFDIR : row.is_directory,
       metadata_loaded: true)
     guard !isCancelled else { return }
     DispatchQueue.main.async { self.completion(self, result) }
@@ -56,6 +53,7 @@ extension Model {
         guard !self.closed, !operation.isCancelled, self.displayedGeneration == ticket,
           self.rows[index]?.path == loaded.path else { return }
         self.rows[index] = loaded
+        self.dirtyRows.insert(index)
         self.revision &+= 1
       }
       pendingMetadata[index] = operation

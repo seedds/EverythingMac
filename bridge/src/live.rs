@@ -178,7 +178,11 @@ pub unsafe extern "C" fn cn_watch(
 /// # Safety
 /// Valid serialized handle. Old row IDs are invalidated before returning changes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cn_poll(engine: *mut Engine) -> Buffer {
+pub unsafe extern "C" fn cn_poll(
+    engine: *mut Engine,
+    since_processed: u64,
+    include_events: bool,
+) -> Buffer {
     guarded(|| {
         let engine = unsafe { engine.as_ref() }.ok_or("No index loaded")?;
         let mut state = engine
@@ -228,12 +232,14 @@ pub unsafe extern "C" fn cn_poll(engine: *mut Engine) -> Buffer {
             state.generation = 0;
             state.dirty = true;
         }
-        Ok(
-            json!({"status":"ok", "changed":changed, "needs_rescan":state.needs_rescan,
+        let mut reply = json!({"status":"ok", "changed":changed, "needs_rescan":state.needs_rescan,
             "total":state.cache.get_total_files(), "processed_events":state.processed_events,
-            "metadata_indexing":state.metadata.active(),
-            "events":state.events}),
-        )
+            "metadata_indexing":state.metadata.active()});
+        // The event list is only for the visible Events tab, and only when it changed.
+        if include_events && state.processed_events != since_processed {
+            reply["events"] = json!(state.events);
+        }
+        Ok(reply)
     })
 }
 

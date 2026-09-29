@@ -442,6 +442,25 @@ mod tests {
         assert_eq!(ids, vec![regular_id, sparse_id]);
     }
 
+    #[test]
+    fn poll_includes_events_only_when_requested_and_changed() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = State::new(SearchCache::walk_fs(temp.path()), temp.path().into());
+        state.events.push_front(json!({"id":1, "path":"/a", "flags":"Created", "time":0.0}));
+        state.processed_events = 1;
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        unsafe {
+            let hidden = reply(live::cn_poll(&mut engine, 0, false));
+            assert_eq!(hidden["processed_events"], 1);
+            assert!(hidden.get("events").is_none());
+            let changed = reply(live::cn_poll(&mut engine, 0, true));
+            assert_eq!(changed["events"].as_array().unwrap().len(), 1);
+            let unchanged = reply(live::cn_poll(&mut engine, 1, true));
+            assert!(unchanged.get("events").is_none());
+        }
+    }
+
     unsafe fn reply(buffer: Buffer) -> Value {
         let value =
             serde_json::from_slice(unsafe { std::slice::from_raw_parts(buffer.data, buffer.len) })
@@ -579,7 +598,7 @@ mod tests {
             );
             let started = Instant::now();
             loop {
-                let polled = reply(live::cn_poll(engine));
+                let polled = reply(live::cn_poll(engine, 0, false));
                 if polled["metadata_indexing"] == false {
                     break;
                 }

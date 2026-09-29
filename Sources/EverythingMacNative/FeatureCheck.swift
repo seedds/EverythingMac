@@ -247,6 +247,7 @@ final class FeatureCheck {
     guard let appMenu = NSApp.mainMenu?.items.first?.submenu,
       let settingsIndex = appMenu.items.firstIndex(where: { $0.keyEquivalent == "," })
     else { throw messageError("SwiftUI Settings command is missing") }
+    model.settingsTab = "index"
     appMenu.performActionForItem(at: settingsIndex)
     try await Task.sleep(nanoseconds: 300_000_000)
     guard let settings = NSApp.windows.first(where: {

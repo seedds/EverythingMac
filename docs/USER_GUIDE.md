@@ -16,24 +16,27 @@ results table, and a compact bottom status bar**.
 | Search Library button | Left of the search field, beside Aa; browse saved searches and recent history. |
 | Aa button | Left of the search field; toggles case-sensitive matching. |
 | Results table | Name, Path, Size on disk, Modified, and Created columns, with resizable widths and single-line middle truncation. |
-| Bottom status bar | Lifecycle state, Files/Events tabs and counts, rescan, preferences, selection count, and search duration. |
-| Index details (ⓘ) | Snapshot location and modification time, index/live-update controls, detailed timings, and typing delay. |
+| Bottom status bar | Lifecycle state (Ready, Updating, Paused; hover for index details), Files/Events segmented control with counts, rescan, selection count, and search duration. |
+| Index menu | Live Updates on/off (Paused in the status bar while off), Rescan (Option-Command-R), and Cancel Scan. |
 
 Enter submits a search immediately. Typing uses a **100 ms debounce** by default;
-the Index details popover offers 0, 100, and 300 ms for comparison. Existing rows
+Settings → General → **Search delay** offers none, 100, and 300 ms, and is saved. Existing rows
 remain visible while a replacement search runs.
 
 Click a column header to cycle through ascending, descending, and backend order.
 The chosen column and direction (including unsorted order) are saved immediately
 and restored with the header arrow when the app opens again.
 Column sorting applies to all matching results, with no result-count limit. The Events tab uses
-the same top search field rather than adding a second search bar.
+the same top search field rather than adding a second search bar; it lists the latest 500
+events while the tab is open. Double-click an event to open its file, or right-click
+for Reveal in Finder and Copy Path.
 
 ## Keyboard and file actions
 
 | Shortcut or interaction | Action |
 | --- | --- |
-| Command-F | Focus search. |
+| Command-F / Edit → Find | Focus search. |
+| Command-1 / Command-2 | Show Files or Events. |
 | Command-/ | Open searchable Search & Shortcuts help. |
 | Enter in search | Submit immediately. |
 | Down from search | Enter the results. |
@@ -42,19 +45,21 @@ the same top search field rather than adding a second search bar.
 | Shift-arrow / Command-click | Extend or modify selection using AppKit behavior. |
 | Double-click / Command-O | Open selected files. |
 | Command-R | Reveal in Finder. |
-| Space | Toggle Quick Look. |
+| Space / Command-Y | Toggle Quick Look. |
 | Up / Down in Quick Look | Navigate results. |
 | Command-C | Copy file URLs. |
-| Command-Shift-C | Copy paths. |
+| Command-Shift-C / Option-Command-C | Copy paths. |
 | F2 | Rename without overwriting an existing file. |
 | F8 | Move selected files to macOS Trash. |
 | F9 | Open the selected folder, or a file’s parent, in the configured terminal. |
-| Command-Shift-Space (default) | Toggle the app window. Record, disable, or reset the shortcut in Preferences. |
+| Command-Shift-Space (default) | Toggle the app window. Record, disable, or reset the shortcut in Settings → General. |
 | Escape / Close Window | Hide the window; live monitoring continues. |
 | Command-Q | Save the native checkpoint and quit. |
 
-The context menu also provides filename copying, Double Commander reveal, and
-column-width reset. Dragging results exports file URLs. Standard file icons load
+Open, Reveal in Finder, Quick Look, and Copy Path are also in the File menu; they
+are enabled while the results table has focus and files are selected. The context
+menu also provides filename copying and Double Commander reveal. Right-click the
+column headers to reset column widths. Dragging results exports file URLs. Standard file icons load
 lazily into a bounded cache. Search results never generate content thumbnails; Quick Look opens only when explicitly requested.
 
 Scrolling loads filenames and paths directly from the index. Size and dates load
@@ -83,10 +88,14 @@ for versioned search and sorting results.
 
 ## Indexing and storage
 
-Open **EverythingMac → Settings…** with **Command-,** or the gear button.
-Settings opens in its own window, so you can continue using search. **Save**
-applies changes; **Cancel** or closing the window discards unsaved edits.
-On macOS 12, the system menu calls this **Preferences…**.
+Open **EverythingMac → Settings…** with **Command-,**.
+Settings opens in its own window, so you can continue using search. It has three tabs:
+
+- **General**: activation shortcut, search delay, appearance, menu bar icon, and the
+  F9 terminal app (**Choose…** / **Reset**). These apply immediately.
+- **Index**: index file and status, monitor root (**Choose…**), include/ignore paths, and exclude patterns. Edits apply only
+  with **Apply & Rebuild**; **Revert** or closing the window discards them.
+- **Privacy**: a link to Full Disk Access in System Settings.
 
 Normal launch loads EverythingMac's saved index when one exists. Otherwise it
 scans the configured monitor root. New installations start with empty include
@@ -111,9 +120,10 @@ Existing EverythingMac installations migrate the old index filename to
 still open the old filename without changing it. An existing `everything-mac.db`
 takes precedence; migration failures preserve the old file and stop startup scanning.
 
-Use **Index folder…** in Index details to choose a monitored root, and the bottom
-rescan button to rebuild the current scope. Preferences contains include/ignore
-paths, appearance, menu bar visibility, and terminal application. Include paths override ignored ancestors.
+Choose a monitored root in **Settings → Index**, and use the bottom rescan button or
+**Index → Rescan** to rebuild the current scope. **File → Open Index…** opens another
+saved index read-only; **Index → Enable Live Updates** makes it live. Pausing live
+updates lasts until the next launch. Include paths override ignored ancestors.
 
 The app processes filesystem events and writes checkpoints during idle intervals
 and before quitting. Cancelling a scan retains the previous index. If macOS blocks
@@ -122,7 +132,7 @@ scan worker remains outstanding. Another scan must wait for that worker to finis
 
 ### Exclusion patterns
 
-Preferences has a separate **Exclude patterns** field, one rule per line:
+Settings → Index has a separate **Exclude patterns** field, one rule per line:
 
 ```text
 node_modules
@@ -137,7 +147,7 @@ and brace alternatives use glob syntax. Patterns are case-sensitive, prune match
 directory trees, and still apply inside explicit Include paths. Absolute paths belong
 in Include/Ignore paths. No patterns are enabled by default.
 
-**Save and Rebuild** validates the rules and rebuilds the index. A cancelled or failed
+**Apply & Rebuild** validates the rules and rebuilds the index. A cancelled or failed
 rebuild retains the previous index and its rules. Exclusions survive checkpoint reloads
 and apply to live filesystem updates.
 
@@ -183,7 +193,7 @@ enable it under **System Settings → Privacy & Security → Full Disk Access**,
 relaunch. The app provides permission guidance and a link to System Settings.
 
 If the activation shortcut is already registered by another app, EverythingMac reports
-the conflict. Record an alternative in Preferences. A failed replacement keeps the working shortcut.
+the conflict. Record an alternative in Settings → General. A failed replacement keeps the working shortcut.
 
 Releases are ad-hoc signed rather than signed with a stable Developer ID or notarized.
 Replacing the app can require renewed macOS permission approval. Launch the installed
