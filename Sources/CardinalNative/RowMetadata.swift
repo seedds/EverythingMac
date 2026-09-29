@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // Filesystem calls can be slow on cold, cloud-backed or external paths. They must
 // never occupy the serial search/page queue or delay a filename becoming visible.
@@ -14,6 +15,8 @@ final class RowMetadataOperation: Operation, @unchecked Sendable {
   override func main() {
     guard !isCancelled else { return }
     let attributes = try? FileManager.default.attributesOfItem(atPath: row.path)
+    var info = stat()
+    let allocatedSize: Int64? = lstat(row.path, &info) == 0 ? Int64(info.st_blocks) * 512 : nil
     func timestamp(_ key: FileAttributeKey) -> UInt32? {
       guard let date = attributes?[key] as? Date else { return nil }
       let seconds = date.timeIntervalSince1970
@@ -22,6 +25,7 @@ final class RowMetadataOperation: Operation, @unchecked Sendable {
     let result = Row(
       index: row.index, id: row.id, path: row.path,
       size: (attributes?[.size] as? NSNumber)?.int64Value,
+      allocated_size: allocatedSize,
       modified: timestamp(.modificationDate), created: timestamp(.creationDate),
       is_directory: (attributes?[.type] as? FileAttributeType).map { $0 == .typeDirectory }
         ?? row.is_directory,

@@ -50,7 +50,9 @@ Run these commands from the **repository root**.
 ```
 
 The script builds Rust and Swift in release mode, creates an ad-hoc signed app,
-and launches it. To build without launching:
+and opens it through macOS Launch Services so the Dock applies its normal icon
+styling. Runs with command-line arguments launch the executable directly to retain
+diagnostic output and exit status. To build without launching:
 
 ```bash
 ./run.sh --build-only
@@ -103,7 +105,7 @@ results table, and a compact bottom status bar**.
 | Main search field | Search filenames, or filter recent events when Events is selected. |
 | Folder scope field | Always visible to the right of the search field. Filters file results by folder; clear it to remove the filter. Disabled on the Events tab. |
 | Aa button | Left of the search field; toggles case-sensitive matching. |
-| Results table | Name, Path, Size, Modified, and Created columns, with resizable widths and single-line middle truncation. |
+| Results table | Name, Path, Size on disk, Modified, and Created columns, with resizable widths and single-line middle truncation. |
 | Bottom status bar | Lifecycle state, Files/Events tabs and counts, rescan, preferences, selection count, and search duration. |
 | Index details (ⓘ) | Snapshot location and modification time, index/live-update controls, detailed timings, and typing delay. |
 
@@ -163,18 +165,26 @@ from indexed metadata, with a separate visible-row fallback while indexing is in
 slow filesystem metadata cannot hold up a whole page.
 Metadata requests for rows that scroll out of view are cancelled when possible.
 
-Modified and Created dates (plus size from the same metadata read) are indexed in
-the background and saved in the native checkpoint. Existing indexes are filled in
-automatically without a full rescan. File-change events keep these values current.
-The index details popover shows **Indexing file dates…** while this work is running;
+The **Size on disk** column displays and sorts by allocated bytes (`st_blocks × 512`),
+so sparse disk images show their disk usage rather than their virtual capacity.
+Directories show a dash; their contents are not summed. This is filesystem-reported
+allocation, not exclusive space reclaimable from APFS clones or snapshots.
+`size:` search filters continue to use logical file size.
+
+Modified and Created dates (plus logical and allocated sizes from the same metadata read) are indexed in
+the background and saved in the native checkpoint. Missing metadata in current-format
+indexes is filled in automatically without a full rescan. File-change events keep these values current.
+The index details popover shows **Indexing file sizes and dates…** while this work is running;
 unavailable dates remain unknown. Sorting uses indexed values only, so date ordering
 fills in as indexing progresses. There is no sorting limit.
 Read-only snapshot mode does not start background indexing.
 
-Sorting reuses compact ID orders for Name, Path, Size, Modified, and Created.
+Sorting reuses compact ID orders for Name, Path, Size on disk, Modified, and Created.
 These orders are prepared when the index opens; small searches use integer ranks
 and broad searches filter an existing order. File events and metadata updates
-refresh affected entries. The snapshot format is unchanged. Sorting has no result-count limit or limit setting. See [the measured comparison](MAINTAINED-SORT-PERFORMANCE.md)
+refresh affected entries. Snapshot format v7 stores logical and allocated sizes
+together; indexes from earlier formats must be rebuilt. Snapshot mode can display allocation through visible-row metadata reads,
+but sorting uses only values already saved in the index. Sorting has no result-count limit or limit setting. See [the measured comparison](MAINTAINED-SORT-PERFORMANCE.md)
 for query latency, startup cost, and memory use.
 
 ## Indexing and storage
@@ -316,7 +326,16 @@ python3 -c 'import json; r=json.load(open("/tmp/cardinal-selection.json")); asse
 
 This uses disposable files and the real table. It checks continuous selection
 through live updates, a new click during refresh, selected-file deletion, and
-clearing selection when starting a new search.
+clearing selection when starting a new search. A private test clipboard also checks
+immediate Copy, Copy during refresh, and cancellation when the selection or search
+changes. Copy Files, Paths, and Filenames wait for a pending selection automatically.
+
+To measure selection restoration after broad searches against a read-only snapshot:
+
+```bash
+CARDINAL_SELECTION_INDEX=/absolute/path/to/cardinal.db \
+  cargo test -p cardinal-native-prototype --release selection_refresh_probe -- --ignored --nocapture
+```
 
 To verify stable lifecycle status widths across all English states:
 

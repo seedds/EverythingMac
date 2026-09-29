@@ -151,6 +151,14 @@ impl<'a> SlabNodeMetadata<'a> {
         self.0.state_type_and_size.size()
     }
 
+    pub fn allocated_size(&self) -> i64 {
+        if self.r#type() == NodeFileType::Dir {
+            -1
+        } else {
+            self.0.allocated_size.min(i64::MAX as u64) as i64
+        }
+    }
+
     pub fn ctime(&self) -> Option<NonZeroU32> {
         NonZeroU32::new(self.0.ctime)
     }
@@ -167,6 +175,7 @@ pub struct SlabNodeMetadataCompact {
     // Actually a Option<NonZeroU32>, but using u32 here due to https://github.com/serde-rs/serde/issues/1834
     ctime: u32,
     mtime: u32,
+    allocated_size: u64,
 }
 
 impl SlabNodeMetadataCompact {
@@ -175,6 +184,7 @@ impl SlabNodeMetadataCompact {
             state_type_and_size: StateTypeSize::unaccessible(),
             ctime: 0,
             mtime: 0,
+            allocated_size: 0,
         }
     }
 
@@ -182,12 +192,14 @@ impl SlabNodeMetadataCompact {
         fswalk::NodeMetadata {
             r#type,
             size,
+            allocated_size,
             ctime,
             mtime,
         }: fswalk::NodeMetadata,
     ) -> Self {
         Self {
             state_type_and_size: StateTypeSize::some(r#type, size),
+            allocated_size,
             ctime: ctime
                 .and_then(|x| std::num::NonZeroU32::try_from(x).ok())
                 .map(|x| x.get())
@@ -204,6 +216,7 @@ impl SlabNodeMetadataCompact {
             state_type_and_size: StateTypeSize::none(),
             ctime: 0,
             mtime: 0,
+            allocated_size: 0,
         }
     }
 

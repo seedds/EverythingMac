@@ -13,6 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(root.join("docs/alpha.md"), b"B")?;
     fs::write(root.join("docs/résumé.txt"), b"unicode")?;
     fs::write(root.join("missing.txt"), b"removed after snapshot")?;
+    fs::File::create(root.join("sparse.raw"))?.set_len(1 << 30)?;
     SearchCache::walk_fs(&root).flush_to_file(&root.join("snapshot.db"))?;
     fs::remove_file(root.join("missing.txt"))?;
     println!("{}", root.join("snapshot.db").display());

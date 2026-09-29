@@ -53,7 +53,7 @@ extension Model {
         self.processedEventCount = Int(clamping: reply.processed_events ?? 0)
         self.indexStatus = "\(reply.total ?? 0) indexed · \(reply.processed_events ?? 0) events"
         if reply.metadata_indexing == true {
-          self.indexStatus += " · Indexing file dates…"
+          self.indexStatus += " · Indexing file sizes and dates…"
         } else if !self.live {
           self.indexStatus += " · Live updates paused"
         }

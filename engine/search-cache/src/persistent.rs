@@ -12,7 +12,7 @@ use std::{
 use tracing::info;
 use typed_num::Num;
 
-const LSF_VERSION: i64 = 6;
+const LSF_VERSION: i64 = 7;
 
 #[derive(Serialize, Deserialize)]
 pub struct PersistentStorage {
@@ -71,4 +71,29 @@ pub fn write_cache_to_file(path: &Path, storage: &PersistentStorage) -> Result<(
             / 1024.
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SearchCache;
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn allocated_and_logical_sizes_round_trip_in_fresh_snapshot() {
+        let temp = tempdir::TempDir::new("allocated-size").unwrap();
+        let sparse = temp.path().join("sparse.raw");
+        File::create(&sparse).unwrap().set_len(1 << 30).unwrap();
+        let actual = fs::symlink_metadata(&sparse).unwrap().blocks() * 512;
+        assert!(actual < 1 << 30);
+        let mut cache = SearchCache::walk_fs(temp.path());
+        let id = cache.node_index_for_path(&sparse).unwrap();
+        cache.expand_file_nodes(&[id]);
+        let path = temp.path().join("snapshot.db");
+        cache.flush_snapshot_to_file(&path).unwrap();
+        let storage = read_cache_from_file(&path).unwrap();
+        let metadata = storage.slab[id].metadata.as_ref().unwrap();
+        assert_eq!(metadata.size(), 1 << 30);
+        assert_eq!(metadata.allocated_size(), actual as i64);
+    }
 }

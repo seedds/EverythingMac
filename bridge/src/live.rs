@@ -535,8 +535,22 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
         // Remap only after a new search or filesystem update. Repeated actions on
         // unchanged rows read only the selected positions, even in a broad query.
         if state.selection_generation != Some(generation) {
+            // Validate only retained selections. Rebuilding and hashing the path
+            // of every result made one selected row stall broad live searches.
+            // IDs alone are insufficient: deleted slots can be reused.
+            let selected: std::collections::HashMap<_, _> = state
+                .selection_nodes
+                .iter()
+                .filter_map(|id| {
+                    let identity = path_identity(&state.cache.node_path(*id)?);
+                    state
+                        .selection
+                        .contains(&identity)
+                        .then_some((*id, identity))
+                })
+                .collect();
             let mut surviving = std::collections::HashSet::new();
-            state.selection_positions = if state.selection.is_empty() {
+            state.selection_positions = if selected.is_empty() {
                 vec![]
             } else {
                 state
@@ -544,19 +558,9 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
                     .iter()
                     .enumerate()
                     .filter_map(|(i, id)| {
-                        state
-                            .cache
-                            .node_path(*id)
-                            .filter(|path| {
-                                let identity = path_identity(path);
-                                if state.selection.contains(&identity) {
-                                    surviving.insert(identity);
-                                    true
-                                } else {
-                                    false
-                                }
-                            })
-                            .map(|_| i)
+                        let identity = selected.get(id)?;
+                        surviving.insert(*identity);
+                        Some(i)
                     })
                     .collect()
             };

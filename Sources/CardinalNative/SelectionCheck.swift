@@ -16,6 +16,9 @@ final class SelectionCheck {
   var observedCountGaps = 0
   var watchedSamples = 0
   var selectedPath = ""
+  let pasteboard = NSPasteboard.withUniqueName()
+  lazy var copyActions = FileActions(model, pasteboard: pasteboard)
+  var copyChecks: [String] = []
 
   init(model: Model, window: NSWindow, output: String) {
     self.model = model
@@ -69,9 +72,16 @@ final class SelectionCheck {
       guard let row = model.rows.values.first(where: { $0.path == selectedPath }) else { return }
       window?.makeFirstResponder(table)
       table.selectRowIndexes(IndexSet(integer: row.index), byExtendingSelection: false)
+      // The real selection callback cannot finish until this main-thread turn
+      // returns. Copy must wait for it, without asking the user to retry.
+      copyActions.perform("copy")
+      if let error = model.error { finish("Immediate copy failed: \(error)"); return }
       stage = 1
     } else if stage == 1 {
       guard model.selectionCount == 1 else { return }
+      guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+        urls.map(\.path) == [selectedPath] else { return }
+      copyChecks.append("Copy waits for selection and writes the selected file URL")
       mutate()
     } else if stage == 2 && model.displayedGeneration != generation {
       guard table.selectedRowIndexes.count == 1,
@@ -90,10 +100,14 @@ final class SelectionCheck {
         selectedPath = other.path
         model.submit(background: true)
         table.selectRowIndexes(IndexSet(integer: other.index), byExtendingSelection: false)
+        copyActions.perform("copy")
       } else { mutate() }
     } else if stage == 4 && model.displayedGeneration != generation {
       guard model.selectedPaths == [selectedPath], model.rows[table.selectedRow]?.path == selectedPath
       else { finish("Background refresh replaced the user's newer selection"); return }
+      guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+        urls.map(\.path) == [selectedPath] else { return }
+      copyChecks.append("Copy during background refresh targets the new selection")
       cycle += 1
       generation = model.displayedGeneration
       stage = 3
@@ -124,8 +138,48 @@ final class SelectionCheck {
         finish("Background refresh resurrected a cleared selection"); return
       }
       cycle += 1
-      finish(observedGaps == 0 && observedCountGaps == 0 ? nil
-        : "Selection flickered: \(observedGaps) highlight gaps, \(observedCountGaps) count gaps")
+      pasteboard.clearContents()
+      pasteboard.setString("unchanged", forType: .string)
+      table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+      copyActions.perform("copy")
+      table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+      stage = 8
+    } else if stage == 8 {
+      stage = 9
+      model.resolveSelection { [weak self] _ in
+        guard let self = self else { return }
+        guard self.pasteboard.string(forType: .string) == "unchanged" else {
+          self.finish("A pending copy followed a replacement selection"); return
+        }
+        self.copyChecks.append("Changing selection cancels a pending copy")
+        self.model.error = "Selection is loading; try again."
+        self.copyActions.perform("paths")
+      }
+    } else if stage == 9 {
+      guard pasteboard.string(forType: .string) == model.selectedPaths.joined(separator: "\n")
+      else { return }
+      copyChecks.append("Copy Paths clears the old loading error")
+      pasteboard.clearContents()
+      pasteboard.setString("unchanged", forType: .string)
+      table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+      copyActions.perform("names")
+      generation = model.displayedGeneration
+      model.submit()
+      stage = 10
+    } else if stage == 10 && model.displayedGeneration != generation {
+      // Drain an engine/main callback after the new search and selection settle.
+      stage = 11
+      model.engine.perform({ _ in
+        try JSONDecoder().decode(Reply.self, from: Data("{\"status\":\"ok\"}".utf8))
+      }) { [weak self] _ in
+        guard let self = self else { return }
+        guard self.pasteboard.string(forType: .string) == "unchanged" else {
+          self.finish("A pending copy survived a new search"); return
+        }
+        self.copyChecks.append("A new search cancels a pending copy")
+        self.finish(self.observedGaps == 0 && self.observedCountGaps == 0 ? nil
+          : "Selection flickered: \(self.observedGaps) highlight gaps, \(self.observedCountGaps) count gaps")
+      }
     }
   }
 
@@ -149,10 +203,12 @@ final class SelectionCheck {
   func finish(_ error: String?) {
     timer?.invalidate()
     timer = nil
+    pasteboard.releaseGlobally()
     let report: [String: Any] = [
       "completedUpdates": cycle, "observedSelectionGaps": observedGaps,
       "observedSelectionCountGaps": observedCountGaps,
       "watchedSamples": watchedSamples, "error": error as Any? ?? NSNull(),
+      "copyChecks": copyChecks,
     ]
     do {
       try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])

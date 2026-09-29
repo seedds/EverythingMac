@@ -273,6 +273,7 @@ pub unsafe extern "C" fn cn_rows(
                 let metadata = node.metadata.as_ref();
                 json!({"index":start+offset, "id":id.get(), "path":node.path.to_string_lossy(),
                 "size":metadata.as_ref().map(|m| m.size()),
+                "allocated_size":metadata.as_ref().map(|m| m.allocated_size()),
                 "modified":metadata.as_ref().and_then(|m| m.mtime()).map(|v| v.get()),
                 "created":metadata.as_ref().and_then(|m| m.ctime()).map(|v| v.get()),
                 "metadata_loaded":!node.metadata.is_none(),
@@ -373,6 +374,71 @@ mod tests {
             assert_eq!(cached["rows"][0]["metadata_loaded"], true);
             cn_engine_close(engine);
         }
+    }
+
+    #[test]
+    fn disk_size_rows_and_sort_use_allocation_while_size_queries_stay_logical() {
+        use std::os::unix::fs::MetadataExt;
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let sparse = temp.path().join("sparse.raw");
+        let regular = temp.path().join("regular.bin");
+        fs::File::create(&sparse).unwrap().set_len(1 << 30).unwrap();
+        fs::write(&regular, vec![1u8; 65536]).unwrap();
+        let actual = fs::symlink_metadata(&sparse).unwrap().blocks() * 512;
+        assert!(actual < fs::symlink_metadata(&regular).unwrap().blocks() * 512);
+        let mut cache = SearchCache::walk_fs(temp.path());
+        let sparse_id = cache.node_index_for_path(&sparse).unwrap();
+        let regular_id = cache.node_index_for_path(&regular).unwrap();
+        cache.expand_file_nodes(&[sparse_id, regular_id]);
+        assert_eq!(
+            cache
+                .search_query_with_options(
+                    SearchQuery {
+                        query: Some("size:>100mb".into()),
+                        directory_query: None
+                    },
+                    SearchOptions {
+                        case_insensitive: true
+                    },
+                    CancellationToken::noop()
+                )
+                .unwrap()
+                .nodes
+                .unwrap(),
+            vec![sparse_id]
+        );
+        let mut state = State::new(cache, temp.path().into());
+        state.results = vec![regular_id, sparse_id];
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        unsafe {
+            let rows = reply(cn_rows(&mut engine, 0, 0, 10));
+            assert_eq!(rows["rows"][1]["size"], 1 << 30);
+            assert_eq!(rows["rows"][1]["allocated_size"], actual);
+            assert_eq!(rows["rows"][1]["metadata_loaded"], true);
+        }
+        let mut state = engine.0.lock().unwrap();
+        let mut ids = state.results.clone();
+        state
+            .cache
+            .sort_results(
+                &mut ids,
+                sort::SortKeyPayload::Size.into(),
+                false,
+                CancellationToken::noop(),
+            )
+            .unwrap();
+        assert_eq!(ids, vec![sparse_id, regular_id]);
+        state
+            .cache
+            .sort_results(
+                &mut ids,
+                sort::SortKeyPayload::Size.into(),
+                true,
+                CancellationToken::noop(),
+            )
+            .unwrap();
+        assert_eq!(ids, vec![regular_id, sparse_id]);
     }
 
     unsafe fn reply(buffer: Buffer) -> Value {
@@ -639,6 +705,109 @@ mod tests {
             }
             assert!(start.elapsed() < std::time::Duration::from_secs(2));
             std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn selection_remap_tracks_ids_but_rejects_reused_nodes() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.txt");
+        let b = tmp.path().join("b.txt");
+        fs::write(&a, b"a").unwrap();
+        fs::write(&b, b"b").unwrap();
+        let cache = SearchCache::walk_fs(tmp.path());
+        let a_id = cache.node_index_for_path(&a).unwrap();
+        let b_id = cache.node_index_for_path(&b).unwrap();
+        let mut state = State::new(cache, tmp.path().to_owned());
+        state.results = vec![a_id, b_id];
+        state.generation = 1;
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        let ranges = CString::new("[[0,1]]").unwrap();
+        let cached = CString::new("null").unwrap();
+        unsafe {
+            assert_eq!(
+                reply(live::cn_select(
+                    &mut engine,
+                    1,
+                    ranges.as_ptr(),
+                    cached.as_ptr()
+                ))["selection_count"],
+                1
+            );
+            {
+                let mut state = engine.0.lock().unwrap();
+                state.results.reverse();
+                state.generation = 2;
+            }
+            let restored = reply(live::cn_selected(&mut engine, 2, true));
+            assert_eq!(restored["ranges"], json!([[1, 2]]));
+            assert_eq!(restored["paths"], json!([a]));
+            {
+                let mut state = engine.0.lock().unwrap();
+                // Simulate a retained slot now referring to an unselected file.
+                state.selection_nodes = vec![b_id];
+                state.generation = 3;
+            }
+            let restored = reply(live::cn_selected(&mut engine, 3, true));
+            assert_eq!(restored["selection_count"], 0);
+            assert_eq!(restored["ranges"], json!([]));
+            assert_eq!(
+                reply(live::cn_selection_paths(&mut engine))["paths"],
+                json!([])
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "set CARDINAL_SELECTION_INDEX to a read-only snapshot for timing"]
+    fn selection_refresh_probe() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let path = CString::new(std::env::var("CARDINAL_SELECTION_INDEX").unwrap()).unwrap();
+        let empty = CString::new("").unwrap();
+        let ranges = CString::new("[[0,1]]").unwrap();
+        let cached = CString::new("null").unwrap();
+        unsafe {
+            let mut engine = ptr::null_mut();
+            assert_eq!(
+                reply(cn_engine_open(path.as_ptr(), &mut engine))["status"],
+                "ok"
+            );
+            for generation in 1..=6 {
+                let request = cn_request_new();
+                let result = reply(cn_search(
+                    engine,
+                    request,
+                    generation,
+                    empty.as_ptr(),
+                    empty.as_ptr(),
+                    false,
+                ));
+                cn_request_free(request);
+                assert_eq!(result["status"], "ok");
+                if generation == 1 {
+                    assert_eq!(
+                        reply(live::cn_select(
+                            engine,
+                            generation,
+                            ranges.as_ptr(),
+                            cached.as_ptr()
+                        ))["selection_count"],
+                        1
+                    );
+                } else {
+                    let start = Instant::now();
+                    let selected = reply(live::cn_selected(engine, generation, false));
+                    let elapsed = start.elapsed();
+                    assert_eq!(selected["selection_count"], 1);
+                    println!(
+                        "results={}, selection_refresh_ms={:.3}",
+                        result["total"],
+                        elapsed.as_secs_f64() * 1000.0
+                    );
+                }
+            }
+            cn_engine_close(engine);
         }
     }
 

@@ -35,7 +35,7 @@ impl From<SortKeyPayload> for search_cache::SortColumn {
         match key {
             SortKeyPayload::Filename => Self::Filename,
             SortKeyPayload::FullPath => Self::FullPath,
-            SortKeyPayload::Size => Self::Size,
+            SortKeyPayload::Size => Self::AllocatedSize,
             SortKeyPayload::Mtime => Self::Mtime,
             SortKeyPayload::Ctime => Self::Ctime,
         }
@@ -88,7 +88,7 @@ mod reference {
             return i64::MIN;
         };
         match key {
-            SortKeyPayload::Size => meta_ref.size(),
+            SortKeyPayload::Size => meta_ref.allocated_size(),
             SortKeyPayload::Mtime => meta_ref
                 .mtime()
                 .map(|value| value.get() as i64)
@@ -159,6 +159,7 @@ mod reference {
             SlabNodeMetadataCompact::some(NodeMetadata {
                 r#type,
                 size,
+                allocated_size: size,
                 ctime: None,
                 mtime: None,
             })
@@ -232,6 +233,7 @@ mod reference {
                             NodeFileType::File
                         },
                         size: (i % 11) as u64,
+                        allocated_size: (i % 17) as u64 * 4096,
                         mtime: std::num::NonZeroU64::new((i % 13) as u64),
                         ctime: std::num::NonZeroU64::new((i % 7) as u64),
                     })
@@ -334,6 +336,7 @@ mod reference {
                             SlabNodeMetadataCompact::some(NodeMetadata {
                                 r#type: NodeFileType::File,
                                 size: 1,
+                                allocated_size: 4096,
                                 mtime: std::num::NonZeroU64::new(modified),
                                 ctime: std::num::NonZeroU64::new(created),
                             }),

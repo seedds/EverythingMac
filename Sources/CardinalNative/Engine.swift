@@ -7,6 +7,7 @@ struct Row: Decodable {
   let id: UInt32
   let path: String
   let size: Int64?
+  let allocated_size: Int64?
   let modified: UInt32?
   let created: UInt32?
   let is_directory: Bool

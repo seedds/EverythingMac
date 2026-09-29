@@ -52,6 +52,11 @@ trap - EXIT
 APP="$PROTOTYPE_DIR/build/EverythingMac.app"
 if [[ "${1:-}" == "--build-only" ]]; then
   echo "$APP"
+elif [[ "$#" -eq 0 ]]; then
+  # Let Launch Services initialize the Dock icon for interactive launches.
+  # Direct executable launches can show the unstyled square artwork.
+  exec open -n -W "$APP"
 else
+  # Diagnostics need the executable's stdout and exit status.
   exec "$APP/Contents/MacOS/EverythingMac" "$@"
 fi

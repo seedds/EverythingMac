@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 // Runs against the disposable fixture produced by bridge/examples/fixture.rs.
 // Uses the real Model, engine queue and rendered table; failures are recorded.
@@ -94,6 +95,16 @@ final class SelfCheck {
       checks.append("Deleted file remains searchable with unavailable metadata")
     case 8:
       checks.append("Reopen after load failure; empty query renders snapshot")
+    case 9:
+      guard let row = model.rows[0], row.metadata_loaded else { return }
+      var info = stat()
+      guard model.total == 1, row.path.hasSuffix("sparse.raw"),
+        lstat(row.path, &info) == 0, row.size == 1 << 30,
+        row.allocated_size == Int64(info.st_blocks) * 512,
+        (row.allocated_size ?? Int64.max) < row.size! else {
+        finish("Sparse file size on disk does not match allocated blocks"); return
+      }
+      checks.append("Sparse file displays allocated bytes while retaining logical size")
       model.query = "alpha"
       model.submit()
       model.close()
@@ -118,6 +129,14 @@ final class SelfCheck {
       cell.textField?.stringValue == URL(fileURLWithPath: row.path).lastPathComponent,
       cell.toolTip == row.path
     else { return "Rendered filename belongs to an older query" }
+    if step == 9, row.metadata_loaded {
+      guard let column = table.tableColumns.firstIndex(where: { $0.identifier.rawValue == "Size" }),
+        table.tableColumns[column].title == "Size on disk",
+        let sizeCell = table.view(atColumn: column, row: 0, makeIfNecessary: false) as? NSTableCellView,
+        let bytes = row.allocated_size,
+        sizeCell.textField?.stringValue == ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+      else { return "Size on disk column does not render allocated bytes" }
+    }
     return nil
   }
   func next() {
@@ -149,6 +168,7 @@ final class SelfCheck {
       model.query = ""
       model.load()
       return
+    case 9: model.query = "sparse.raw"
     default:
       finish("Unknown test step")
       return

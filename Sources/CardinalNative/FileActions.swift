@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Darwin
 import Quartz
 
@@ -57,15 +58,40 @@ final class FileActions {
   let preview = PreviewController()
   let queue = DispatchQueue(label: "cardinal.native.file-actions", qos: .userInitiated)
   let trashItem: (URL) throws -> Void
+  let pasteboard: NSPasteboard
+  private var pendingCopy: AnyCancellable?
   init(_ model: Model, trashItem: @escaping (URL) throws -> Void = {
     try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
-  }) {
+  }, pasteboard: NSPasteboard = .general) {
     self.model = model
     self.trashItem = trashItem
+    self.pasteboard = pasteboard
     preview.navigate = { [weak model] in model?.tableAction?($0) }
   }
   func perform(_ action: String, paths explicitPaths: [String]? = nil) {
     guard let model = model else { return }
+    let copying = ["copy", "paths", "names"].contains(action)
+    if copying {
+      pendingCopy = nil
+      if model.error == "Selection is loading; try again." { model.error = nil }
+    }
+    if copying, explicitPaths == nil, model.selectionLoading {
+      let selection = model.selectionEpoch
+      let index = model.indexEpoch
+      let generation = model.generation
+      pendingCopy = model.$selectionLoading.filter { !$0 }.first()
+        // @Published emits before storage changes; resume on the next main turn.
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self, weak model] _ in
+          guard let self = self, let model = model else { return }
+          self.pendingCopy = nil
+          guard !model.closed, model.activeTab == "files",
+            model.selectionEpoch == selection, model.indexEpoch == index,
+            model.generation == generation else { return }
+          self.perform(action)
+        }
+      return
+    }
     guard explicitPaths != nil || !model.selectionLoading else {
       model.error = "Selection is loading; try again."
       return
@@ -96,11 +122,11 @@ final class FileActions {
         preview.show(paths)
       }
     case "copy":
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.writeObjects(urls as [NSURL])
+      pasteboard.clearContents()
+      pasteboard.writeObjects(urls as [NSURL])
     case "paths", "names":
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(
+      pasteboard.clearContents()
+      pasteboard.setString(
         action == "paths"
           ? paths.joined(separator: "\n") : urls.map(\.lastPathComponent).joined(separator: " "),
         forType: .string)

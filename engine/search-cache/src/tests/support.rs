@@ -14,6 +14,7 @@ pub(super) fn set_file_times(
     let metadata = NodeMetadata {
         r#type: NodeFileType::File,
         size: 0,
+        allocated_size: 0,
         ctime: NonZeroU64::new(created as u64),
         mtime: NonZeroU64::new(modified as u64),
     };

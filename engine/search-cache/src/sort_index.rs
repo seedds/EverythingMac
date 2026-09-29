@@ -14,18 +14,20 @@ pub enum SortColumn {
     Size,
     Mtime,
     Ctime,
+    AllocatedSize,
 }
-const COLUMNS: [SortColumn; 5] = [
+const COLUMNS: [SortColumn; 6] = [
     SortColumn::Filename,
     SortColumn::FullPath,
     SortColumn::Size,
     SortColumn::Mtime,
     SortColumn::Ctime,
+    SortColumn::AllocatedSize,
 ];
 
 #[derive(Default)]
 pub(crate) struct SortIndexes {
-    orders: [Option<Order>; 5],
+    orders: [Option<Order>; 6],
 }
 struct Order {
     ids: Vec<SlabIndex>,
@@ -237,6 +239,7 @@ fn numeric(node: &SlabNode, column: SortColumn) -> i64 {
     };
     match column {
         SortColumn::Size => meta.size(),
+        SortColumn::AllocatedSize => meta.allocated_size(),
         SortColumn::Mtime => meta.mtime().map(|v| i64::from(v.get())).unwrap_or(i64::MIN),
         SortColumn::Ctime => meta.ctime().map(|v| i64::from(v.get())).unwrap_or(i64::MIN),
         _ => 0,

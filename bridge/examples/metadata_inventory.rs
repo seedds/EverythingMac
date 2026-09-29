@@ -9,9 +9,37 @@ static STOP: AtomicBool = AtomicBool::new(false);
 fn main() {
     let path = std::env::args()
         .nth(1)
-        .expect("Usage: metadata_inventory INDEX");
+        .expect("Usage: metadata_inventory INDEX [FILE]");
     let storage = read_cache_from_file(Path::new(&path)).expect("read snapshot");
     let mut cache = SearchCache::from_persistent_storage(storage, &STOP);
+    if let Some(file) = std::env::args().nth(2) {
+        let Some(id) = cache.node_index_for_path(Path::new(&file)) else {
+            let ancestor = Path::new(&file)
+                .ancestors()
+                .find(|path| cache.node_index_for_path(path).is_some());
+            println!(
+                "{}",
+                json!({"path":file, "indexed":false,
+                "nearest_indexed_ancestor":ancestor,
+                "indexed_entries":cache.get_total_files(),
+                "pending_metadata":cache.pending_metadata_ids().len()})
+            );
+            return;
+        };
+        let nodes = cache.expand_cached_file_nodes(&[id]);
+        let metadata = nodes[0].metadata.as_ref();
+        println!(
+            "{}",
+            json!({
+                "path": file,
+                "indexed_entries": cache.get_total_files(),
+                "pending_metadata": cache.pending_metadata_ids().len(),
+                "logical_bytes": metadata.as_ref().map(|m| m.size()),
+                "allocated_bytes": metadata.as_ref().map(|m| m.allocated_size()),
+            })
+        );
+        return;
+    }
     let mut inventory = Vec::new();
     for query in ["cardinal", ".swift", ".js", ".py", "a", ""] {
         let ids = cache

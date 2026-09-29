@@ -74,7 +74,7 @@ struct ResultsTable: NSViewRepresentable {
       ("Name", 260.0), ("Path", 450.0), ("Size", 100.0), ("Modified", 155.0), ("Created", 155.0),
     ] {
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(name))
-      column.title = name == "Name" ? "Filename" : name
+      column.title = name == "Name" ? "Filename" : name == "Size" ? "Size on disk" : name
       column.width = model.prefs.tableColumns[name] ?? width
       table.addTableColumn(column)
     }
@@ -219,7 +219,7 @@ struct ResultsTable: NSViewRepresentable {
         cell.textField?.stringValue =
           item.is_directory
           ? "—"
-          : item.size.map {
+          : item.allocated_size.map {
             ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
           } ?? "—"
       default:

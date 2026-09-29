@@ -23,6 +23,7 @@ pub struct Node {
 pub struct NodeMetadata {
     pub r#type: NodeFileType,
     pub size: u64,
+    pub allocated_size: u64,
     pub ctime: Option<NonZeroU64>,
     pub mtime: Option<NonZeroU64>,
 }
@@ -37,6 +38,7 @@ impl NodeMetadata {
     fn new(metadata: &Metadata) -> Self {
         let r#type = metadata.file_type().into();
         let size = metadata.size();
+        let allocated_size = metadata.blocks().saturating_mul(512);
         let ctime = metadata
             .created()
             .ok()
@@ -50,6 +52,7 @@ impl NodeMetadata {
         Self {
             r#type,
             size,
+            allocated_size,
             ctime,
             mtime,
         }
