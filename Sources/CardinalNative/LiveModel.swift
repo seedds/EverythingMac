@@ -125,7 +125,8 @@ extension Model {
     let scanRoot = useCurrentConfig && !root.isEmpty ? root : Preferences.normalized(prefs.root)
     let ignores = useCurrentConfig ? loadedIgnores : Preferences.paths(prefs.ignores)
     let includes = useCurrentConfig ? loadedIncludes : Preferences.paths(prefs.includes)
-    engine.scan(root: scanRoot, ignores: ignores, includes: includes, progress: { [weak self] count in
+    let patterns = useCurrentConfig ? loadedPatterns : prefs.patternLines
+    engine.scan(root: scanRoot, ignores: ignores, includes: includes, patterns: patterns, progress: { [weak self] count in
       guard let self = self, !self.closed, self.indexEpoch == epoch, self.scanning else { return }
       self.indexedCount = count
       self.indexStatus = "Scanning… \(count) entries found"
@@ -146,11 +147,13 @@ extension Model {
         self.root = reply.root ?? scanRoot
         self.loadedIgnores = reply.ignores ?? ignores
         self.loadedIncludes = reply.includes ?? includes
+        self.loadedPatterns = reply.exclusion_patterns ?? patterns
         if !useCurrentConfig {
           self.prefs.root = self.root
           self.prefs.ignores = self.loadedIgnores.filter { $0 != "/System/Volumes/Data" }.joined(
             separator: "\n")
           self.prefs.includes = self.loadedIncludes.joined(separator: "\n")
+          self.prefs.patterns = self.loadedPatterns.joined(separator: "\n")
           do { try self.prefs.save() } catch { self.error = error.localizedDescription }
         }
         self.ready = true
@@ -188,11 +191,17 @@ extension Model {
       } catch { self.error = error.localizedDescription }
     }
   }
+  func savePreferences(_ draft: Preferences) throws {
+    guard !scanning else { throw messageError("Finish or cancel the current scan before saving preferences.") }
+    try prefs.commit(draft)
+    applyPreferences()
+  }
   func applyPreferences() {
     guard !snapshotOnly else { return }
     let ignores = Set(Preferences.paths(prefs.ignores) + ["/System/Volumes/Data"])
     if root != Preferences.normalized(prefs.root) || ignores != Set(loadedIgnores)
       || Set(Preferences.paths(prefs.includes)) != Set(loadedIncludes)
+      || prefs.patternLines != loadedPatterns
     {
       scan()
     } else {
@@ -298,31 +307,22 @@ extension Model {
     root != Preferences.normalized(prefs.root)
       || Set(loadedIgnores) != Set(Preferences.paths(prefs.ignores) + ["/System/Volumes/Data"])
       || Set(loadedIncludes) != Set(Preferences.paths(prefs.includes))
-  }
-  func historyEdited() {
-    let tail = history.last ?? ""
-    if historyCursor != history.count - 1 || (!tail.isEmpty && query.isEmpty)
-      || (!tail.isEmpty && !query.isEmpty && tail.first != query.first)
-    {
-      history.append(query)
-    } else {
-      history[history.count - 1] = query
-    }
-    if history.count > 50 { history.removeFirst() }
-    historyCursor = history.count - 1
+      || loadedPatterns != prefs.patternLines
   }
   func rememberQuery() {
-    if history.last != query { history.append(query) }
-    if history.count > 50 { history.removeFirst() }
-    historyCursor = history.count - 1
+    let state = currentSearchState
+    dismissSuggestions()
+    historyRecordWork?.cancel()
+    suppressedHistoryState = nil
+    recordRequestedState = state
+    if successfulSearchState == state { library.record(state) }
+    else { recordRequestedState = state }
   }
   func navigateHistory(_ delta: Int) {
-    historyCursor = min(max(0, historyCursor + delta), history.count - 1)
-    let value = history[historyCursor]
-    if query != value {
-      navigatingHistory = true
-      query = value
-    }
+    if navigationHistory.isEmpty { navigationHistory = library.recent.map(\.state) }
+    guard !navigationHistory.isEmpty else { return }
+    historyCursor = min(max(0, historyCursor + (delta < 0 ? 1 : -1)), navigationHistory.count - 1)
+    restoreSearch(navigationHistory[historyCursor])
   }
   func enableLive() {
     guard ready else { return }
@@ -331,6 +331,7 @@ extension Model {
     prefs.root = root
     prefs.ignores = loadedIgnores.joined(separator: "\n")
     prefs.includes = loadedIncludes.joined(separator: "\n")
+    prefs.patterns = loadedPatterns.joined(separator: "\n")
     do { try prefs.save() } catch { self.error = error.localizedDescription }
     setLive()
     startTimer()

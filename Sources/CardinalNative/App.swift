@@ -24,7 +24,7 @@ struct ContentView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      searchBar.padding(10)
+      searchBar.padding(10).zIndex(2)
       notices
       if model.activeTab == "files" {
         ResultsTable(model: model).overlay(alignment: .center) {
@@ -48,9 +48,12 @@ struct ContentView: View {
       model.focusSearch = { searchFocused = true }
       searchFocused = true
     }
+    .onChange(of: searchFocused) { model.searchFieldFocused = $0; if !$0 { model.dismissSuggestions() } }
+    .onReceive(model.library.$error) { if let error = $0 { model.error = error } }
     .onChange(of: model.query) { _ in model.changed() }
     .onChange(of: model.directory) { _ in model.changed() }
     .onChange(of: model.activeTab) { _ in
+      model.dismissSuggestions()
       model.restoredSelection = nil
       model.selectionChanged(IndexSet())
       model.actions.preview.hide()
@@ -96,9 +99,18 @@ struct ContentView: View {
       .padding(.horizontal, 10).frame(height: 32)
       .background(searchFieldBackground)
       .help("Enter: search · Down: results · Option-Up/Down: history")
+      .overlay(alignment: .topLeading) {
+        if model.activeTab == "files" && searchFocused && model.suggestionsVisible && !model.suggestions.isEmpty {
+          SearchSuggestionsView(model: model, library: model.library).offset(y: 36)
+        }
+      }
+      Button { model.dismissSuggestions(); model.libraryOpen.toggle() } label: {
+        Image(systemName: "clock.arrow.circlepath")
+      }.help("Search Library").accessibilityLabel("Search Library")
+        .popover(isPresented: $model.libraryOpen) { SearchLibraryView(model: model, library: model.library) }
       TextField("Folder scope…", text: $model.directory)
         .textFieldStyle(.plain).focused($directoryFocused)
-        .onSubmit { model.submit() }
+        .onSubmit { model.rememberQuery(); model.submit() }
         .padding(.horizontal, 10).frame(width: 215, height: 32)
         .background(searchFieldBackground)
         .disabled(model.activeTab != "files")
@@ -305,10 +317,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var benchmark: Benchmark?
   var scrollCheck: ScrollCheck?
   var selectionCheck: SelectionCheck?
+  var featureCheck: FeatureCheck?
   var selfCheck: SelfCheck?
   var liveCheck: LiveCheck?
+  var helpWindow: NSWindow?
   var statusItem: NSStatusItem?
-  var hotKey: EventHotKeyRef?
+  let shortcutManager = ActivationShortcutManager()
   var handler: EventHandlerRef?
   var monitor: Any?
   var instanceLock: Int32 = -1
@@ -321,7 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let isolated =
       args.contains("--benchmark") || args.contains("--self-check") || args.contains("--snapshot")
       || args.contains("--live-check") || args.contains("--scroll-check")
-      || args.contains("--selection-check")
+      || args.contains("--selection-check") || args.contains("--feature-check")
     let prefs = Preferences(isolated: isolated)
     model = Model(prefs: prefs)
     model.snapshotOnly = isolated
@@ -364,6 +378,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     window.makeKeyAndOrderFront(nil)
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
+    prefs.applyShortcut = { [weak self] shortcut in
+      guard let self = self, !self.model.snapshotOnly else { return }
+      try self.shortcutManager.apply(shortcut)
+      self.model.shortcutMessage = nil
+    }
     prefs.onApply = { [weak self] in
       self?.configureMenu()
       self?.configureTray()
@@ -375,6 +394,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       return self.key(event)
     }
     if !isolated { registerShortcut() }
+    if let index = args.firstIndex(of: "--feature-check"), args.indices.contains(index + 1) {
+      featureCheck = FeatureCheck(model: model, window: window, output: args[index + 1])
+      featureCheck?.start()
+      return
+    }
     if let index = args.firstIndex(of: "--benchmark"), args.indices.contains(index + 1) {
       benchmark = Benchmark(model: model, window: window, output: args[index + 1])
       benchmark?.start()
@@ -449,11 +473,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
     NSApp.windowsMenu = windows
     let help = submenu("Help")
+    let reference = help.addItem(withTitle: "Search & Shortcuts", action: #selector(showSearchHelp), keyEquivalent: "/")
+    reference.target = self
     let updates = help.addItem(
       withTitle: "Get Updates", action: #selector(showUpdates),
       keyEquivalent: "")
     updates.target = self
     NSApp.mainMenu = menu
+  }
+  @objc func showSearchHelp() {
+    model.dismissSuggestions()
+    if helpWindow == nil {
+      let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 600),
+        styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+      panel.title = "Search & Shortcuts"
+      panel.isReleasedWhenClosed = false
+      panel.contentView = NSHostingView(rootView: SearchHelpView(prefs: model.prefs) { [weak self] example in
+        guard let self = self else { return }
+        self.helpWindow?.orderOut(nil)
+        self.showWindow()
+        self.model.restoreSearch(SearchState(query: example, directory: "", sensitive: self.model.sensitive))
+      })
+      panel.center(); helpWindow = panel
+    }
+    helpWindow?.makeKeyAndOrderFront(nil)
   }
   @objc func showPreferences() { model.preferencesOpen = true }
   @objc func showUpdates() {
@@ -495,17 +538,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       { _, _, context in
         guard let context = context else { return OSStatus(eventNotHandledErr) }
         let delegate = Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue()
-        DispatchQueue.main.async { delegate.toggleWindow() }
+        DispatchQueue.main.async {
+          if !delegate.model.recordingShortcut { delegate.toggleWindow() }
+        }
         return noErr
       }, 1, &type, Unmanaged.passUnretained(self).toOpaque(), &handler)
-    let result = RegisterEventHotKey(
-      UInt32(kVK_Space), UInt32(cmdKey | shiftKey), EventHotKeyID(signature: 0x4341_5244, id: 1),
-      GetApplicationEventTarget(), 0, &hotKey)
-    if result != noErr {
-      model.shortcutMessage =
-        "Command-Shift-Space is already in use. Quit the other EverythingMac or Cardinal app to use this shortcut here."
-    }
+    do { try shortcutManager.apply(model.prefs.shortcut) }
+    catch { model.shortcutMessage = error.localizedDescription }
   }
+
   func key(_ event: NSEvent) -> NSEvent? {
     guard window.isKeyWindow, !model.preferencesOpen else { return event }
     if event.modifierFlags.contains(.command),
@@ -514,6 +555,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       model.focusSearch?()
       return nil
     }
+    if model.handleSuggestionKey(event) { return nil }
+    if model.libraryOpen { return event }
     if event.keyCode == 53 {
       window.orderOut(nil)
       return nil
@@ -570,7 +613,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
   func applicationWillTerminate(_ notification: Notification) {
     if let monitor = monitor { NSEvent.removeMonitor(monitor) }
-    if let hotKey = hotKey { UnregisterEventHotKey(hotKey) }
+    try? shortcutManager.apply(nil)
     if let handler = handler { RemoveEventHandler(handler) }
     if instanceLock >= 0 { Darwin.close(instanceLock) }
   }

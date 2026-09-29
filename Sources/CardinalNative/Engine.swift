@@ -26,6 +26,7 @@ struct Reply: Decodable {
   let root: String?
   let ignores: [String]?
   let includes: [String]?
+  let exclusion_patterns: [String]?
   let changed: Bool?
   let needs_rescan: Bool?
   let metadata_indexing: Bool?
@@ -64,7 +65,7 @@ final class Engine {
     }
   }
   func scan(
-    root: String, ignores: [String], includes: [String],
+    root: String, ignores: [String], includes: [String], patterns: [String] = [],
     progress: @escaping (Int) -> Void = { _ in },
     completion: @escaping (Result<Reply, Error>) -> Void
   ) {
@@ -82,7 +83,9 @@ final class Engine {
         let reply = try root.withCString { r in
           try jsonString(ignores).withCString { i in
             try jsonString(includes).withCString { n in
-              try decode(cn_scan(r, i, n, request.pointer, &replacement))
+              try jsonString(patterns).withCString { p in
+                try decode(cn_scan(r, i, n, p, request.pointer, &replacement))
+              }
             }
           }
         }
@@ -194,6 +197,18 @@ final class Model: ObservableObject {
   lazy var actions = FileActions(self)
   @Published var hasFullDiskAccess = true
   @Published var shortcutMessage: String?
+  @Published var recordingShortcut = false
+  let library: SearchLibrary
+  @Published var libraryOpen = false
+  @Published var suggestionsVisible = false
+  @Published var suggestionIndex: Int?
+  var searchFieldFocused = true
+  var suppressedHistoryState: SearchState?
+  var observedSearchState: SearchState?
+  var successfulSearchState: SearchState?
+  var successfulSearchTicket: UInt64?
+  var recordRequestedState: SearchState?
+  var historyRecordWork: DispatchWorkItem?
   let prefs: Preferences
   @Published var live = false
   @Published var scanning = false
@@ -212,6 +227,7 @@ final class Model: ObservableObject {
   var root = ""
   var loadedIgnores: [String] = []
   var loadedIncludes: [String] = []
+  var loadedPatterns: [String] = []
   var timer: Timer?
   var polling = false
   var saving = false
@@ -225,15 +241,16 @@ final class Model: ObservableObject {
   var visibleStart = 0
   var tableAction: ((String) -> Void)?
   var focusSearch: (() -> Void)?
-  var history: [String] = [""]
-  var historyCursor = 0
-  var navigatingHistory = false
+  var historyCursor = -1
+  var navigationHistory: [SearchState] = []
   var closeCompletions: [(Error?) -> Void] = []
   var closeFinished = false
   init(prefs: Preferences = Preferences(isolated: true)) {
     self.prefs = prefs
+    library = SearchLibrary(url: prefs.isolated ? nil : prefs.storageURL.deletingLastPathComponent().appendingPathComponent("search-library.json"))
     sortKey = prefs.sortKey
     sortAscending = prefs.sortAscending
+    library.willRemoveHistory = { [weak self] state in self?.suppressHistoryRecording(state) }
   }
   var rows: [Int: Row] = [:]
   var highlights: [String] = []
@@ -288,6 +305,7 @@ final class Model: ObservableObject {
         self.root = reply.root ?? self.prefs.root
         self.loadedIgnores = reply.ignores ?? []
         self.loadedIncludes = reply.includes ?? []
+        self.loadedPatterns = reply.exclusion_patterns ?? []
         self.loadedMS = reply.load_ms ?? 0
         self.indexedCount = reply.total ?? 0
         self.processedEventCount = 0
@@ -312,7 +330,16 @@ final class Model: ObservableObject {
   }
 
   func changed() {
-    if navigatingHistory { navigatingHistory = false } else { historyEdited() }
+    guard observedSearchState != currentSearchState else { return }
+    observedSearchState = currentSearchState
+    historyRecordWork?.cancel()
+    successfulSearchState = nil
+    recordRequestedState = nil
+    suppressedHistoryState = nil
+    historyCursor = -1
+    navigationHistory = []
+    suggestionsVisible = activeTab == "files" && !query.isEmpty
+    suggestionIndex = nil
     inputAt = ProcessInfo.processInfo.systemUptime
     debounceWork?.cancel()
     // Editing while opening an index must not invalidate the load reply.
@@ -332,6 +359,7 @@ final class Model: ObservableObject {
     debounceWork = nil
     generation &+= 1
     let ticket = generation
+    let submittedState = currentSearchState
     searching = true
     error = nil
     pendingDraw = nil
@@ -348,6 +376,7 @@ final class Model: ObservableObject {
       switch result {
       case .success(let (reply, rows, _)):
         guard reply.status == "ok" else { self.searching = false; return }
+        if !background { self.recordSuccessfulSearch(submittedState, ticket: ticket) }
         self.finishSearch(reply, rows: rows, ticket: ticket, background: background)
       case .failure(let error):
         self.searching = false
@@ -475,6 +504,12 @@ final class Model: ObservableObject {
     timer = nil
     debounceWork?.cancel()
     generation &+= 1
+    historyRecordWork?.cancel()
+    let library = self.library
+    engine.queue.async {
+      do { try library.flush() }
+      catch { DispatchQueue.main.async { library.error = error.localizedDescription } }
+    }
     engine.close(save: !snapshotOnly && ready && !scanning) { [weak self] error in
       guard let self = self else { return }
       self.closeFinished = true

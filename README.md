@@ -138,6 +138,7 @@ For future UI changes:
 | Shortcut or interaction | Action |
 | --- | --- |
 | Command-F | Focus search. |
+| Command-/ | Open searchable Search & Shortcuts help. |
 | Enter in search | Submit immediately. |
 | Down from search | Enter the results. |
 | Up from the first result | Return to search. |
@@ -152,7 +153,7 @@ For future UI changes:
 | F2 | Rename without overwriting an existing file. |
 | F8 | Move selected files to macOS Trash. |
 | F9 | Open the selected folder, or a file’s parent, in the configured terminal. |
-| Command-Shift-Space | Toggle the app window, if the shortcut is available. |
+| Command-Shift-Space (default) | Toggle the app window. Record, disable, or reset the shortcut in Preferences. |
 | Escape / Close Window | Hide the window; live monitoring continues. |
 | Command-Q | Save the native checkpoint and quit. |
 
@@ -182,8 +183,8 @@ Read-only snapshot mode does not start background indexing.
 Sorting reuses compact ID orders for Name, Path, Size on disk, Modified, and Created.
 These orders are prepared when the index opens; small searches use integer ranks
 and broad searches filter an existing order. File events and metadata updates
-refresh affected entries. Snapshot format v7 stores logical and allocated sizes
-together; indexes from earlier formats must be rebuilt. Snapshot mode can display allocation through visible-row metadata reads,
+refresh affected entries. Snapshot format v8 stores exclusion patterns alongside logical and allocated sizes.
+Version 7 indexes remain readable and upgrade on the next checkpoint; older formats must be rebuilt. Snapshot mode can display allocation through visible-row metadata reads,
 but sorting uses only values already saved in the index. Sorting has no result-count limit or limit setting. See [the measured comparison](MAINTAINED-SORT-PERFORMANCE.md)
 for query latency, startup cost, and memory use.
 
@@ -215,6 +216,47 @@ and before quitting. Cancelling a scan retains the previous index. If macOS bloc
 a filesystem call, cancellation releases the native engine queue while at most one
 scan worker remains outstanding. Another scan must wait for that worker to finish.
 
+### Exclusion patterns
+
+Preferences has a separate **Exclude patterns** field, one rule per line:
+
+```text
+node_modules
+*.log
+**/build/**
+```
+
+Names match at any depth. Patterns containing `/` are relative to the monitor root:
+`build/**` excludes that root's build folder, while `**/build/**` excludes build folders
+at any depth. A trailing `/` matches directories only. `*`, `?`, `**`, character classes,
+and brace alternatives use glob syntax. Patterns are case-sensitive, prune matching
+directory trees, and still apply inside explicit Include paths. Absolute paths belong
+in Include/Ignore paths. No patterns are enabled by default.
+
+**Save and Rebuild** validates the rules and rebuilds the index. A cancelled or failed
+rebuild retains the previous index and its rules. Exclusions survive checkpoint reloads
+and apply to live filesystem updates.
+
+### Search library and help
+
+The **Search Library** button beside the search field opens named saved searches and
+recent history. A saved search restores its visible query, folder scope, and case
+sensitivity without changing the index root or sort order. Its menu provides rename,
+update-from-current, and delete actions.
+
+The latest 100 distinct successful searches are stored locally in `search-library.json`
+beside preferences. Enter, entering results, or two seconds without editing records a
+search; errors and background refreshes do not. Individual history entries can be removed,
+and Clear History preserves saved searches. Unreadable library files are preserved and
+reported rather than overwritten.
+
+Matching suggestions appear while typing. **Option-Down** enters suggestions, arrows
+navigate, Enter restores the selected search, and Escape dismisses the list. **Down**
+still enters results. With suggestions dismissed, Option-Up/Down navigates recent history.
+
+**Help → Search & Shortcuts** (Cmd-/) provides an offline searchable reference with
+copyable, runnable examples and the currently configured activation shortcut.
+
 ### Snapshot mode
 
 To search an index without monitoring the filesystem or writing an index:
@@ -238,8 +280,8 @@ EverythingMac needs its own filesystem permissions. For protected locations,
 enable it under **System Settings → Privacy & Security → Full Disk Access**, then
 relaunch. The app provides permission guidance and a link to System Settings.
 
-If Command-Shift-Space is already registered by another app, the native app reports
-the conflict. Quit the conflicting Cardinal instance to make the shortcut available.
+If the activation shortcut is already registered by another app, EverythingMac reports
+the conflict. Record an alternative in Preferences. A failed replacement keeps the working shortcut.
 
 ## Architecture and source map
 
@@ -282,6 +324,7 @@ Run from the repository root:
 cargo test --workspace
 cargo clippy --workspace --all-targets
 ./run.sh --live-check /tmp/cardinal-native-live-check.json
+./run.sh --feature-check /tmp/everything-feature-check.json
 ```
 
 The live check creates disposable fixtures and its own checkpoint. It exercises

@@ -7,6 +7,7 @@ use std::{
 
 #[derive(Debug)]
 pub struct FileNodes {
+    pub(crate) exclusions: fswalk::Exclusions,
     path: PathBuf,
     ignore_paths: Vec<PathBuf>,
     include_paths: Vec<PathBuf>,
@@ -23,6 +24,7 @@ impl FileNodes {
         root: SlabIndex,
     ) -> Self {
         Self {
+            exclusions: Default::default(),
             path,
             ignore_paths,
             include_paths,
@@ -85,6 +87,7 @@ impl FileNodes {
             include_paths,
             slab,
             root,
+            ..
         } = self;
         (path, ignore_paths, include_paths, root, slab)
     }

@@ -1,3 +1,5 @@
+mod exclusions;
+pub use exclusions::Exclusions;
 use rayon::{iter::ParallelBridge, prelude::ParallelIterator};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -119,6 +121,7 @@ pub fn should_ignore_path(
 }
 
 pub struct WalkData<'w, F: Fn() -> bool> {
+    pub exclusions: Exclusions,
     pub num_files: AtomicUsize,
     pub num_dirs: AtomicUsize,
     /// Cancellation will be checked periodically.
@@ -149,12 +152,13 @@ where
 }
 
 impl<'w> WalkData<'w, fn() -> bool> {
-    pub const fn simple(root_path: &'w Path, need_metadata: bool) -> Self {
+    pub fn simple(root_path: &'w Path, need_metadata: bool) -> Self {
         fn never_cancel() -> bool {
             false
         }
 
         Self {
+            exclusions: Exclusions::default(),
             num_files: AtomicUsize::new(0),
             num_dirs: AtomicUsize::new(0),
             cancel: never_cancel,
@@ -175,6 +179,7 @@ impl<'w, F: Fn() -> bool> WalkData<'w, F> {
         cancel: F,
     ) -> Self {
         Self {
+            exclusions: Exclusions::default(),
             num_files: AtomicUsize::new(0),
             num_dirs: AtomicUsize::new(0),
             cancel,
@@ -183,6 +188,11 @@ impl<'w, F: Fn() -> bool> WalkData<'w, F> {
             include_paths,
             need_metadata,
         }
+    }
+
+    pub fn with_exclusions(mut self, exclusions: Exclusions) -> Self {
+        self.exclusions = exclusions;
+        self
     }
 
     fn should_ignore(&self, path: &Path) -> bool {
@@ -271,6 +281,9 @@ fn walk<F: Fn() -> bool + Send + Sync>(path: &Path, walk_data: &WalkData<'_, F>)
                                 }
                                 // doesn't traverse symlink
                                 if let Ok(data) = entry.file_type() {
+                                    if walk_data.exclusions.is_excluded(&path, data.is_dir()) {
+                                        return None;
+                                    }
                                     if data.is_dir() {
                                         walk(&path, walk_data)
                                     } else {

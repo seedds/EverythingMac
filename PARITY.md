@@ -265,3 +265,33 @@ actual matches; header clicks above 20,000; and removal of an obsolete saved lim
 The focused `--tab-check` also covers a background refresh on the Events tab.
 The live harness waits for a Files-table draw only while Files is visible, avoiding
 a false timeout when hidden results have a pending draw and selection is already clear.
+
+
+## Search workflow features — 2026-09-29
+
+Added compiled name/glob exclusions across scans, live updates and checkpoints;
+index v8 writes with read-only v7 compatibility; a configurable global shortcut;
+persistent history and named search states; type-ahead suggestions; and searchable
+native search/shortcut help. Existing absolute include/ignore semantics are retained,
+with patterns applied afterward. Preferences uses a draft and cannot save during an
+active scan. Search-library failures preserve unreadable files.
+
+Validation on macOS 27 / Apple Silicon:
+
+- 49 native feature checks passed, including real shortcut registration, conflict
+  rollback, preference/library reloads, all help query examples, atomic restoration,
+  delayed history recording/deletion, and suggestion focus. Rendered Preferences,
+  Search Library, and Help views were inspected; main layout checked at 800 points.
+- 23 existing live UI checks and 11 saved-index checks passed. Selection checks completed seven updates and
+  five copy scenarios with zero selection or selection-count gaps.
+- Workspace Rust run: 1,803 passed, two FSEvents tests blocked by sandbox service
+  access. Both passed on the unrestricted SDK rerun (11/11). Five existing tests
+  remained ignored; the known system-wide `tests::test_search_cancel` hang was
+  excluded. Focused ordering, cloud placeholder, event recovery, exclusion lifecycle,
+  root-relative pruning, and v7 migration regressions passed.
+- Workspace Clippy, release build and ad-hoc signing passed. Packaging remains local;
+  no release was published. macOS 12 and Intel execution remain unverified.
+- Independent Standards and Spec reviews found five correctness issues, all fixed:
+  root-relative pruning, history deletion races, hidden suggestion keyboard handling,
+  folder-field Enter recording, and saving exclusions during an active scan. Both
+  final reviews reported no outstanding findings.

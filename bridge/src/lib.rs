@@ -120,6 +120,7 @@ pub unsafe extern "C" fn cn_engine_open(path: *const c_char, out: *mut *mut Engi
         let root = storage.path.clone();
         let ignores = storage.ignore_paths.clone();
         let includes = storage.include_paths.clone();
+        let patterns = storage.exclusion_patterns.clone();
         let cache = SearchCache::from_persistent_storage(storage, &STOP);
         let total = cache.get_total_files();
         let engine = Box::new(Engine(Arc::new(Mutex::new(State::new(
@@ -130,7 +131,7 @@ pub unsafe extern "C" fn cn_engine_open(path: *const c_char, out: *mut *mut Engi
             *out = Box::into_raw(engine);
         }
         Ok(
-            json!({"status":"ok", "total":total, "root":root, "ignores":ignores, "includes":includes, "load_ms":started.elapsed().as_secs_f64()*1000.0}),
+            json!({"status":"ok", "total":total, "root":root, "ignores":ignores, "includes":includes, "exclusion_patterns":patterns, "load_ms":started.elapsed().as_secs_f64()*1000.0}),
         )
     })
 }
@@ -1022,6 +1023,7 @@ mod tests {
                     croot.as_ptr(),
                     empty_array.as_ptr(),
                     empty_array.as_ptr(),
+                    empty_array.as_ptr(),
                     old,
                     &mut engine
                 ))["status"],
@@ -1033,6 +1035,7 @@ mod tests {
             assert_eq!(
                 reply(cn_scan(
                     croot.as_ptr(),
+                    empty_array.as_ptr(),
                     empty_array.as_ptr(),
                     empty_array.as_ptr(),
                     request,

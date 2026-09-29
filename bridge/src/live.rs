@@ -244,6 +244,7 @@ pub unsafe extern "C" fn cn_scan(
     root: *const c_char,
     ignores: *const c_char,
     includes: *const c_char,
+    patterns: *const c_char,
     request: *const Request,
     out: *mut *mut Engine,
 ) -> Buffer {
@@ -265,6 +266,9 @@ pub unsafe extern "C" fn cn_scan(
         if ignores.iter().chain(&includes).any(|p| !p.is_absolute()) {
             return Err("Include and ignore paths must be absolute".into());
         }
+        let patterns: Vec<String> =
+            serde_json::from_str(&unsafe { text(patterns)? }).map_err(|e| e.to_string())?;
+        fswalk::Exclusions::compile(&root, &patterns)?;
         let request = unsafe { request.as_ref() }.ok_or("Missing scan request")?;
         let token = request.0;
         let progress = request.1.clone();
@@ -289,10 +293,12 @@ pub unsafe extern "C" fn cn_scan(
                 .thread_name(|i| format!("cardinal-native-walk-{i}"))
                 .build()
                 .map_err(|e| e.to_string())?;
+            let exclusions = fswalk::Exclusions::compile(&root, &patterns)?;
             let cache = pool.install(|| {
                 let walk = WalkData::new(&root, &ignores, &includes, false, move || {
                     token.is_cancelled().is_none()
-                });
+                })
+                .with_exclusions(exclusions);
                 with_scan_progress(&walk, &progress, || {
                     SearchCache::walk_fs_with_walk_data(&walk, &STOP)
                 })
@@ -306,6 +312,7 @@ pub unsafe extern "C" fn cn_scan(
             return Ok(json!({"status":"cancelled"}));
         };
         let total = cache.get_total_files();
+        let patterns = cache.exclusion_patterns().to_vec();
         unsafe {
             *out = Box::into_raw(Box::new(Engine(Arc::new(Mutex::new(State::new(
                 cache,
@@ -313,7 +320,7 @@ pub unsafe extern "C" fn cn_scan(
             ))))));
         }
         Ok(
-            json!({"status":"ok", "root":root, "total":total, "ignores":ignores, "includes":includes,
+            json!({"status":"ok", "root":root, "total":total, "ignores":ignores, "includes":includes, "exclusion_patterns":patterns,
             "load_ms":start.elapsed().as_secs_f64()*1000.0}),
         )
     })
@@ -651,6 +658,19 @@ pub unsafe extern "C" fn cn_transfer_selection(from: *mut Engine, to: *mut Engin
             old.selection_positions.clear();
             old.selection_generation = None;
         }
+        Ok(json!({"status":"ok"}))
+    })
+}
+
+/// Validate patterns without starting a scan or touching the filesystem.
+/// # Safety
+/// Patterns must be a NUL-terminated UTF-8 JSON string array.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cn_validate_exclusions(patterns: *const c_char) -> Buffer {
+    guarded(|| {
+        let patterns: Vec<String> =
+            serde_json::from_str(&unsafe { text(patterns)? }).map_err(|e| e.to_string())?;
+        fswalk::Exclusions::compile(Path::new("/"), &patterns)?;
         Ok(json!({"status":"ok"}))
     })
 }

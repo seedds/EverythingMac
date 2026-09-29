@@ -142,6 +142,10 @@ impl std::fmt::Debug for SearchCache {
 }
 
 impl SearchCache {
+    pub fn exclusion_patterns(&self) -> &[String] {
+        self.file_nodes.exclusions.patterns()
+    }
+
     pub fn ignore_paths(&self) -> Box<[PathBuf]> {
         self.file_nodes.ignore_paths().clone().into_boxed_slice()
     }
@@ -207,6 +211,7 @@ impl SearchCache {
     ) -> Self {
         let PersistentStorage {
             version: _,
+            exclusion_patterns,
             path,
             ignore_paths,
             include_paths,
@@ -218,7 +223,10 @@ impl SearchCache {
         } = storage;
         // name pool construction speed is fast enough that caching it doesn't worth it.
         let name_index = NameIndex::construct_name_pool(name_index);
-        let slab = FileNodes::new(path, ignore_paths, include_paths, slab, slab_root);
+        let exclusions = fswalk::Exclusions::compile(&path, &exclusion_patterns)
+            .expect("validated snapshot patterns");
+        let mut slab = FileNodes::new(path, ignore_paths, include_paths, slab, slab_root);
+        slab.exclusions = exclusions;
         Self::new(slab, last_event_id, rescan_count, name_index, cancel)
     }
 
@@ -289,13 +297,14 @@ impl SearchCache {
 
         let last_event_id = current_event_id();
         let (slab_root, slab, name_index) = walkfs_to_slab(walk_data)?;
-        let slab = FileNodes::new(
+        let mut slab = FileNodes::new(
             walk_data.root_path.to_path_buf(),
             walk_data.ignore_directories.to_vec(),
             walk_data.include_paths.to_vec(),
             slab,
             slab_root,
         );
+        slab.exclusions = walk_data.exclusions.clone();
         // metadata cache inits later
         Some(Self::new(slab, last_event_id, 0, name_index, cancel))
     }
@@ -748,7 +757,13 @@ impl SearchCache {
             self.remove_node_path(path);
             return None;
         };
-        if self.should_ignore(path) {
+        if self.should_ignore(path)
+            || self
+                .file_nodes
+                .exclusions
+                .is_excluded(path, path.symlink_metadata().is_ok_and(|m| m.is_dir()))
+        {
+            self.remove_node_path(path);
             return None;
         }
         let parent = path.parent().expect(
@@ -771,7 +786,8 @@ impl SearchCache {
             self.file_nodes.include_paths(),
             true,
             || self.stop.load(Ordering::Relaxed),
-        );
+        )
+        .with_exclusions(self.file_nodes.exclusions.clone());
         walk_it_without_root_chain(&walk_data).map(|node| {
             let node = self.create_node_slab_update_name_index_and_name_pool(Some(parent), &node);
             // Push the newly created node to the parent's children
@@ -807,6 +823,7 @@ impl SearchCache {
         WalkData::new(phantom1, phantom2, phantom3, false, move || {
             stop.load(Ordering::Relaxed) || scan_cancellation_token.is_cancelled().is_none()
         })
+        .with_exclusions(self.file_nodes.exclusions.clone())
     }
 
     pub fn rescan_with_walk_data<F>(&mut self, walk_data: &WalkData<'_, F>) -> Option<()>
@@ -830,7 +847,8 @@ impl SearchCache {
                 self.file_nodes.include_paths(),
                 false,
                 || self.stop.load(Ordering::Relaxed),
-            ),
+            )
+            .with_exclusions(self.file_nodes.exclusions.clone()),
             self.stop,
         ) else {
             info!("Rescan cancelled.");
@@ -866,6 +884,7 @@ impl SearchCache {
 
         let storage = PersistentStorage {
             version: Num,
+            exclusion_patterns: self.exclusion_patterns().to_vec(),
             last_event_id: self.last_event_id,
             rescan_count: self.rescan_count,
             path: self.file_nodes.path().to_path_buf(),
@@ -895,12 +914,14 @@ impl SearchCache {
             skipped_cloud_files: _,
             ..
         } = self;
+        let exclusion_patterns = file_nodes.exclusions.patterns().to_vec();
         let (path, ignore_paths, include_paths, slab_root, slab) = file_nodes.into_parts();
         let name_index = name_index.into_persistent();
         write_cache_to_file(
             cache_path,
             &PersistentStorage {
                 version: Num,
+                exclusion_patterns,
                 path,
                 ignore_paths,
                 include_paths,

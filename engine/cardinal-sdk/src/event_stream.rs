@@ -212,6 +212,7 @@ fn filter_events_by_paths(
         .into_iter()
         .filter(|event| {
             event.flag.contains(EventFlag::HistoryDone)
+                || matches!(event.flag.scan_type(), crate::ScanType::ReScan)
                 || !fswalk::should_ignore_path(&event.path, ignore_paths, include_paths)
         })
         .collect()
