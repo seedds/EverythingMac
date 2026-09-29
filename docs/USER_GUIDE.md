@@ -13,7 +13,7 @@ results table, and a compact bottom status bar**.
 | --- | --- |
 | Main search field | Search filenames, or filter recent events when Events is selected. |
 | Folder scope field | Always visible to the right of the search field. Filters file results by folder; clear it to remove the filter. Disabled on the Events tab. |
-| Search Library button | Browse saved searches and recent history. |
+| Search Library button | Left of the search field, beside Aa; browse saved searches and recent history. |
 | Aa button | Left of the search field; toggles case-sensitive matching. |
 | Results table | Name, Path, Size on disk, Modified, and Created columns, with resizable widths and single-line middle truncation. |
 | Bottom status bar | Lifecycle state, Files/Events tabs and counts, rescan, preferences, selection count, and search duration. |

@@ -83,6 +83,10 @@ struct ContentView: View {
         .help("Case sensitive")
         .accessibilityLabel("Case sensitive")
         .accessibilityValue(model.sensitive ? "On" : "Off")
+      Button { model.libraryOpen.toggle() } label: {
+        Image(systemName: "clock.arrow.circlepath")
+      }.help("Search Library").accessibilityLabel("Search Library")
+        .popover(isPresented: $model.libraryOpen) { SearchLibraryView(model: model, library: model.library) }
       TextField(
         model.activeTab == "files" ? "Search for files and folders…" : "Filter events by path or name…",
         text: searchText
@@ -97,10 +101,6 @@ struct ContentView: View {
       .padding(.horizontal, 10).frame(height: 32)
       .background(searchFieldBackground)
       .help("Enter: search · Down: results · Option-Up/Down: history")
-      Button { model.libraryOpen.toggle() } label: {
-        Image(systemName: "clock.arrow.circlepath")
-      }.help("Search Library").accessibilityLabel("Search Library")
-        .popover(isPresented: $model.libraryOpen) { SearchLibraryView(model: model, library: model.library) }
       TextField("Folder scope…", text: $model.directory)
         .textFieldStyle(.plain).focused($directoryFocused)
         .onSubmit { model.rememberQuery(); model.submit() }
