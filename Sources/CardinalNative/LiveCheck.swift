@@ -1,7 +1,6 @@
 import AppKit
 import CNative
 import Quartz
-import SQLite3
 
 // Real native window + Rust + FSEvents integration. Owns only disposable files.
 final class LiveCheck {
@@ -251,8 +250,8 @@ final class LiveCheck {
           return
         }
         next("English-only bundle has no translation resources")
-        try checkMigration()
-        next("Read-only legacy preferences migration")
+        try checkPreferences()
+        next("Empty fresh preferences, saved settings, and restore defaults")
         model.actions.preview.update([])
         for i in 0..<1200 {
           try Data("preview".utf8).write(to: root.appendingPathComponent("preview-item-\(i).txt"))
@@ -357,32 +356,35 @@ final class LiveCheck {
       }
     }
   }
-  func checkMigration() throws {
-    let directory = self.directory.appendingPathComponent("legacy/LocalStorage")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let path = directory.appendingPathComponent("localstorage.sqlite3")
-    var db: OpaquePointer?
-    guard sqlite3_open(path.path, &db) == SQLITE_OK else {
-      throw messageError("Migration fixture database failed")
+  func checkPreferences() throws {
+    let file = directory.appendingPathComponent("fresh-preferences.json")
+    let prefs = Preferences(fileURL: file)
+    func checkEmpty(_ value: Preferences) throws {
+      guard value.includes.isEmpty, value.ignores.isEmpty, value.terminal.isEmpty else {
+        throw messageError("Fresh preferences should have empty folder filters and terminal")
+      }
     }
-    let values = [
-      "cardinal.watchRoot": root.path, "cardinal.theme": "dark", "cardinal.language": "zh-CN", "cardinal.sortThreshold": "4321",
-      "cardinal.ignorePaths": "[\"/tmp/ignored\"]",
-    ]
-    var sql = "CREATE TABLE ItemTable (key TEXT UNIQUE, value BLOB NOT NULL);"
-    for (key, value) in values {
-      let hex = value.data(using: .utf16LittleEndian)!.map { String(format: "%02x", $0) }.joined()
-      sql += "INSERT INTO ItemTable VALUES ('\(key)',X'\(hex)');"
+    try checkEmpty(prefs)
+    try prefs.validate()
+    try prefs.save()
+    try checkEmpty(Preferences(fileURL: file))
+    prefs.includes = root.path
+    prefs.ignores = "/tmp/ignored"
+    prefs.terminal = "/System/Applications/Utilities/Terminal.app"
+    try prefs.validate()
+    try prefs.save()
+    let reopened = Preferences(fileURL: file)
+    guard reopened.includes == prefs.includes, reopened.ignores == prefs.ignores,
+      reopened.terminal == prefs.terminal else {
+      throw messageError("Explicit user preferences did not survive reopening")
     }
-    let status = sqlite3_exec(db, sql, nil, nil, nil)
-    sqlite3_close(db)
-    guard status == SQLITE_OK else { throw messageError("Migration fixture insert failed") }
-    let before = try Data(contentsOf: path)
-    let prefs = Preferences(isolated: true)
-    prefs.importLegacy(directory: directory.path)
-    guard prefs.root == root.path, prefs.theme == "dark",
-      prefs.ignores == "/tmp/ignored", try Data(contentsOf: path) == before
-    else { throw messageError("Preference import mismatch or source write") }
+    reopened.restoreDefaults()
+    try reopened.validate()
+    try reopened.save()
+    try checkEmpty(Preferences(fileURL: file))
+    guard Model(prefs: Preferences(isolated: true)).snapshot == Preferences.index else {
+      throw messageError("Default index is not the app's own index")
+    }
   }
   func finish(_ error: String?) {
     timer?.invalidate()

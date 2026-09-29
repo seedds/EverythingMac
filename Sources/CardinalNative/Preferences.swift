@@ -1,6 +1,5 @@
 import AppKit
 import Darwin
-import SQLite3
 import SwiftUI
 
 final class Preferences: ObservableObject {
@@ -12,20 +11,14 @@ final class Preferences: ObservableObject {
   static let sortColumns = [
     "Name": "filename", "Path": "fullPath", "Size": "size", "Modified": "mtime", "Created": "ctime",
   ]
-  static let defaultIgnores = [
-    "/Volumes", "~/Library/CloudStorage", "~/Library/Biome", "~/Library/Caches", "~/Library/Logs",
-    "~/Library/Metadata", "/Library/Caches", "/System/Library/Caches", "/private/var",
-    "/private/tmp",
-  ]
   @Published var root = "/"
-  @Published var ignores = defaultIgnores.joined(separator: "\n")
+  @Published var ignores = ""
   @Published var includes = ""
   @Published var theme = "system"
   @Published var tray = false
-  @Published var terminal = "/System/Applications/Utilities/Terminal.app"
+  @Published var terminal = ""
   var sortKey = ""
   var sortAscending = true
-  @Published var migration = ""
   var onApply: (() -> Void)?
   var tableColumns: [String: Double] = [:]
   let isolated: Bool
@@ -38,8 +31,6 @@ final class Preferences: ObservableObject {
       let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     {
       apply(values)
-    } else if fileURL == nil {
-      importLegacy()
     }
   }
   func apply(_ v: [String: Any]) {
@@ -71,56 +62,13 @@ final class Preferences: ObservableObject {
     NSApp.appearance =
       theme == "system" ? nil : NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
   }
-  func importLegacy(directory sourceDirectory: String? = nil) {
-    let directory =
-      sourceDirectory
-      ?? NSString(string: "~/Library/WebKit/com.cardinal.one/WebsiteData").expandingTildeInPath
-    guard
-      let walker = FileManager.default.enumerator(
-        at: URL(fileURLWithPath: directory), includingPropertiesForKeys: nil)
-    else { return }
-    var values: [String: String] = [:]
-    for case let url as URL in walker
-    where url.lastPathComponent == "localstorage.sqlite3" || url.pathExtension == "localstorage" {
-      var db: OpaquePointer?
-      guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
-        sqlite3_close(db)
-        continue
-      }
-      var statement: OpaquePointer?
-      if sqlite3_prepare_v2(
-        db, "SELECT key, value FROM ItemTable WHERE key LIKE 'cardinal.%'", -1, &statement, nil)
-        == SQLITE_OK
-      {
-        while sqlite3_step(statement) == SQLITE_ROW {
-          guard let key = sqlite3_column_text(statement, 0),
-            let bytes = sqlite3_column_blob(statement, 1)
-          else { continue }
-          let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 1)))
-          if let value = String(data: data, encoding: .utf16LittleEndian) {
-            values[String(cString: key)] = value
-          }
-        }
-      }
-      sqlite3_finalize(statement)
-      sqlite3_close(db)
-    }
-    func paths(_ key: String) -> String? {
-      guard let string = values[key], let data = string.data(using: .utf8),
-        let paths = try? JSONDecoder().decode([String].self, from: data)
-      else { return nil }
-      return paths.joined(separator: "\n")
-    }
-    root = values["cardinal.watchRoot"] ?? root
-    ignores = paths("cardinal.ignorePaths") ?? ignores
-    includes = paths("cardinal.includePaths") ?? includes
-    theme = values["cardinal.theme"] ?? theme
-    tray = values["cardinal.trayIconEnabled"] == "true"
-    terminal = values["cardinal.terminalApp"] ?? terminal
-    migration =
-      values.isEmpty
-      ? "No existing preferences found."
-      : "Imported Cardinal preferences; the original store was not changed."
+  func restoreDefaults() {
+    root = "/"
+    ignores = ""
+    includes = ""
+    theme = "system"
+    tray = false
+    terminal = ""
   }
   static func expand(_ value: String) -> String {
     NSString(string: value.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
@@ -149,11 +97,10 @@ final class Preferences: ObservableObject {
     guard (Self.paths(ignores) + Self.paths(includes)).allSatisfy({ $0.hasPrefix("/") }) else {
       throw messageError("Include and ignore paths must be absolute.")
     }
-    if terminal.trimmingCharacters(in: .whitespaces).isEmpty {
-      terminal = "/System/Applications/Utilities/Terminal.app"
-    }
-    guard terminal.hasPrefix("/"), terminal.hasSuffix(".app")
+    let terminalPath = terminal.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard terminalPath.isEmpty || (terminalPath.hasPrefix("/") && terminalPath.hasSuffix(".app"))
     else { throw messageError("Choose an installed terminal application (.app).") }
+    terminal = terminalPath
   }
 }
 func messageError(_ message: String) -> NSError {
@@ -192,14 +139,8 @@ struct PreferencesView: View {
         Text("Terminal app (F9)")
         TextField("Path to a terminal application (.app)", text: $prefs.terminal)
           .accessibilityLabel("Terminal app for F9")
-        Text("Press F9 to open the selected folder, or a file’s parent folder, in this app.")
+        Text("Choose a terminal app to enable F9 for the selected folder or a file’s parent folder.")
           .font(.caption).foregroundColor(.secondary)
-      }
-      HStack {
-        Button("Import existing Cardinal preferences") {
-          prefs.importLegacy()
-        }
-        Text(prefs.migration).font(.caption).foregroundColor(.secondary)
       }
       Button("Open Full Disk Access settings") {
         FileActions.openPrivacySettings()
@@ -210,9 +151,7 @@ struct PreferencesView: View {
       if let error = error { Text(error).foregroundColor(.red) }
       HStack {
         Button("Restore defaults") {
-          prefs.theme = "system"
-          prefs.tray = false
-          prefs.terminal = "/System/Applications/Utilities/Terminal.app"
+          prefs.restoreDefaults()
         }
         Spacer()
         Button("Close") { presentation.wrappedValue.dismiss() }

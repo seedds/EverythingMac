@@ -10,7 +10,6 @@ import sys
 from urllib.request import urlopen
 
 REPOSITORY = "seedds/EverythingMac"
-LEGACY_REPOSITORY = "seedds/cardinal_native"
 DOWNLOAD_ROOT = f"https://github.com/{REPOSITORY}/releases/download"
 
 
@@ -43,16 +42,16 @@ def check_latest(version):
 
 
 def app_name(version):
-    return "EverythingMac" if version_tuple(version) >= (0, 1, 43) else "Cardinal Native"
+    return "EverythingMac"
 
 
 def asset_name(version):
     return f"{app_name(version).replace(' ', '-')}-{version}-arm64.dmg"
 
 
-def cask_url(version, repository=REPOSITORY):
+def cask_url(version):
     prefix = app_name(version).replace(" ", "-")
-    return f"https://github.com/{repository}/releases/download/v#{{version}}/{prefix}-#{{version}}-arm64.dmg"
+    return f"https://github.com/{REPOSITORY}/releases/download/v#{{version}}/{prefix}-#{{version}}-arm64.dmg"
 
 
 def published_checksum(version):
@@ -90,8 +89,8 @@ def update_cask(source, version, checksum):
         raise ValueError("Refusing to downgrade the Homebrew cask")
     old_name = app_name(versions[0])
     fields = {
-        "url": [cask_url(versions[0]), cask_url(versions[0], LEGACY_REPOSITORY)],
-        "homepage": [f"https://github.com/{REPOSITORY}", f"https://github.com/{LEGACY_REPOSITORY}"],
+        "url": [cask_url(versions[0])],
+        "homepage": [f"https://github.com/{REPOSITORY}"],
         "name": [old_name], "app": [f"{old_name}.app"],
     }
     for field, expected in fields.items():

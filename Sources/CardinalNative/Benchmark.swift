@@ -136,8 +136,7 @@ enum Probe {
     let args = CommandLine.arguments
     let path =
       args.firstIndex(of: "--index").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
-      ?? NSString(string: "~/Library/Application Support/com.cardinal.one/cardinal.db")
-      .expandingTildeInPath
+      ?? Preferences.index
     var engine: OpaquePointer?
     do {
       let loaded = try path.withCString { try decode(cn_engine_open($0, &engine)) }

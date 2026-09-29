@@ -175,9 +175,7 @@ final class Model: ObservableObject {
   @Published var indexedCount = 0
   @Published var processedEventCount = 0
   @Published var status = "Choose or load a saved index."
-  @Published var snapshot = NSString(
-    string: "~/Library/Application Support/com.cardinal.one/cardinal.db"
-  ).expandingTildeInPath
+  @Published var snapshot = Preferences.index
   @Published var snapshotDate = ""
   @Published var ready = false
   @Published var searching = false

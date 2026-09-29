@@ -36,14 +36,10 @@ brew update
 brew upgrade --cask seedds/tap/everything
 ```
 
-The cask is named `everything` (formerly `cardinal`). Homebrew’s rename mapping
-allows existing installations to migrate. After `brew tap seedds/tap`, you can
-also use `brew install --cask everything`. The app remains **EverythingMac.app**,
-with the same bundle identifier and data directory to preserve preferences and indexes.
-Quit the previous app before launching EverythingMac. When migrating from the
-older Tauri app, preferences are imported on first launch and the original data
-store is kept separate. Grant EverythingMac Full Disk Access if needed. The release supports Apple Silicon and is
-ad-hoc signed, not notarized; macOS may require approval in Privacy & Security.
+The cask is named `everything`. After `brew tap seedds/tap`, you can also use
+`brew install --cask everything`. The app is **EverythingMac.app**.
+Grant EverythingMac Full Disk Access if needed. The release supports Apple Silicon
+and is ad-hoc signed, not notarized; macOS may require approval in Privacy & Security.
 
 ## Quick start
 
@@ -183,17 +179,11 @@ for query latency, startup cost, and memory use.
 
 ## Indexing and storage
 
-Normal launch loads the native index when one exists. Otherwise it reads the
-existing Cardinal snapshot at:
-
-```text
-~/Library/Application Support/com.cardinal.one/cardinal.db
-```
-
-With no saved index, it scans the configured monitor root. If a loaded index’s
-root/include/ignore configuration differs from the saved native preferences, it
-starts a rebuild. Existing Cardinal preferences are imported read-only on first
-launch.
+Normal launch loads EverythingMac's saved index when one exists. Otherwise it
+scans the configured monitor root. New installations start with empty include
+and ignore paths and no terminal application selected. Preferences and indexes
+from older apps are not imported. If a loaded index's root/include/ignore
+configuration differs from the saved preferences, it starts a rebuild.
 
 Native data is stored separately:
 
@@ -251,7 +241,7 @@ the conflict. Quit the conflicting Cardinal instance to make the shortcut availa
 | `Sources/CardinalNative/LiveModel.swift` | Live updates, scans, checkpoint status, and selection restoration. |
 | `Sources/CardinalNative/FileActions.swift` | Open/reveal/copy, rename, Trash, terminal, and Quick Look. |
 | `Sources/CardinalNative/Icons.swift` | Bounded standard file icon loading. |
-| `Sources/CardinalNative/Preferences.swift` | Native preferences and legacy import. |
+| `Sources/CardinalNative/Preferences.swift` | Native preferences and empty installation defaults. |
 | `Sources/CNative/include/cardinal_native.h` | C-compatible Rust/Swift interface and ownership contract. |
 | `bridge/src/` | Rust static library, saved-index loading, search, selection, and live indexing. |
 | `run.sh` | Release build, app assembly, signing, and launch. |
@@ -285,7 +275,7 @@ cargo clippy --workspace --all-targets
 
 The live check creates disposable fixtures and its own checkpoint. It exercises
 FSEvents, filters, selection, rename, Trash/recovery, Quick Look, saved-scope
-restoration, English-only packaging, preference import, and tab switching. A successful JSON
+restoration, English-only packaging, fresh preference defaults, saved settings, and tab switching. A successful JSON
 report contains `"error": null`; inspect the report rather than relying only on
 the process exit status.
 
@@ -369,7 +359,7 @@ searches separately from typing/debounce latency.
 
 ```bash
 ./run.sh --build-only
-cp "$HOME/Library/Application Support/com.cardinal.one/cardinal.db" \
+cp "$HOME/Library/Application Support/com.cardinal.native-prototype/cardinal.db" \
   build/benchmark-index.db
 python3 scripts/measure.py native \
   build/benchmark-index.db build/native.json
@@ -416,7 +406,7 @@ actual older-macOS and Intel execution have not been validated.
 
 Before a production release, validate cloud-provider behavior, sustained high-churn
 indexing, external terminal/Double Commander integration, and drag/drop into the
-intended target applications. Full native migration should be based on those
+intended target applications. Broader release readiness should be based on those
 results and an updated performance comparison.
 
 ## Scrolling regression check
