@@ -1,4 +1,4 @@
-// Compile against the release bridge; see SORT-PERFORMANCE.md for reproduction.
+// Compile against the release bridge; see docs/PERFORMANCE.md for reproduction.
 // Opens a snapshot read-only, without watchers, preferences, or file actions.
 import CNative
 import Darwin
@@ -59,11 +59,14 @@ final class MemorySampler {
 
 do {
   let args = CommandLine.arguments
-  guard args.count == 6 else {
-    fputs("Usage: benchmark-sort INDEX QUERY KEY REPETITIONS OUTPUT.json\nKEY: filename/fullPath/size/mtime/ctime/none\n", stderr)
+  guard args.count == 6 || args.count == 8 else {
+    fputs("Usage: benchmark-sort INDEX QUERY KEY REPETITIONS OUTPUT.json [DIRECTORY CASE_SENSITIVE]\nKEY: filename/fullPath/size/mtime/ctime/none\n", stderr)
     exit(2)
   }
   let query = args[2], key = args[3], repetitions = Int(args[4])!
+  let directoryQuery = args.count == 8 ? args[6] : ""
+  let caseSensitive = args.count == 8 ? args[7] == "true" : false
+  precondition(args.count == 6 || ["true", "false"].contains(args[7]))
   precondition(repetitions > 0)
   var engine: OpaquePointer?
   let loadSampler = MemorySampler()
@@ -79,7 +82,7 @@ do {
   var samples: [[String: Any]] = []
   func save() throws {
     let report: [String: Any] = [
-      "query": query, "sort_key": key,
+      "query": query, "sort_key": key, "directory_query": directoryQuery, "case_sensitive": caseSensitive,
       "index_entries": loaded["total"]!, "load_ms": loaded["load_ms"]!,
       "loaded_rss_bytes": loadedRSS, "load_peak_rss_bytes": loadPeakRSS,
       "load_cpu_ms": loadCPU, "samples": samples,
@@ -96,8 +99,8 @@ do {
     let cpuStart = cpuMilliseconds()
     let started = ProcessInfo.processInfo.systemUptime
     let result = try query.withCString { q in
-      try "".withCString { directory in
-        try reply(cn_search(engine, request, UInt64(iteration + 1), q, directory, false))
+      try directoryQuery.withCString { directory in
+        try reply(cn_search(engine, request, UInt64(iteration + 1), q, directory, caseSensitive))
       }
     }
     let searchAndSortMS = (ProcessInfo.processInfo.systemUptime - started) * 1000

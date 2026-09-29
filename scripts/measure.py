@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
-"""Launch one benchmark, recording RSS for its PID and newly spawned WebKit helpers.
-
-Run apps sequentially and avoid opening other WebKit apps during the sample.
-WebKit services are reparented to launchd; report newly observed helpers separately
-so their attribution and RSS's shared-page double counting remain explicit.
-"""
+"""Launch an EverythingMac benchmark and sample its process RSS."""
 import argparse
 import json
-import os
 from pathlib import Path
 import subprocess
 import time
 
-parser = argparse.ArgumentParser()
-parser.add_argument('kind', choices=['native', 'tauri'])
+parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('index')
 parser.add_argument('output')
 args = parser.parse_args()
@@ -29,27 +22,16 @@ def processes():
             rows[int(pid)] = {'parent': int(parent), 'rssKiB': int(rss), 'command': command}
     return rows
 
-existing = set(processes())
-env = os.environ.copy()
-if args.kind == 'native':
-    command = [str(root / 'build/EverythingMac.app/Contents/MacOS/EverythingMac'),
-               '--index', str(Path(args.index).resolve()), '--benchmark', str(output)]
-else:
-    command = [str(root / 'build/EverythingMac Tauri Baseline.app/Contents/MacOS/everything-mac')]
-    env['EVERYTHING_MAC_BENCHMARK_INDEX'] = str(Path(args.index).resolve())
-    env['EVERYTHING_MAC_BENCHMARK_OUTPUT'] = str(output)
-    # Compatibility with the historical upstream Cardinal benchmark instrumentation.
-    env['CARDINAL_BENCHMARK_INDEX'] = env['EVERYTHING_MAC_BENCHMARK_INDEX']
-    env['CARDINAL_BENCHMARK_OUTPUT'] = env['EVERYTHING_MAC_BENCHMARK_OUTPUT']
+command = [str(root / 'build/EverythingMac.app/Contents/MacOS/EverythingMac'),
+           '--index', str(Path(args.index).resolve()), '--benchmark', str(output)]
 records = []
 with open(str(output)+'.log', 'w') as log:
-    child = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT)
+    child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
     started = time.monotonic()
     try:
         while child.poll() is None:
             current = processes()
-            selected = {pid: info for pid, info in current.items() if pid == child.pid or
-                        (args.kind == 'tauri' and pid not in existing and 'com.apple.WebKit.' in info['command'])}
+            selected = {pid: info for pid, info in current.items() if pid == child.pid}
             records.append({'elapsedSeconds': time.monotonic()-started, 'processes': selected,
                             'totalRSSKiB': sum(p['rssKiB'] for p in selected.values())})
             if time.monotonic()-started > 150:
@@ -63,7 +45,7 @@ with open(str(output)+'.log', 'w') as log:
             except subprocess.TimeoutExpired:
                 child.kill(); child.wait()
         Path(str(output)+'.memory.json').write_text(json.dumps({'pid': child.pid, 'exitCode': child.returncode,
-            'helperAttribution': 'WebKit helper PIDs first observed during this isolated app run', 'samples': records}, indent=2))
+            'processAttribution': 'EverythingMac benchmark process only', 'samples': records}, indent=2))
 if child.returncode != 0:
     raise SystemExit(child.returncode)
 if not output.exists():

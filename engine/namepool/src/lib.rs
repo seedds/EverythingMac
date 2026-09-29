@@ -93,13 +93,24 @@ impl NamePool {
         prefix: &'search str,
         cancellation_token: CancellationToken,
     ) -> Option<BTreeSet<&'pool str>> {
+        cancellation_token.is_cancelled()?;
+        let inner = self.inner.lock();
+        cancellation_token.is_cancelled()?;
         let mut result = BTreeSet::new();
-        for (i, x) in self.inner.lock().iter().enumerate() {
+        for (i, x) in inner
+            .range::<str, _>((
+                std::ops::Bound::Included(prefix),
+                std::ops::Bound::Unbounded,
+            ))
+            .enumerate()
+        {
             cancellation_token.is_cancelled_sparse(i)?;
-            if x.starts_with(prefix) {
-                result.insert(unsafe { str::from_raw_parts(x.as_ptr(), x.len()) });
+            if !x.starts_with(prefix) {
+                break;
             }
+            result.insert(unsafe { str::from_raw_parts(x.as_ptr(), x.len()) });
         }
+        cancellation_token.is_cancelled()?;
 
         Some(result)
     }
@@ -120,20 +131,20 @@ impl NamePool {
         Some(result)
     }
 
-    // `exact` should starts with a '\0', and ends with a '\0',
-    // e.g. b"\0hello\0"
+    /// Look up a complete name without scanning unrelated names.
     pub fn search_exact<'search, 'pool: 'search>(
         &'pool self,
         exact: &'search str,
         cancellation_token: CancellationToken,
     ) -> Option<BTreeSet<&'pool str>> {
+        cancellation_token.is_cancelled()?;
+        let inner = self.inner.lock();
         let mut result = BTreeSet::new();
-        for (i, x) in self.inner.lock().iter().enumerate() {
-            cancellation_token.is_cancelled_sparse(i)?;
-            if &**x == exact {
-                result.insert(unsafe { str::from_raw_parts(x.as_ptr(), x.len()) });
-            }
+        if let Some(x) = inner.get(exact) {
+            result.insert(unsafe { str::from_raw_parts(x.as_ptr(), x.len()) });
         }
+        cancellation_token.is_cancelled()?;
+
         Some(result)
     }
 }
@@ -164,6 +175,42 @@ mod tests {
 
     fn regex_search<'pool>(pool: &'pool NamePool, pattern: &Regex) -> BTreeSet<&'pool str> {
         guard(pool.search_regex(pattern, CancellationToken::noop()))
+    }
+
+    #[test]
+    fn indexed_lookups_match_scan_order_and_cancel_empty_results() {
+        let pool = NamePool::new();
+        let names = [
+            "",
+            "alpha",
+            "alphabet",
+            "alpine",
+            "beta",
+            "café",
+            "cafe\u{301}",
+            "中文",
+            "🦀",
+        ];
+        for name in names {
+            pool.push(name);
+        }
+        for needle in ["", "a", "alpha", "b", "café", "中", "🦀", "zzzz"] {
+            let expected: BTreeSet<_> = names
+                .into_iter()
+                .filter(|name| name.starts_with(needle))
+                .collect();
+            assert_eq!(prefix_search(&pool, needle), expected);
+            let expected: BTreeSet<_> = names.into_iter().filter(|name| *name == needle).collect();
+            assert_eq!(exact_search(&pool, needle), expected);
+        }
+        let token = CancellationToken::new_search();
+        let _ = CancellationToken::new_search();
+        for pool in [&pool, &NamePool::new()] {
+            for needle in ["", "alpha", "missing"] {
+                assert!(pool.search_prefix(needle, token).is_none());
+                assert!(pool.search_exact(needle, token).is_none());
+            }
+        }
     }
 
     #[test]

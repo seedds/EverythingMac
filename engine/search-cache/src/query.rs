@@ -162,7 +162,19 @@ impl SearchCache {
         options: SearchOptions,
         token: CancellationToken,
     ) -> Result<Option<Vec<SlabIndex>>> {
-        let Some(mut nodes) = self.evaluate_phrase(text, options, token)? else {
+        let segments = query_segmentation(text);
+        if segments.is_empty() {
+            bail!("Unprocessable term: {text:?}");
+        }
+        let matchers = build_segment_matchers(&segments, options)
+            .map_err(|err| anyhow!("Invalid regex pattern: {err}"))?;
+        if let Some(base) = base
+            && let [SegmentMatcher::Concrete(matcher)] = matchers.as_slice()
+            && self.should_match_candidates(matcher, base)
+        {
+            return Ok(self.match_candidates(matcher, base, token));
+        }
+        let Some(mut nodes) = self.execute_matchers(&matchers, token) else {
             return Ok(None);
         };
         if let Some(base) = base
@@ -171,6 +183,58 @@ impl SearchCache {
             return Ok(None);
         }
         Ok(Some(nodes))
+    }
+
+    fn should_match_candidates(
+        &self,
+        matcher: &SegmentMatcherConcrete,
+        base: &[SlabIndex],
+    ) -> bool {
+        base.len() <= self.name_index.len()
+            && !matches!(
+                matcher,
+                SegmentMatcherConcrete::Plain {
+                    kind: SegmentKind::Exact,
+                    ..
+                }
+            )
+    }
+
+    /// Match only scoped names, then restore the global evaluator's name/path
+    /// order using the existing per-name postings. Never read filesystem metadata.
+    fn match_candidates(
+        &self,
+        matcher: &SegmentMatcherConcrete,
+        base: &[SlabIndex],
+        token: CancellationToken,
+    ) -> Option<Vec<SlabIndex>> {
+        token.is_cancelled()?;
+        let mut names = BTreeSet::new();
+        let mut candidates = HashSet::new();
+        for (i, &index) in base.iter().enumerate() {
+            token.is_cancelled_sparse(i)?;
+            let name = self.file_nodes[index].name();
+            if matcher.matches(name) {
+                candidates.insert(index);
+                names.insert(name);
+            }
+        }
+        let mut nodes = Vec::new();
+        let mut visited = 0;
+        for (i, name) in names.into_iter().enumerate() {
+            token.is_cancelled_sparse(i)?;
+            if let Some(indices) = self.name_index.get(name) {
+                for &index in indices.iter() {
+                    token.is_cancelled_sparse(visited)?;
+                    visited += 1;
+                    if candidates.contains(&index) {
+                        nodes.push(index);
+                    }
+                }
+            }
+        }
+        token.is_cancelled()?;
+        Some(nodes)
     }
 
     fn evaluate_phrase(
@@ -399,6 +463,19 @@ impl SearchCache {
         options: SearchOptions,
         token: CancellationToken,
     ) -> Result<Option<Vec<SlabIndex>>> {
+        if let Some(base) = base
+            && base.len() <= self.name_index.len()
+        {
+            let regex = RegexBuilder::new(pattern)
+                .case_insensitive(options.case_insensitive)
+                .build()
+                .map_err(|err| anyhow!("Invalid regex pattern: {err}"))?;
+            return Ok(self.match_candidates(
+                &SegmentMatcherConcrete::Regex { regex },
+                base,
+                token,
+            ));
+        }
         let Some(mut nodes) = self.evaluate_regex(pattern, options, token)? else {
             return Ok(None);
         };
@@ -1722,4 +1799,191 @@ fn difference_in_place(
     let rhs_set: HashSet<SlabIndex> = rhs.iter().copied().collect();
     values.retain(|index| !rhs_set.contains(index));
     Some(())
+}
+
+#[cfg(test)]
+mod candidate_matching_tests {
+    use super::*;
+    use everything_mac_sdk::{EventFlag, FsEvent};
+    use std::fs;
+    use tempdir::TempDir;
+
+    fn fixture() -> (TempDir, SearchCache) {
+        let dir = TempDir::new("candidate_matching").unwrap();
+        for path in [
+            "scope/z/report.txt",
+            "scope/a/report.txt",
+            "scope/Report.txt",
+            "scope/café.txt",
+            "scope/cafe\u{301}.txt",
+            "elsewhere/report.txt",
+        ] {
+            let path = dir.path().join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"").unwrap();
+        }
+        // Ensure the scoped candidate path is chosen even with duplicate basenames.
+        for i in 0..40 {
+            fs::write(dir.path().join(format!("unrelated-{i}")), b"").unwrap();
+        }
+        let cache = SearchCache::walk_fs(dir.path());
+        (dir, cache)
+    }
+
+    fn verify(cache: &mut SearchCache) {
+        let token = CancellationToken::noop();
+        let roots = cache
+            .evaluate_phrase("/scope/", SearchOptions::default(), token)
+            .unwrap()
+            .unwrap();
+        let scope: Vec<SlabIndex> = roots
+            .into_iter()
+            .flat_map(|root| cache.all_subnodes(root, token).unwrap())
+            .collect();
+        assert!(!scope.is_empty());
+        let mut shuffled = scope.clone();
+        shuffled.reverse();
+        shuffled.extend_from_slice(&scope);
+        for case_insensitive in [false, true] {
+            let options = SearchOptions { case_insensitive };
+            for base in [&scope, &shuffled, &Vec::new()] {
+                for text in [
+                    "report",
+                    "/report",
+                    "/report.txt/",
+                    "*.txt",
+                    "café",
+                    "cafe\u{301}",
+                    "*",
+                    "**",
+                    "scope/**/report",
+                    "a/report",
+                    "missing",
+                ] {
+                    let mut expected = cache
+                        .evaluate_phrase(text, options, token)
+                        .unwrap()
+                        .unwrap();
+                    intersect_in_place(&mut expected, base, token).unwrap();
+                    let actual = cache
+                        .evaluate_phrase_with_base(text, Some(base), options, token)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(actual, expected, "{text}, insensitive={case_insensitive}");
+                }
+                for pattern in ["report", "^Report", "café", ".*", "missing"] {
+                    let mut expected = cache
+                        .evaluate_regex(pattern, options, token)
+                        .unwrap()
+                        .unwrap();
+                    intersect_in_place(&mut expected, base, token).unwrap();
+                    assert_eq!(
+                        cache
+                            .evaluate_regex_with_base(pattern, Some(base), options, token)
+                            .unwrap()
+                            .unwrap(),
+                        expected
+                    );
+                }
+            }
+            // Duplicating the base forces global evaluation without changing membership.
+            let mut fallback = scope.clone();
+            while fallback.len() <= cache.name_index.len() {
+                fallback.extend_from_slice(&scope);
+            }
+            for query in [
+                "report .txt",
+                "report | café",
+                "report !Report",
+                "(report | café) .txt",
+            ] {
+                let expr = everything_mac_syntax::parse_query(query).unwrap().expr;
+                let expected = cache
+                    .evaluate_expr(&expr, Some(&fallback), options, token)
+                    .unwrap();
+                let actual = cache
+                    .evaluate_expr(&expr, Some(&scope), options, token)
+                    .unwrap();
+                assert_eq!(actual, expected, "Boolean {query}");
+            }
+        }
+        assert!(
+            cache
+                .evaluate_regex_with_base("[", Some(&vec![]), SearchOptions::default(), token)
+                .is_err()
+        );
+        let cancelled = CancellationToken::new_search();
+        let _ = CancellationToken::new_search();
+        for base in [&scope, &Vec::new()] {
+            assert!(
+                cache
+                    .evaluate_phrase_with_base(
+                        "report",
+                        Some(base),
+                        SearchOptions::default(),
+                        cancelled
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                cache
+                    .evaluate_regex_with_base(
+                        "report",
+                        Some(base),
+                        SearchOptions::default(),
+                        cancelled
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_results_preserve_global_order_and_semantics() {
+        let (_dir, mut cache) = fixture();
+        verify(&mut cache);
+    }
+
+    #[test]
+    fn scoped_results_follow_create_rename_delete() {
+        let (dir, mut cache) = fixture();
+        let old = dir.path().join("scope/new-report.txt");
+        let new = dir.path().join("scope/z/renamed-report.txt");
+        fs::write(&old, b"").unwrap();
+        cache
+            .handle_fs_events(vec![FsEvent {
+                path: old.clone(),
+                flag: EventFlag::ItemCreated,
+                id: 1,
+            }])
+            .unwrap();
+        verify(&mut cache);
+        fs::rename(&old, &new).unwrap();
+        cache
+            .handle_fs_events(vec![
+                FsEvent {
+                    path: old,
+                    flag: EventFlag::ItemRenamed,
+                    id: 2,
+                },
+                FsEvent {
+                    path: new.clone(),
+                    flag: EventFlag::ItemRenamed,
+                    id: 3,
+                },
+            ])
+            .unwrap();
+        verify(&mut cache);
+        fs::remove_file(&new).unwrap();
+        cache
+            .handle_fs_events(vec![FsEvent {
+                path: new,
+                flag: EventFlag::ItemRemoved,
+                id: 4,
+            }])
+            .unwrap();
+        verify(&mut cache);
+    }
 }
