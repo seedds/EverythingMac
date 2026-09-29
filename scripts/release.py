@@ -11,6 +11,7 @@ from urllib.request import urlopen
 
 REPOSITORY = "seedds/EverythingMac"
 DOWNLOAD_ROOT = f"https://github.com/{REPOSITORY}/releases/download"
+RELEASE_NOTES = Path(__file__).resolve().parents[1] / "docs" / "releases"
 
 
 def version_tuple(version):
@@ -21,6 +22,19 @@ def version_tuple(version):
 
 def gh(*args):
     return subprocess.check_output(["gh", *args], text=True).strip()
+
+
+def release_notes_path(version):
+    version_tuple(version)
+    path = RELEASE_NOTES / f"{version}.md"
+    if not path.is_file():
+        raise ValueError(f"Write release notes in {path} before publishing")
+    notes = path.read_text(encoding="utf-8").strip()
+    if not any(line.strip() and not line.lstrip().startswith("#") for line in notes.splitlines()):
+        raise ValueError("Release notes must describe the changes")
+    if re.search(r"https?://|\[[^\]]+\]\s*\(|\[[^\]]+\]:", notes, re.IGNORECASE):
+        raise ValueError("Release notes must contain the changes as text, without links")
+    return path
 
 
 def release_metadata(tag):
@@ -116,10 +130,13 @@ def main():
     metadata = release_metadata(f"tags/{tag}")
     published = metadata is not None and not metadata["draft"]
     if mode == "prepare":
+        if not published:
+            release_notes_path(version)
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write(f"version={version}\npublished={str(published).lower()}\n")
     elif mode == "publish":
         if not published:
+            notes = str(release_notes_path(version))
             # A draft can be retried, but its tag must still represent these sources.
             existing_tag = subprocess.run(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], capture_output=True, text=True)
             head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -127,7 +144,9 @@ def main():
                 raise ValueError("Existing tag does not point to the checked-out source")
             if not metadata:
                 gh("release", "create", tag, "--repo", REPOSITORY, "--draft", "--target", head,
-                   "--title", f"{app_name(version)} {version}", "--generate-notes")
+                   "--title", f"{app_name(version)} {version}", "--notes-file", notes)
+            else:
+                gh("release", "edit", tag, "--repo", REPOSITORY, "--notes-file", notes)
             gh("release", "upload", tag, f"build/{asset_name(version)}", "--repo", REPOSITORY, "--clobber")
             gh("release", "edit", tag, "--repo", REPOSITORY, "--draft=false", "--latest")
         checksum = published_checksum(version)

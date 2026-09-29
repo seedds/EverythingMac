@@ -1,7 +1,67 @@
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+import tempfile
+from unittest.mock import Mock, patch
 
 import release
+
+
+class ReleaseNotesTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.notes_dir = Path(directory.name)
+        self.version = Path("VERSION").read_text().strip()
+        self.notes = self.notes_dir / f"{self.version}.md"
+        self.body = "## Changes\n\n- Show progress during indexing.\n"
+        self.notes.write_text(self.body, encoding="utf-8")
+        patcher = patch.object(release, "RELEASE_NOTES", self.notes_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_accepts_written_changes(self):
+        self.assertEqual(release.release_notes_path(self.version), self.notes)
+
+    def test_rejects_missing_empty_and_link_notes(self):
+        for body in ["", "  \n", "## Changes\n", "**Full Changelog**: https://github.com/a/b/compare/v1...v2",
+                     self.body + "[Details](changes.md)", self.body + "[Details]: changes.md"]:
+            with self.subTest(body=body):
+                self.notes.write_text(body, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    release.release_notes_path(self.version)
+        self.notes.unlink()
+        with self.assertRaises(ValueError):
+            release.release_notes_path(self.version)
+
+    def test_new_release_and_draft_retry_publish_written_notes(self):
+        for metadata in [None, {"draft": True}]:
+            with self.subTest(metadata=metadata), \
+                 patch("sys.argv", ["release.py", "publish"]), \
+                 patch.object(release, "check_latest"), \
+                 patch.object(release, "release_metadata", return_value=metadata), \
+                 patch.object(release, "published_checksum", return_value="a" * 64), \
+                 patch.object(release.subprocess, "run", return_value=Mock(returncode=1)), \
+                 patch.object(release.subprocess, "check_output", return_value="head\n"), \
+                 patch.object(release, "gh") as gh:
+                release.main()
+                calls = [call.args for call in gh.call_args_list]
+                self.assertEqual(calls[0][:2], ("release", "create" if metadata is None else "edit"))
+                self.assertEqual(calls[0][-2:], ("--notes-file", str(self.notes)))
+                self.assertFalse(any("--generate-notes" in call for call in calls))
+                self.assertIn("--draft=false", calls[-1])
+                self.assertEqual(self.notes.read_text(encoding="utf-8"), self.body)
+
+    def test_missing_notes_stop_prepare_and_publish_before_mutation(self):
+        self.notes.unlink()
+        for mode in ["prepare", "publish"]:
+            with self.subTest(mode=mode), \
+                 patch("sys.argv", ["release.py", mode]), \
+                 patch.object(release, "check_latest"), \
+                 patch.object(release, "release_metadata", return_value=None), \
+                 patch.object(release, "gh") as gh:
+                with self.assertRaises(ValueError):
+                    release.main()
+                gh.assert_not_called()
 
 
 class ReleaseTests(unittest.TestCase):

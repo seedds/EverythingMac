@@ -267,8 +267,13 @@ folder and magnifying-glass artwork in `Resources/EverythingMac.png`, packaged a
 
 ## Automated releases
 
-`VERSION` is the app's release version. To publish, increase it using `major.minor.patch`
-and push the change to `main`. The [release workflow](../.github/workflows/release.yml)
+`VERSION` is the app's release version. To publish, increase it using `major.minor.patch`,
+write `docs/releases/<VERSION>.md`, and push both changes to `main`.
+Release notes must describe the actual changes directly in text, including relevant
+compatibility or upgrade information. Do not include links or a comparison-link
+placeholder. The workflow checks for written notes before building and publishes
+that file verbatim; retrying a draft also refreshes its notes from the file.
+The [release workflow](../.github/workflows/release.yml)
 tests the Rust bridge, builds an Apple Silicon DMG on macOS 15, verifies the app
 signature and DMG, and publishes a matching GitHub tag and release. It then downloads
 the public DMG and updates the Homebrew cask's version and SHA256 together.
