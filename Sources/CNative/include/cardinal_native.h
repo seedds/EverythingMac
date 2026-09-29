@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 // One engine per process. Calls are serialized on Swift's engine queue, except
-// request_new/cancel, which are thread-safe and invalidate older search tokens.
+// request creation/cancellation and scan-count reads, which are thread-safe.
 // Buffers are bounded UTF-8 JSON (rows: maximum 256), never whole result arrays.
 // Copy/decode buffers before freeing. Close only after queued work has completed.
 typedef struct Engine CNEngine;
@@ -22,6 +22,8 @@ CNBuffer cn_rows(CNEngine *engine, uint64_t generation, size_t start, size_t cou
 void cn_buffer_free(CNBuffer buffer);
 CNRequest *cn_scan_request_new(void);
 void cn_cancel_scan(void);
+// Thread-safe while request is alive; does not access the engine.
+size_t cn_scan_count(const CNRequest *request);
 CNBuffer cn_watch(CNEngine *engine, bool enabled, const char *checkpoint);
 CNBuffer cn_poll(CNEngine *engine);
 CNBuffer cn_scan(const char *root, const char *ignores, const char *includes, const CNRequest *request, CNEngine **out);

@@ -11,7 +11,10 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     ptr,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
+    },
     time::Instant,
 };
 
@@ -62,7 +65,7 @@ impl State {
         }
     }
 }
-pub struct Request(CancellationToken);
+pub struct Request(CancellationToken, Arc<AtomicUsize>);
 
 /// UTF-8 JSON owned by Rust; release exactly once with cn_buffer_free.
 #[repr(C)]
@@ -148,7 +151,10 @@ pub unsafe extern "C" fn cn_engine_close(engine: *mut Engine) {
 /// Allocate before enqueueing a search; immediately cancels older requests.
 #[unsafe(no_mangle)]
 pub extern "C" fn cn_request_new() -> *mut Request {
-    Box::into_raw(Box::new(Request(CancellationToken::new_search())))
+    Box::into_raw(Box::new(Request(
+        CancellationToken::new_search(),
+        Arc::default(),
+    )))
 }
 
 #[unsafe(no_mangle)]
@@ -296,6 +302,38 @@ mod tests {
     use super::*;
     use std::{ffi::CString, fs};
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn scan_count_is_readable_before_traversal_finishes() {
+        use search_cache::WalkData;
+        use std::sync::atomic::Ordering;
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("entry.txt"), b"file").unwrap();
+        // A search token avoids invalidating other tests' active scan tokens.
+        let request = Request(CancellationToken::new_search(), Arc::default());
+        let observed = AtomicBool::new(false);
+        let walk = WalkData::new(temp.path(), &[], &[], false, || {
+            // Hold the actual walker at its first entry until progress is visible.
+            let deadline = Instant::now() + std::time::Duration::from_secs(2);
+            while unsafe { live::cn_scan_count(&request) } == 0 && Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            observed.store(
+                unsafe { live::cn_scan_count(&request) } > 0,
+                Ordering::Relaxed,
+            );
+            false
+        });
+        let cache = live::with_scan_progress(&walk, &request.1, || {
+            SearchCache::walk_fs_with_walk_data(&walk, &STOP)
+        });
+        assert!(cache.is_some());
+        assert!(
+            observed.load(Ordering::Relaxed),
+            "scan count stayed zero until completion"
+        );
+    }
 
     #[test]
     fn scrolling_rows_do_not_wait_for_uncached_filesystem_metadata() {

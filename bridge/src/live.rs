@@ -96,8 +96,49 @@ fn watch(state: &mut State) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn cn_scan_request_new() -> *mut Request {
-    Box::into_raw(Box::new(Request(CancellationToken::new_scan())))
+    Box::into_raw(Box::new(Request(
+        CancellationToken::new_scan(),
+        Arc::default(),
+    )))
 }
+/// Read progress without waiting for the serialized engine queue.
+/// # Safety
+/// The request must remain alive throughout this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cn_scan_count(request: *const Request) -> usize {
+    unsafe { request.as_ref() }.map_or(0, |r| r.1.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+// Sample existing walker counters, avoiding another atomic operation per file.
+// Disconnecting the channel also stops the sampler if traversal panics.
+pub(super) fn with_scan_progress<F: Fn() -> bool + Sync, T>(
+    walk: &WalkData<'_, F>,
+    progress: &AtomicUsize,
+    work: impl FnOnce() -> T,
+) -> T {
+    use std::sync::{atomic::Ordering, mpsc};
+    std::thread::scope(|scope| {
+        let (done, receiver) = mpsc::channel::<()>();
+        scope.spawn(move || {
+            loop {
+                progress.store(
+                    walk.num_files.load(Ordering::Relaxed) + walk.num_dirs.load(Ordering::Relaxed),
+                    Ordering::Relaxed,
+                );
+                if !matches!(
+                    receiver.recv_timeout(std::time::Duration::from_millis(100)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    break;
+                }
+            }
+        });
+        let result = work();
+        drop(done);
+        result
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn cn_cancel_scan() {
     let _ = CancellationToken::new_scan();
@@ -224,7 +265,9 @@ pub unsafe extern "C" fn cn_scan(
         if ignores.iter().chain(&includes).any(|p| !p.is_absolute()) {
             return Err("Include and ignore paths must be absolute".into());
         }
-        let token = unsafe { request.as_ref() }.ok_or("Missing scan request")?.0;
+        let request = unsafe { request.as_ref() }.ok_or("Missing scan request")?;
+        let token = request.0;
+        let progress = request.1.clone();
         let start = Instant::now();
         let Some(scanned) = cancellable_scan(token, move || -> Result<_, String> {
             // Preflight may block too; every filesystem access belongs to this worker.
@@ -250,7 +293,9 @@ pub unsafe extern "C" fn cn_scan(
                 let walk = WalkData::new(&root, &ignores, &includes, false, move || {
                     token.is_cancelled().is_none()
                 });
-                SearchCache::walk_fs_with_walk_data(&walk, &STOP)
+                with_scan_progress(&walk, &progress, || {
+                    SearchCache::walk_fs_with_walk_data(&walk, &STOP)
+                })
             });
             Ok(cache.map(|cache| (cache, root, ignores, includes)))
         })?

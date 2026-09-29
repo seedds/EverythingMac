@@ -64,11 +64,16 @@ final class Engine {
   }
   func scan(
     root: String, ignores: [String], includes: [String],
+    progress: @escaping (Int) -> Void = { _ in },
     completion: @escaping (Result<Reply, Error>) -> Void
   ) {
     cn_cancel()
     cn_cancel_scan()
     let request = SearchRequest(scan: true)
+    let progressTimer = DispatchSource.makeTimerSource(queue: .main)
+    progressTimer.schedule(deadline: .now(), repeating: .milliseconds(200))
+    progressTimer.setEventHandler { progress(Int(cn_scan_count(request.pointer))) }
+    progressTimer.resume()
     queue.async {
       let result = Result { () throws -> Reply in
         var replacement: OpaquePointer?
@@ -88,7 +93,10 @@ final class Engine {
         }
         return reply
       }
-      DispatchQueue.main.async { completion(result) }
+      DispatchQueue.main.async {
+        progressTimer.cancel()
+        completion(result)
+      }
     }
   }
 
@@ -150,8 +158,8 @@ final class Engine {
   deinit { cn_engine_close(handle) }
 }
 
-// Immutable ownership wrapper: only the queued search uses the pointer, and
-// its capture keeps the token alive until the FFI call has returned.
+// Captures keep the request alive through its queued operation and any
+// concurrent reads of the scan progress counter.
 private final class SearchRequest: @unchecked Sendable {
   let pointer: OpaquePointer
   init(scan: Bool = false) { pointer = scan ? cn_scan_request_new()! : cn_request_new()! }

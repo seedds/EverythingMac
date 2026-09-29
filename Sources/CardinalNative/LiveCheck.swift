@@ -14,6 +14,8 @@ final class LiveCheck {
   var since = ProcessInfo.processInfo.systemUptime
   var checks: [String] = []
   var pending = false
+  var scanCounts = Set<Int>()
+  var countBeforeEvent = 0
   var selectionBeforeSort: UInt64 = 0
   let terminalValidationError = "Choose an installed terminal application in Preferences."
   var tabCheck: Bool { CommandLine.arguments.contains("--tab-check") }
@@ -62,6 +64,14 @@ final class LiveCheck {
           self.trashReceipts.append((url, destination))
         })
       }
+      if CommandLine.arguments.contains("--scan-progress-check") {
+        for i in 0..<20_000 {
+          let folder = root.appendingPathComponent("scan-\(i)")
+          try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+          try Data().write(to: folder.appendingPathComponent("item.txt"))
+        }
+        step = 30
+      }
       model.scan()
       timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
         self?.tick()
@@ -79,6 +89,7 @@ final class LiveCheck {
   }
   func tick() {
     guard !pending else { return }
+    if model.scanning, model.indexedCount > 0 { scanCounts.insert(model.indexedCount) }
     if ProcessInfo.processInfo.systemUptime - since > (tabCheck ? 8 : 25) {
       finish("Timeout at \(step): \(model.status); \(model.error ?? ""); tab=\(model.activeTab), selection=\(model.selectionCount), loading=\(model.selectionLoading), pendingDraw=\(String(describing: model.pendingDraw))")
       return
@@ -123,6 +134,23 @@ final class LiveCheck {
     }
     do {
       switch step {
+      case 30, 31:
+        guard !scanCounts.isEmpty else {
+          finish("Files counter did not update during scan at step \(step)")
+          return
+        }
+        next("Files counter updates during \(step == 30 ? "initial scan" : "rescan")")
+        scanCounts.removeAll()
+        if step == 31 {
+          model.scan(useCurrentConfig: true)
+        } else {
+          countBeforeEvent = model.indexedCount
+          try Data().write(to: root.appendingPathComponent("after-scan.txt"))
+        }
+      case 32:
+        guard model.processedEventCount > 0, model.indexedCount > countBeforeEvent else { return }
+        next("Files and Events counters update after scanning finishes")
+        finish(nil)
       case 0:
         guard model.total == 1 else { return }
         next("Initial native scan and search")

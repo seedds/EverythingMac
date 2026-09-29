@@ -112,20 +112,33 @@ extension Model {
     pendingDraw = nil
     searching = false
     let hadIndex = ready
+    let previousIndexStatus = indexStatus
+    let previousCount = indexedCount
+    let previousEvents = processedEventCount
     scanning = true
     ready = false
     error = nil
     status = "Scanning…"
+    indexedCount = 0
+    processedEventCount = 0
+    indexStatus = "Scanning…"
     let scanRoot = useCurrentConfig && !root.isEmpty ? root : Preferences.normalized(prefs.root)
     let ignores = useCurrentConfig ? loadedIgnores : Preferences.paths(prefs.ignores)
     let includes = useCurrentConfig ? loadedIncludes : Preferences.paths(prefs.includes)
-    engine.scan(root: scanRoot, ignores: ignores, includes: includes) { [weak self] result in
+    engine.scan(root: scanRoot, ignores: ignores, includes: includes, progress: { [weak self] count in
+      guard let self = self, !self.closed, self.indexEpoch == epoch, self.scanning else { return }
+      self.indexedCount = count
+      self.indexStatus = "Scanning… \(count) entries found"
+    }) { [weak self] result in
       guard let self = self, !self.closed, self.indexEpoch == epoch else { return }
       self.scanning = false
       switch result {
       case .success(let reply):
         guard reply.status == "ok" else {
           self.ready = hadIndex
+          self.indexStatus = previousIndexStatus
+          self.indexedCount = previousCount
+          self.processedEventCount = previousEvents
           self.status = "Scan cancelled; previous index retained"
           if hadIndex { self.submit(background: true) }
           return
@@ -152,6 +165,9 @@ extension Model {
         self.submit(background: true)
       case .failure(let e):
         self.ready = hadIndex
+        self.indexStatus = previousIndexStatus
+        self.indexedCount = previousCount
+        self.processedEventCount = previousEvents
         self.error = e.localizedDescription
         self.status = "Scan failed; previous index retained"
       }
