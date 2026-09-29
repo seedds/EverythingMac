@@ -334,7 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
           Preferences.directory + "/instance.lock", O_CREAT | O_WRONLY, 0o600)
         guard instanceLock >= 0, flock(instanceLock, LOCK_EX | LOCK_NB) == 0 else {
           NSRunningApplication.runningApplications(
-            withBundleIdentifier: "com.cardinal.native-prototype"
+            withBundleIdentifier: "com.everything.mac"
           )
           .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier })?
           .activate(options: .activateIgnoringOtherApps)
@@ -359,8 +359,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     window.delegate = self
     window.preview = actions.preview
     window.contentView = NSHostingView(rootView: ContentView(model: model, prefs: prefs))
-    if !isolated { window.setFrameAutosaveName("CardinalNativeWindow") }
-    if isolated || !window.setFrameUsingName("CardinalNativeWindow") { window.center() }
+    if !isolated { window.setFrameAutosaveName("EverythingMacWindow") }
+    if isolated || !window.setFrameUsingName("EverythingMacWindow") { window.center() }
     window.makeKeyAndOrderFront(nil)
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)

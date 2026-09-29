@@ -72,7 +72,7 @@ icon sizes, run `./scripts/build-icon.sh`.
 | --- | --- |
 | Application name | EverythingMac |
 | Built application | `build/EverythingMac.app` |
-| Bundle identifier | `com.cardinal.native-prototype` |
+| Bundle identifier | `com.everything.mac` |
 | Deployment target | macOS 12 |
 | Validated hardware | Apple Silicon, M4 Pro |
 | Source repository | [seedds/EverythingMac](https://github.com/seedds/EverythingMac) |
@@ -189,7 +189,7 @@ configuration differs from the saved preferences, it starts a rebuild.
 Native data is stored separately:
 
 ```text
-~/Library/Application Support/com.cardinal.native-prototype/
+~/Library/Application Support/com.everything.mac/
 ├── cardinal.db
 └── preferences.json
 ```
@@ -360,7 +360,7 @@ searches separately from typing/debounce latency.
 
 ```bash
 ./run.sh --build-only
-cp "$HOME/Library/Application Support/com.cardinal.native-prototype/cardinal.db" \
+cp "$HOME/Library/Application Support/com.everything.mac/cardinal.db" \
   build/benchmark-index.db
 python3 scripts/measure.py native \
   build/benchmark-index.db build/native.json

@@ -4,7 +4,7 @@ import SwiftUI
 
 final class Preferences: ObservableObject {
   static let directory = NSString(
-    string: "~/Library/Application Support/com.cardinal.native-prototype"
+    string: "~/Library/Application Support/com.everything.mac"
   ).expandingTildeInPath
   static let index = directory + "/cardinal.db"
   static let file = directory + "/preferences.json"
