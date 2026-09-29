@@ -1,7 +1,7 @@
 //! Serialized engine operations; FSEvents callbacks only enqueue SDK events.
 use super::*;
-use cardinal_sdk::EventWatcher;
 use crossbeam_channel::TryRecvError;
+use everything_mac_sdk::EventWatcher;
 use search_cache::{HandleFSEError, WalkData};
 use std::{collections::HashSet, fs, os::fd::AsRawFd, path::PathBuf};
 
@@ -28,7 +28,7 @@ pub(super) fn cancellable_scan<T: Send + 'static>(
     let slot = ScanSlot;
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::Builder::new()
-        .name("cardinal-native-scan".into())
+        .name("everything-mac-native-scan".into())
         .spawn(move || {
             let result =
                 catch_unwind(AssertUnwindSafe(work)).map_err(|_| "Index scan panicked".to_string());
@@ -290,7 +290,7 @@ pub unsafe extern "C" fn cn_scan(
             // Do not let blocked traversal occupy the search engine's Rayon pool.
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(4)
-                .thread_name(|i| format!("cardinal-native-walk-{i}"))
+                .thread_name(|i| format!("everything-mac-native-walk-{i}"))
                 .build()
                 .map_err(|e| e.to_string())?;
             let exclusions = fswalk::Exclusions::compile(&root, &patterns)?;

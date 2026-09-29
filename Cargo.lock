@@ -88,41 +88,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
-name = "cardinal-native-prototype"
-version = "0.1.0"
-dependencies = [
- "cardinal-sdk",
- "crossbeam-channel",
- "fswalk",
- "libc",
- "rayon",
- "search-cache",
- "search-cancel",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "cardinal-sdk"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "crossbeam-channel",
- "dispatch2",
- "fswalk",
- "libc",
- "objc2-core-foundation",
- "objc2-core-services",
- "tempfile",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "cardinal-syntax"
-version = "0.1.0"
-
-[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -347,6 +312,41 @@ dependencies = [
  "libc",
  "windows-sys",
 ]
+
+[[package]]
+name = "everything-mac-native-prototype"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "everything-mac-sdk",
+ "fswalk",
+ "libc",
+ "rayon",
+ "search-cache",
+ "search-cancel",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "everything-mac-sdk"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "crossbeam-channel",
+ "dispatch2",
+ "fswalk",
+ "libc",
+ "objc2-core-foundation",
+ "objc2-core-services",
+ "tempfile",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "everything-mac-syntax"
+version = "0.1.0"
 
 [[package]]
 name = "fastrand"
@@ -1057,11 +1057,11 @@ name = "search-cache"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cardinal-sdk",
- "cardinal-syntax",
  "criterion",
  "crossbeam-channel",
  "enumn",
+ "everything-mac-sdk",
+ "everything-mac-syntax",
  "file-tags",
  "fswalk",
  "hashbrown 0.16.1",

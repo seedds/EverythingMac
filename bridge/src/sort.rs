@@ -208,7 +208,7 @@ mod reference {
 
         #[test]
         fn maintained_indexes_match_original_sort_after_metadata_and_filesystem_changes() {
-            use cardinal_sdk::{EventFlag, FsEvent};
+            use everything_mac_sdk::{EventFlag, FsEvent};
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path().join("files");
             for folder in ["a", "a.txt", "a!", "a0", "é", "中", "z/deep", "z.deep"] {

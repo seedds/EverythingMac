@@ -380,7 +380,7 @@ fn noop_cache_handle_fs_events_with_empty_events_is_ok() {
 
 #[test]
 fn noop_cache_handle_fs_events_with_create_event_panics_on_invalid_slab() {
-    use cardinal_sdk::{EventFlag, FsEvent};
+    use everything_mac_sdk::{EventFlag, FsEvent};
     let mut cache = SearchCache::noop(PathBuf::from("/w"), vec![], vec![], &NEVER_STOPPED);
     let event = FsEvent {
         path: PathBuf::from("/w/new_file.txt"),

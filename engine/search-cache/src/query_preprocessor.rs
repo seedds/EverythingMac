@@ -1,4 +1,4 @@
-use cardinal_syntax::{
+use everything_mac_syntax::{
     ArgumentKind, ComparisonValue, Expr, Filter, FilterArgument, FilterKind, Query, RangeValue,
     Term,
 };
@@ -217,7 +217,7 @@ fn home_dir() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cardinal_syntax::{RangeSeparator, Term, parse_query};
+    use everything_mac_syntax::{RangeSeparator, Term, parse_query};
 
     fn expand(input: &str, home: &str) -> Query {
         let parsed = parse_query(input).expect("valid query");

@@ -1,7 +1,0 @@
-[package]
-name = "cardinal-syntax"
-description = "Everything-like search syntax parser"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]

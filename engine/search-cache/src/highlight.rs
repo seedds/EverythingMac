@@ -1,5 +1,5 @@
 use crate::query_preprocessor::strip_query_quotes_text;
-use cardinal_syntax::{ArgumentKind, Expr, FilterArgument, Term};
+use everything_mac_syntax::{ArgumentKind, Expr, FilterArgument, Term};
 use query_segmentation::{Segment, query_segmentation};
 use std::collections::BTreeSet;
 
@@ -132,7 +132,7 @@ fn literal_chunks(value: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::query_preprocessor::{expand_query_home_dirs, strip_query_quotes};
-    use cardinal_syntax::{ParseError, parse_query as raw_parse_query};
+    use everything_mac_syntax::{ParseError, parse_query as raw_parse_query};
 
     /// Helper for highlight tests: mirrors production order
     /// (highlight is derived BEFORE quote stripping, preserving literal markers)

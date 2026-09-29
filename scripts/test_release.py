@@ -24,7 +24,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_rejects_old_app_and_repository(self):
         for source in [self.cask.replace('EverythingMac.app', 'Other.app'),
-                       self.cask.replace(release.REPOSITORY, 'seedds/cardinal_native')]:
+                       self.cask.replace(release.REPOSITORY, 'seedds/everything_mac_native')]:
             with self.assertRaises(ValueError):
                 release.update_cask(source, "0.1.49", "b" * 64)
 

@@ -1,4 +1,6 @@
-# Indexed sorting performance — Cardinal Native 0.1.40
+# Indexed sorting performance — EverythingMac 0.1.40
+
+Historical measurements below retain the upstream Cardinal query text; current benchmark scripts use `everything-mac`.
 
 Historical report for 0.1.40. Version 0.1.42 removes the sorting cap and its setting. To reproduce these historical capped comparisons, use the scripts and code from the corresponding release tag.
 
@@ -93,18 +95,18 @@ From the repository root:
 
 ```sh
 PATH="$HOME/.cargo/bin:$PATH" CARGO_PROFILE_RELEASE_STRIP=none \
-  cargo build --locked --release -p cardinal-native-prototype \
+  cargo build --locked --release -p everything-mac-native-prototype \
   --example metadata_inventory --lib
 
 target/release/examples/metadata_inventory /path/to/copied-index.db
 
-swiftc -O -module-cache-path /tmp/cardinal-sort-module-cache \
+swiftc -O -module-cache-path /tmp/everything-mac-sort-module-cache \
   -I Sources/CNative scripts/benchmark-sort.swift \
-  -L target/release -lcardinal_native_prototype \
+  -L target/release -leverything_mac_native_prototype \
   -framework CoreServices -framework CoreFoundation -framework Security \
-  -liconv -lresolv -o /tmp/cardinal-indexed-sort-benchmark
+  -liconv -lresolv -o /tmp/everything-mac-indexed-sort-benchmark
 
-python3 scripts/benchmark-sort.py /tmp/cardinal-indexed-sort-benchmark \
+python3 scripts/benchmark-sort.py /tmp/everything-mac-indexed-sort-benchmark \
   /path/to/copied-index.db build/indexed-sort-benchmark/reproduction \
   --keys filename,mtime,ctime --timeout 180
 ```

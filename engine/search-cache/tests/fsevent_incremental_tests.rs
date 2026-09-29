@@ -1,7 +1,7 @@
 //! Tests for FSEvent handling and incremental cache updates
 //! Covers: add, remove, rename operations, rescan triggers, event batching
 
-use cardinal_sdk::{EventFlag, FsEvent};
+use everything_mac_sdk::{EventFlag, FsEvent};
 use search_cache::SearchCache;
 use search_cancel::CancellationToken;
 use std::path::PathBuf;

@@ -35,9 +35,12 @@ if args.kind == 'native':
     command = [str(root / 'build/EverythingMac.app/Contents/MacOS/EverythingMac'),
                '--index', str(Path(args.index).resolve()), '--benchmark', str(output)]
 else:
-    command = [str(root / 'build/Cardinal Tauri Baseline.app/Contents/MacOS/cardinal')]
-    env['CARDINAL_BENCHMARK_INDEX'] = str(Path(args.index).resolve())
-    env['CARDINAL_BENCHMARK_OUTPUT'] = str(output)
+    command = [str(root / 'build/EverythingMac Tauri Baseline.app/Contents/MacOS/everything-mac')]
+    env['EVERYTHING_MAC_BENCHMARK_INDEX'] = str(Path(args.index).resolve())
+    env['EVERYTHING_MAC_BENCHMARK_OUTPUT'] = str(output)
+    # Compatibility with the historical upstream Cardinal benchmark instrumentation.
+    env['CARDINAL_BENCHMARK_INDEX'] = env['EVERYTHING_MAC_BENCHMARK_INDEX']
+    env['CARDINAL_BENCHMARK_OUTPUT'] = env['EVERYTHING_MAC_BENCHMARK_OUTPUT']
 records = []
 with open(str(output)+'.log', 'w') as log:
     child = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT)

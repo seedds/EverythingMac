@@ -8,12 +8,12 @@ export RUSTC="$HOME/.cargo/bin/rustc"
 export CARGO_PROFILE_RELEASE_STRIP=none
 export MACOSX_DEPLOYMENT_TARGET=12.0
 cd "$REPO_DIR"
-cargo build --locked --release -p cardinal-native-prototype
+cargo build --locked --release -p everything-mac-native-prototype
 cd "$PROTOTYPE_DIR"
 # Keep compiler products outside Documents: dsymutil inspects ancestor bundles,
 # which can block on macOS folder-access prompts unrelated to this repository.
 BUILD_KEY="$(printf '%s' "$PROTOTYPE_DIR" | shasum | cut -c1-12)"
-SWIFT_BUILD_DIR="${CARDINAL_SWIFT_BUILD_DIR:-/private/tmp/cardinal-native-${UID}-${BUILD_KEY}}"
+SWIFT_BUILD_DIR="${EVERYTHING_MAC_SWIFT_BUILD_DIR:-/private/tmp/everything-mac-native-${UID}-${BUILD_KEY}}"
 export CLANG_MODULE_CACHE_PATH="$SWIFT_BUILD_DIR/clang-module-cache"
 export SWIFT_MODULECACHE_PATH="$SWIFT_BUILD_DIR/swift-module-cache"
 swift build -c release --disable-sandbox --scratch-path "$SWIFT_BUILD_DIR" --cache-path "$SWIFT_BUILD_DIR/cache" -Xlinker -L -Xlinker "$REPO_DIR/target/release"

@@ -1,4 +1,4 @@
-//! Throwaway C bridge for the native UI experiment. See include/cardinal_native.h.
+//! Throwaway C bridge for the native UI experiment. See include/everything_mac_native.h.
 mod live;
 mod metadata;
 mod sort;
@@ -27,7 +27,7 @@ struct State {
     results: Vec<SlabIndex>,
     generation: u64,
     root: std::path::PathBuf,
-    watcher: Option<cardinal_sdk::EventWatcher>,
+    watcher: Option<everything_mac_sdk::EventWatcher>,
     event_root: std::path::PathBuf,
     needs_rescan: bool,
     checkpoint: Option<std::path::PathBuf>,
@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn date_index_backfills_legacy_snapshots_persists_and_tracks_events() {
-        use cardinal_sdk::{EventFlag, FsEvent};
+        use everything_mac_sdk::{EventFlag, FsEvent};
         use std::time::{Duration, UNIX_EPOCH};
         let _lock = TEST_LOCK.lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
@@ -761,10 +761,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "set CARDINAL_SELECTION_INDEX to a read-only snapshot for timing"]
+    #[ignore = "set EVERYTHING_MAC_SELECTION_INDEX to a read-only snapshot for timing"]
     fn selection_refresh_probe() {
         let _lock = TEST_LOCK.lock().unwrap();
-        let path = CString::new(std::env::var("CARDINAL_SELECTION_INDEX").unwrap()).unwrap();
+        let path = CString::new(std::env::var("EVERYTHING_MAC_SELECTION_INDEX").unwrap()).unwrap();
         let empty = CString::new("").unwrap();
         let ranges = CString::new("[[0,1]]").unwrap();
         let cached = CString::new("null").unwrap();

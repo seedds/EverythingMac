@@ -3,10 +3,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// How often long-running loops should check whether execution was cancelled.
 pub const CANCEL_CHECK_INTERVAL: usize = 0x10000;
 
-/// A global atomic identifies the active search version of Cardinal.
+/// A global atomic identifies the active search version of EverythingMac.
 pub static ACTIVE_SEARCH_VERSION: AtomicU64 = AtomicU64::new(0);
 
-/// A global atomic identifies the active scanning process version of Cardinal.
+/// A global atomic identifies the active scanning process version of EverythingMac.
 pub static ACTIVE_SCAN_VERSION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug)]

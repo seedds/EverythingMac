@@ -1,5 +1,7 @@
 # Sorting limit performance — 2026-09-28
 
+Historical measurements below retain the upstream Cardinal query text; current benchmark scripts use `everything-mac`.
+
 Historical report for 0.1.39. Version 0.1.42 removes the sorting cap and its setting. To reproduce these historical capped comparisons, use the scripts and code from the corresponding release tag.
 
 This is the **0.1.39 baseline**, recorded before background date indexing and
@@ -67,7 +69,7 @@ The bridge's existing `search_ms` field ends before sorting. This benchmark inst
 ## Environment and reproduction
 
 - Apple M4 Pro, 14 CPU cores, 48 GiB RAM; macOS 27.0 (26A428).
-- Cardinal Native 0.1.39, commit `53521d422c83fedfcc34402cdeaf7964aaa48013`.
+- EverythingMac 0.1.39, commit `53521d422c83fedfcc34402cdeaf7964aaa48013`.
 - Production Rust release bridge linked into a small optimized Swift harness.
 - A fixed copy of the user's native index, 4,610,087 entries; SHA-256 `30b462e733d7801e44be603bfce33d86638714482746bc39116570f776b23a43`.
 - No watcher, checkpoint, preference writes, file actions, or index mutations. Metadata reads use the real indexed paths.
@@ -78,24 +80,24 @@ The bridge's existing `search_ms` field ends before sorting. This benchmark inst
 From the repository root, build the harness:
 
 ```sh
-PATH="$HOME/.cargo/bin:$PATH" cargo build --locked --release -p cardinal-native-prototype
-swiftc -O -module-cache-path /tmp/cardinal-sort-module-cache \
+PATH="$HOME/.cargo/bin:$PATH" cargo build --locked --release -p everything-mac-native-prototype
+swiftc -O -module-cache-path /tmp/everything-mac-sort-module-cache \
   -I Sources/CNative scripts/benchmark-sort.swift \
-  -L target/release -lcardinal_native_prototype \
+  -L target/release -leverything_mac_native_prototype \
   -framework CoreServices -framework CoreFoundation -framework Security \
-  -liconv -lresolv -o /tmp/cardinal-benchmark-sort
+  -liconv -lresolv -o /tmp/everything-mac-benchmark-sort
 ```
 
 Run against a copied snapshot (never overwrite the original):
 
 ```sh
-python3 scripts/benchmark-sort.py /tmp/cardinal-benchmark-sort \
+python3 scripts/benchmark-sort.py /tmp/everything-mac-benchmark-sort \
   build/sort-benchmark/index.db build/sort-benchmark/reproduction \
   --names small,medium,large
-python3 scripts/benchmark-sort.py /tmp/cardinal-benchmark-sort \
+python3 scripts/benchmark-sort.py /tmp/everything-mac-benchmark-sort \
   build/sort-benchmark/index.db build/sort-benchmark/reproduction \
   --names larger --keys filename,size
-python3 scripts/benchmark-sort.py /tmp/cardinal-benchmark-sort \
+python3 scripts/benchmark-sort.py /tmp/everything-mac-benchmark-sort \
   build/sort-benchmark/index.db build/sort-benchmark/reproduction \
   --names broad,all --keys filename --timeout 60
 ```

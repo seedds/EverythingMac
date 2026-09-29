@@ -1,10 +1,11 @@
-// Opt-in instrumentation of the existing App, search hook and VirtualList.
+// Opt-in instrumentation of the upstream Cardinal App, search hook and VirtualList.
+// Imports reference the actual upstream checkout layout; see UPSTREAM.md.
 import { invoke } from "../cardinal/node_modules/@tauri-apps/api/core";
 import { listen } from "../cardinal/node_modules/@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "../cardinal/node_modules/@tauri-apps/api/webviewWindow";
 
 export async function startBenchmark() {
-  const queries = ["EE.en", "cardinal", "package.json", "a"];
+  const queries = ["EE.en", "everything-mac", "package.json", "a"];
   const samples: object[] = [];
   const typingSamples: object[] = [];
   let typingStep = -1;
@@ -75,7 +76,7 @@ export async function startBenchmark() {
         Object.getOwnPropertyDescriptor(
           HTMLInputElement.prototype,
           "value",
-        )!.set!.call(input, typingStep % 2 === 0 ? "cardinal" : "package.json");
+        )!.set!.call(input, typingStep % 2 === 0 ? "everything-mac" : "package.json");
         input.dispatchEvent(new Event("input", { bubbles: true }));
       }, 80);
       return;

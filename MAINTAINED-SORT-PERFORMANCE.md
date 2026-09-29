@@ -1,4 +1,4 @@
-# Maintained sorting performance — Cardinal Native 0.1.41
+# Maintained sorting performance — EverythingMac 0.1.41
 
 Historical report for 0.1.41. Version 0.1.42 removes the sorting cap and its setting. To reproduce these historical capped comparisons, use the scripts and code from the corresponding release tag.
 
@@ -70,12 +70,12 @@ Snapshot: `build/indexed-sort-benchmark/current-source.db`, SHA-256 `81d2fc0a715
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
 CARGO_PROFILE_RELEASE_STRIP=none cargo build --locked --release \
-  -p cardinal-native-prototype --lib --example sort_index_updates
-swiftc -O -module-cache-path /tmp/cardinal-sort-module-cache -I Sources/CNative \
-  scripts/benchmark-sort.swift -L target/release -lcardinal_native_prototype \
+  -p everything-mac-native-prototype --lib --example sort_index_updates
+swiftc -O -module-cache-path /tmp/everything-mac-sort-module-cache -I Sources/CNative \
+  scripts/benchmark-sort.swift -L target/release -leverything_mac_native_prototype \
   -framework CoreServices -framework CoreFoundation -framework Security \
-  -liconv -lresolv -o /tmp/cardinal-maintained-sort-benchmark
-python3 scripts/benchmark-sort.py /tmp/cardinal-maintained-sort-benchmark \
+  -liconv -lresolv -o /tmp/everything-mac-maintained-sort-benchmark
+python3 scripts/benchmark-sort.py /tmp/everything-mac-maintained-sort-benchmark \
   build/indexed-sort-benchmark/current-source.db \
   build/maintained-sort-benchmark/final --timeout 90
 target/release/examples/sort_index_updates \

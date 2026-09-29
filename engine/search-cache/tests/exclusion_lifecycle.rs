@@ -1,4 +1,4 @@
-use cardinal_sdk::{EventFlag, FsEvent};
+use everything_mac_sdk::{EventFlag, FsEvent};
 use fswalk::{Exclusions, WalkData};
 use search_cache::SearchCache;
 use std::{fs, sync::atomic::AtomicBool};

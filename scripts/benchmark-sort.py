@@ -15,7 +15,7 @@ parser.add_argument("--keys", default="filename,fullPath,size,mtime,ctime")
 parser.add_argument("--resume", action="store_true")
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
-queries = [("small", "cardinal"), ("medium", ".swift"), ("large", ".js"),
+queries = [("small", "everything-mac"), ("medium", ".swift"), ("large", ".js"),
            ("larger", ".py"), ("broad", "a"), ("all", "")]
 queries = [(name, query) for name, query in queries if name in args.names.split(",")]
 cases = [(name, query, "none") for name, query in queries]

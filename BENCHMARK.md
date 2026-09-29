@@ -1,4 +1,6 @@
-# Native Cardinal benchmark — 2026-09-27
+# EverythingMac benchmark — 2026-09-27
+
+Historical measurements below retain the upstream Cardinal query text; current benchmark scripts use `everything-mac`.
 
 Historical snapshot-only prototype measurement, before live feature-parity work.
 The expanded native app requires a new feature-equivalent performance comparison.

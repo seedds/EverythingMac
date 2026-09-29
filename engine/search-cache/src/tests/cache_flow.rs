@@ -1,5 +1,5 @@
 use super::prelude::*;
-use cardinal_sdk::{EventFlag, FsEvent};
+use everything_mac_sdk::{EventFlag, FsEvent};
 use std::sync::atomic::AtomicBool;
 
 static NEVER_STOPPED: AtomicBool = AtomicBool::new(false);

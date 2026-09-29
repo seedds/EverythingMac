@@ -6,8 +6,8 @@ edition = "2024"
 [dependencies]
 fswalk = { path = "../fswalk" }
 namepool = { path = "../namepool" }
-cardinal-sdk = { path = "../cardinal-sdk" }
-cardinal-syntax = { path = "../cardinal-syntax" }
+everything-mac-sdk = { path = "../everything-mac-sdk" }
+everything-mac-syntax = { path = "../everything-mac-syntax" }
 query-segmentation = { path = "../query-segmentation" }
 search-cancel = { path = "../search-cancel" }
 zstd = { version = "0.13", features = ["zstdmt"] }

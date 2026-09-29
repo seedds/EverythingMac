@@ -3,7 +3,7 @@ use crate::{
     SlabNodeMetadataCompact, build_segment_matchers, cache::NAME_POOL,
 };
 use anyhow::{Result, anyhow, bail};
-use cardinal_syntax::{
+use everything_mac_syntax::{
     ArgumentKind, ComparisonOp, Expr, Filter, FilterArgument, FilterKind, RangeSeparator, Term,
 };
 use file_tags::{read_tags_from_path, search_tags_using_mdfind};

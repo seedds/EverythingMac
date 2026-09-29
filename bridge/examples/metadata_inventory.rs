@@ -41,7 +41,7 @@ fn main() {
         return;
     }
     let mut inventory = Vec::new();
-    for query in ["cardinal", ".swift", ".js", ".py", "a", ""] {
+    for query in ["everything-mac", ".swift", ".js", ".py", "a", ""] {
         let ids = cache
             .search_query_with_options(
                 SearchQuery {

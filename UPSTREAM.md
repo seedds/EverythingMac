@@ -1,4 +1,4 @@
-# Upstream attribution
+@@PRESERVE0@@@@PRESERVE1@@@@PRESERVE5@@@@PRESERVE10@@@@PRESERVE14@@
 
 EverythingMac (previously Cardinal Native) is derived from [Cardinal](https://github.com/cardisoft/cardinal)
 and the [seedds fork](https://github.com/seedds/cardinal), under the MIT license
@@ -11,7 +11,11 @@ local seedds/cardinal checkout at commit
 
 This repository includes all source and resources needed to build the native app.
 Historical Tauri benchmark scripts require a separate seedds/cardinal checkout;
-set `CARDINAL_TAURI_REPO` to its absolute path (defaults to `../cardinal`).
+set `EVERYTHING_MAC_TAURI_REPO` to its absolute path (defaults to `../cardinal`).
+Those comparison scripts retain the real upstream paths and legacy benchmark environment
+variables for interoperability. EverythingMac targets, crates, and build variables use
+the EverythingMac name. The only old native storage name retained in app code is the
+legacy index filename needed to migrate existing installations.
 
 EverythingMac is inspired by [Everything for Windows](https://www.voidtools.com/).
 It adds a native SwiftUI/AppKit interface and improvements to sorting performance,

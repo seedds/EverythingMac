@@ -27,7 +27,7 @@ impl Indexing {
 static POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
         .num_threads(2)
-        .thread_name(|i| format!("cardinal-date-index-{i}"))
+        .thread_name(|i| format!("everything-mac-date-index-{i}"))
         .build()
         .expect("create metadata indexing pool")
 });

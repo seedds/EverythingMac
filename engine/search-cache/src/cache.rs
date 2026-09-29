@@ -6,8 +6,8 @@ use crate::{
     query_preprocessor::{expand_query_home_dirs, strip_query_quotes},
 };
 use anyhow::{Context, Result, anyhow};
-use cardinal_sdk::{EventFlag, FsEvent, ScanType, current_event_id};
-use cardinal_syntax::{Expr, Filter, FilterKind, Term, optimize_query, parse_query};
+use everything_mac_sdk::{EventFlag, FsEvent, ScanType, current_event_id};
+use everything_mac_syntax::{Expr, Filter, FilterKind, Term, optimize_query, parse_query};
 use fswalk::{
     Node, NodeMetadata, WalkData, should_ignore_path, walk_it, walk_it_without_root_chain,
 };

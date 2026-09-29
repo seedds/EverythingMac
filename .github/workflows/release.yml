@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cardinal-release
+  group: everything-mac-release
   cancel-in-progress: false
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
         if: steps.prepare.outputs.published != 'true'
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          cargo test --locked -p cardinal-native-prototype --config 'build.rustflags=["-Csplit-debuginfo=unpacked"]'
+          cargo test --locked -p everything-mac-native-prototype --config 'build.rustflags=["-Csplit-debuginfo=unpacked"]'
       - name: Build and verify Apple Silicon DMG
         if: steps.prepare.outputs.published != 'true'
         run: |

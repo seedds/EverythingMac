@@ -1,6 +1,6 @@
 //! Read-only index maintenance benchmark. Re-read one existing file's metadata
 //! using the normal event path; never modify that file or the source snapshot.
-use cardinal_sdk::{EventFlag, FsEvent};
+use everything_mac_sdk::{EventFlag, FsEvent};
 use search_cache::{SearchCache, SortColumn, read_cache_from_file};
 use search_cancel::CancellationToken;
 use std::{path::Path, sync::atomic::AtomicBool, time::Instant};

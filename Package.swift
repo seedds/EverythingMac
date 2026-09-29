@@ -3,11 +3,11 @@ import PackageDescription
 let package = Package(
     name: "EverythingMac",
     platforms: [.macOS(.v12)],
-    products: [.executable(name: "EverythingMac", targets: ["CardinalNative"])],
+    products: [.executable(name: "EverythingMac", targets: ["EverythingMacNative"])],
     targets: [
         .systemLibrary(name: "CNative"),
-        .executableTarget(name: "CardinalNative", dependencies: ["CNative"], linkerSettings: [
-            .linkedLibrary("cardinal_native_prototype"),
+        .executableTarget(name: "EverythingMacNative", dependencies: ["CNative"], linkerSettings: [
+            .linkedLibrary("everything_mac_native_prototype"),
             .linkedFramework("CoreServices"), .linkedFramework("CoreFoundation"),
             .linkedFramework("Security"), .linkedLibrary("iconv"), .linkedLibrary("resolv")
         ])

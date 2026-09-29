@@ -9,7 +9,7 @@ report = json.loads(Path(sys.argv[1]).read_text())
 if report.get('error'):
     raise SystemExit(report['error'])
 failed = False
-for query in ['EE.en', 'cardinal', 'package.json', 'a']:
+for query in ['EE.en', 'everything-mac', 'package.json', 'a']:
     rows = [s for s in report['samples'] if s['query'] == query]
     if len(rows) < 20:
         raise SystemExit('Incomplete benchmark')

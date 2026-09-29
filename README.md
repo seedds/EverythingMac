@@ -201,11 +201,16 @@ Native data is stored separately:
 
 ```text
 ~/Library/Application Support/com.everything.mac/
-├── cardinal.db
+├── everything-mac.db
 └── preferences.json
 ```
 
 The original Cardinal index and preferences are not overwritten.
+
+Existing EverythingMac installations migrate the old index filename to
+`everything-mac.db` on normal startup. Read-only snapshot and diagnostic runs can
+still open the old filename without changing it. An existing `everything-mac.db`
+takes precedence; migration failures preserve the old file and stop startup scanning.
 
 Use **Index folder…** in Index details to choose a monitored root, and the bottom
 rescan button to rebuild the current scope. Preferences contains include/ignore
@@ -250,9 +255,8 @@ search; errors and background refreshes do not. Individual history entries can b
 and Clear History preserves saved searches. Unreadable library files are preserved and
 reported rather than overwritten.
 
-Matching suggestions appear while typing. **Option-Down** enters suggestions, arrows
-navigate, Enter restores the selected search, and Escape dismisses the list. **Down**
-still enters results. With suggestions dismissed, Option-Up/Down navigates recent history.
+Use the **Search Library** button to browse saved searches and recent history.
+**Down** enters results; **Option-Up/Down** navigates recent history.
 
 **Help → Search & Shortcuts** (Cmd-/) provides an offline searchable reference with
 copyable, runnable examples and the currently configured activation shortcut.
@@ -262,7 +266,7 @@ copyable, runnable examples and the currently configured activation shortcut.
 To search an index without monitoring the filesystem or writing an index:
 
 ```bash
-./run.sh --snapshot --index /absolute/path/to/cardinal.db
+./run.sh --snapshot --index /absolute/path/to/everything-mac.db
 ```
 
 **Choose index…** also enters snapshot mode. **Enable live updates** switches the
@@ -288,14 +292,14 @@ the conflict. Record an alternative in Preferences. A failed replacement keeps t
 | Path | Responsibility |
 | --- | --- |
 | `Package.swift` | Swift executable package and macOS deployment target. |
-| `Sources/CardinalNative/App.swift` | Search layout, status bar, app lifecycle, menu bar item, and shortcuts. |
-| `Sources/CardinalNative/ResultsTable.swift` | Virtualized AppKit table, selection, columns, and drag handling. |
-| `Sources/CardinalNative/Engine.swift` | C bridge calls, background queue, search generations, and row paging. |
-| `Sources/CardinalNative/LiveModel.swift` | Live updates, scans, checkpoint status, and selection restoration. |
-| `Sources/CardinalNative/FileActions.swift` | Open/reveal/copy, rename, Trash, terminal, and Quick Look. |
-| `Sources/CardinalNative/Icons.swift` | Bounded standard file icon loading. |
-| `Sources/CardinalNative/Preferences.swift` | Native preferences and empty installation defaults. |
-| `Sources/CNative/include/cardinal_native.h` | C-compatible Rust/Swift interface and ownership contract. |
+| `Sources/EverythingMacNative/App.swift` | Search layout, status bar, app lifecycle, menu bar item, and shortcuts. |
+| `Sources/EverythingMacNative/ResultsTable.swift` | Virtualized AppKit table, selection, columns, and drag handling. |
+| `Sources/EverythingMacNative/Engine.swift` | C bridge calls, background queue, search generations, and row paging. |
+| `Sources/EverythingMacNative/LiveModel.swift` | Live updates, scans, checkpoint status, and selection restoration. |
+| `Sources/EverythingMacNative/FileActions.swift` | Open/reveal/copy, rename, Trash, terminal, and Quick Look. |
+| `Sources/EverythingMacNative/Icons.swift` | Bounded standard file icon loading. |
+| `Sources/EverythingMacNative/Preferences.swift` | Native preferences and empty installation defaults. |
+| `Sources/CNative/include/everything_mac_native.h` | C-compatible Rust/Swift interface and ownership contract. |
 | `bridge/src/` | Rust static library, saved-index loading, search, selection, and live indexing. |
 | `run.sh` | Release build, app assembly, signing, and launch. |
 | `scripts/package-native.sh` | Local DMG creation. |
@@ -311,8 +315,8 @@ four-thread traversal pool. Rust panics at the bridge become errors; poisoned
 engines require reloading. Returned C buffers have explicit release functions.
 
 Swift compiler products are cached under
-`/private/tmp/cardinal-native-<uid>-<repository-hash>`. Set
-`CARDINAL_SWIFT_BUILD_DIR` to override this location. Keeping compiler products
+`/private/tmp/everything-mac-native-<uid>-<repository-hash>`. Set
+`EVERYTHING_MAC_SWIFT_BUILD_DIR` to override this location. Keeping compiler products
 outside Documents avoids ancestor-folder permission waits observed in `dsymutil`.
 Generated apps, caches, indexes, and benchmark outputs are excluded from commits.
 
@@ -323,7 +327,7 @@ Run from the repository root:
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets
-./run.sh --live-check /tmp/cardinal-native-live-check.json
+./run.sh --live-check /tmp/everything-mac-native-live-check.json
 ./run.sh --feature-check /tmp/everything-feature-check.json
 ```
 
@@ -336,13 +340,13 @@ the process exit status.
 To check selection clearing when a background refresh completes on the Events tab:
 
 ```bash
-./run.sh --live-check /tmp/cardinal-native-tab-check.json --tab-check
+./run.sh --live-check /tmp/everything-mac-native-tab-check.json --tab-check
 ```
 
 To run only the F9/live-update regression checks (single and 1,200-file selections):
 
 ```bash
-./run.sh --live-check /tmp/cardinal-native-terminal-check.json --terminal-check
+./run.sh --live-check /tmp/everything-mac-native-terminal-check.json --terminal-check
 ```
 
 The checks use a deliberately missing terminal application to verify that F9
@@ -352,7 +356,7 @@ opening an external app.
 To reproduce F8 after an index update, for one and 130 selected files:
 
 ```bash
-./run.sh --live-check /tmp/cardinal-native-trash-check.json --trash-check
+./run.sh --live-check /tmp/everything-mac-native-trash-check.json --trash-check
 ```
 
 This trashes only disposable fixture files, verifies that unselected files remain,
@@ -363,8 +367,8 @@ selected file is resolved even when the displayed result generation is stale.
 To check that live file changes preserve the selected row without flickering:
 
 ```bash
-./run.sh --selection-check /tmp/cardinal-selection.json
-python3 -c 'import json; r=json.load(open("/tmp/cardinal-selection.json")); assert r["error"] is None, r'
+./run.sh --selection-check /tmp/everything-mac-selection.json
+python3 -c 'import json; r=json.load(open("/tmp/everything-mac-selection.json")); assert r["error"] is None, r'
 ```
 
 This uses disposable files and the real table. It checks continuous selection
@@ -376,30 +380,30 @@ changes. Copy Files, Paths, and Filenames wait for a pending selection automatic
 To measure selection restoration after broad searches against a read-only snapshot:
 
 ```bash
-CARDINAL_SELECTION_INDEX=/absolute/path/to/cardinal.db \
-  cargo test -p cardinal-native-prototype --release selection_refresh_probe -- --ignored --nocapture
+EVERYTHING_MAC_SELECTION_INDEX=/absolute/path/to/everything-mac.db \
+  cargo test -p everything-mac-native-prototype --release selection_refresh_probe -- --ignored --nocapture
 ```
 
 To verify stable lifecycle status widths across all English states:
 
 ```bash
-swiftc -parse-as-library Sources/CardinalNative/LifecycleStatus.swift \
-  scripts/check-status-layout.swift -o /tmp/cardinal-status-layout-check
-/tmp/cardinal-status-layout-check
+swiftc -parse-as-library Sources/EverythingMacNative/LifecycleStatus.swift \
+  scripts/check-status-layout.swift -o /tmp/everything-mac-status-layout-check
+/tmp/everything-mac-status-layout-check
 ```
 
 To verify sort persistence and header arrows for every column, using temporary
 preferences and fresh app models without changing your saved settings:
 
 ```bash
-./run.sh --sort-check /tmp/cardinal-sort.json
+./run.sh --sort-check /tmp/everything-mac-sort.json
 ```
 
 For the saved-index window checks, create a fresh fixture directory:
 
 ```bash
-FIXTURE_DIR="$(mktemp -d /tmp/cardinal-native-check.XXXXXX)"
-cargo run -p cardinal-native-prototype --example fixture -- "$FIXTURE_DIR"
+FIXTURE_DIR="$(mktemp -d /tmp/everything-mac-native-check.XXXXXX)"
+cargo run -p everything-mac-native-prototype --example fixture -- "$FIXTURE_DIR"
 ./run.sh --index "$FIXTURE_DIR/snapshot.db" \
   --self-check "$FIXTURE_DIR/checks.json"
 ```
@@ -422,7 +426,7 @@ searches separately from typing/debounce latency.
 
 ```bash
 ./run.sh --build-only
-cp "$HOME/Library/Application Support/com.everything.mac/cardinal.db" \
+cp "$HOME/Library/Application Support/com.everything.mac/everything-mac.db" \
   build/benchmark-index.db
 python3 scripts/measure.py native \
   build/benchmark-index.db build/native.json
@@ -436,9 +440,9 @@ python3 scripts/measure.py tauri \
 For backend and selection-resolution probes:
 
 ```bash
-./run.sh --probe --index /absolute/path/to/cardinal.db
+./run.sh --probe --index /absolute/path/to/everything-mac.db
 ./run.sh --probe --selection-probe \
-  --index /absolute/path/to/cardinal.db
+  --index /absolute/path/to/everything-mac.db
 ```
 
 Draw callbacks are rendering proxies, not physical display measurements. Report
@@ -447,7 +451,7 @@ memory totals. Avoid competing builds or benchmarks during measurement. Do not
 attribute gains from different debounce settings or omitted features to SwiftUI.
 
 The optional Tauri baseline requires a separate `seedds/cardinal` checkout. Set
-`CARDINAL_TAURI_REPO` to its absolute path (defaults to `../cardinal`). Historical
+`EVERYTHING_MAC_TAURI_REPO` to its absolute path (defaults to `../cardinal`). Historical
 benchmark notes retain paths from the original combined repository.
 
 The Tauri baseline uses an explicit benchmark feature and separate app identifier.
@@ -477,9 +481,9 @@ results and an updated performance comparison.
 With a saved index containing at least 10,000 matching rows:
 
 ```bash
-./run.sh --index /absolute/path/to/cardinal.db --scroll-query a \
-  --scroll-stress --scroll-check /tmp/cardinal-scroll.json
-python3 -c 'import json; r=json.load(open("/tmp/cardinal-scroll.json")); assert r["error"] is None, r'
+./run.sh --index /absolute/path/to/everything-mac.db --scroll-query a \
+  --scroll-stress --scroll-check /tmp/everything-mac-scroll.json
+python3 -c 'import json; r=json.load(open("/tmp/everything-mac-scroll.json")); assert r["error"] is None, r'
 ```
 
 This opens the index read-only, scrolls the real table through 60 positions, and

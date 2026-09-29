@@ -9,8 +9,8 @@ use std::{path::Path, time::Instant};
 use tauri::Emitter;
 
 pub(crate) fn run(app: &tauri::AppHandle, channels: BackgroundLoopChannels) {
-    let path = std::env::var("CARDINAL_BENCHMARK_INDEX")
-        .expect("benchmark build requires CARDINAL_BENCHMARK_INDEX; it never scans");
+    let path = std::env::var("EVERYTHING_MAC_BENCHMARK_INDEX")
+        .expect("benchmark build requires EVERYTHING_MAC_BENCHMARK_INDEX; it never scans");
     let started = Instant::now();
     let storage = read_cache_from_file(Path::new(&path)).expect("Cannot read benchmark snapshot");
     let mut cache = SearchCache::from_persistent_storage(storage, &APP_QUIT);
