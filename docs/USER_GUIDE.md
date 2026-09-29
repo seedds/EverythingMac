@@ -83,6 +83,11 @@ for versioned search and sorting results.
 
 ## Indexing and storage
 
+Open **EverythingMac → Settings…** with **Command-,** or the gear button.
+Settings opens in its own window, so you can continue using search. **Save**
+applies changes; **Cancel** or closing the window discards unsaved edits.
+On macOS 12, the system menu calls this **Preferences…**.
+
 Normal launch loads EverythingMac's saved index when one exists. Otherwise it
 scans the configured monitor root. New installations start with empty include
 and ignore paths and an empty terminal application setting (F9 uses macOS Terminal).

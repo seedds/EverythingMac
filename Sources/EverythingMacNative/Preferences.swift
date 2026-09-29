@@ -153,19 +153,20 @@ func messageError(_ message: String) -> NSError {
 struct PreferencesView: View {
   @ObservedObject var prefs: Preferences
   @ObservedObject var model: Model
+  var close: () -> Void
   @StateObject private var draft: Preferences
-  init(prefs: Preferences, model: Model) {
+  init(prefs: Preferences, model: Model, close: @escaping () -> Void) {
     self.prefs = prefs
     self.model = model
+    self.close = close
     let copy = Preferences(isolated: true)
     copy.apply(prefs.values)
     _draft = StateObject(wrappedValue: copy)
   }
-  @Environment(\.presentationMode) var presentation
   @State var error: String?
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text("Preferences").font(.title2.bold())
+      Text("Settings").font(.title2.bold())
       TextField("Monitor root path", text: $draft.root)
       HStack {
         VStack(alignment: .leading) {
@@ -226,15 +227,20 @@ struct PreferencesView: View {
           draft.restoreDefaults()
         }
         Spacer()
-        Button("Close") { presentation.wrappedValue.dismiss() }
+        Button("Cancel", action: close).keyboardShortcut(.cancelAction)
         Button(
           (draft.patternLines != model.loadedPatterns || draft.root != prefs.root
             || draft.ignores != prefs.ignores || draft.includes != prefs.includes)
             && !model.snapshotOnly ? "Save and Rebuild" : "Save"
         ) {
           do {
+            // Search stays usable while Settings is open. Keep any newer table
+            // layout and sort changes when committing this settings draft.
+            draft.tableColumns = prefs.tableColumns
+            draft.sortKey = prefs.sortKey
+            draft.sortAscending = prefs.sortAscending
             try model.savePreferences(draft)
-            presentation.wrappedValue.dismiss()
+            close()
           } catch { self.error = error.localizedDescription }
         }.keyboardShortcut(.defaultAction).disabled(model.scanning)
       }

@@ -120,7 +120,7 @@ final class SelfCheck {
       if let table = view as? ResultsView { return table }
       return view.subviews.lazy.compactMap { findTable($0) }.first
     }
-    guard let content = NSApp.windows.first(where: { $0.delegate is AppDelegate })?.contentView,
+    guard let content = NSApp.windows.first(where: { $0.identifier?.rawValue == "EverythingMacSearch" })?.contentView,
       let table = findTable(content)
     else { return "Rendered results table missing" }
     guard table.numberOfRows == model.total else { return "Stale table row count" }

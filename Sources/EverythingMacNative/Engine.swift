@@ -213,7 +213,6 @@ final class Model: ObservableObject {
   @Published var events: [FileEvent] = []
   @Published var eventFilter = ""
   @Published var activeTab = "files"
-  @Published var preferencesOpen = false
   @Published var selectionLoading = false
   @Published var selectedPaths: [String] = []
   @Published var selectionCount = 0

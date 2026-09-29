@@ -63,6 +63,7 @@ you launch when also using the Homebrew installation; their version and signatur
 | --- | --- |
 | `Package.swift` | Swift executable package and macOS deployment target. |
 | `Sources/EverythingMacNative/App.swift` | Search layout, status bar, app lifecycle, menu bar item, and shortcuts. |
+| `Sources/EverythingMacNative/AppWindows.swift` | SwiftUI window access, close-to-hide behavior, and Settings presentation. |
 | `Sources/EverythingMacNative/ResultsTable.swift` | Virtualized AppKit table, selection, columns, and drag handling. |
 | `Sources/EverythingMacNative/Engine.swift` | C bridge calls, background queue, search generations, and row paging. |
 | `Sources/EverythingMacNative/LiveModel.swift` | Live updates, scans, checkpoint status, and selection restoration. |
@@ -73,6 +74,13 @@ you launch when also using the Homebrew installation; their version and signatur
 | `bridge/src/` | Rust static library, saved-index loading, search, selection, and live indexing. |
 | `run.sh` | Release build, app assembly, signing, and launch. |
 | `scripts/package-native.sh` | Local DMG creation. |
+
+SwiftUI's `App` lifecycle owns the search `WindowGroup`, standard menus, and
+`Settings` scene. An `NSApplicationDelegateAdaptor` retains native activation,
+global shortcuts, the menu bar item, and asynchronous index saving before quit.
+The search window forwards delegate callbacks to SwiftUI while intercepting close
+to hide it; a responder adapter preserves Quick Look without a custom window class.
+The macOS 12 deployment target remains supported.
 
 Rust owns the full result-ID vector and passive selection identities. Swift keeps
 at most 1,024 row models around the viewport, plus bounded selection samples.
@@ -194,7 +202,10 @@ cargo run -p everything-mac-native-prototype --example fixture -- "$FIXTURE_DIR"
 ```
 
 The feature suite checks exclusions, shortcuts, history persistence/restoration, help,
-index filename migration, and the 800-point minimum layout. Historical test totals
+index filename migration, the 800-point minimum layout, the independent Settings
+window and draft cancellation, standard menu shortcuts, search-window hiding,
+reopening and restoration from the Dock, and asynchronous shutdown on quit.
+Historical test totals
 and coverage limits are recorded in [History](HISTORY.md); they are not current pass counts.
 
 ### Filesystem access and debug information

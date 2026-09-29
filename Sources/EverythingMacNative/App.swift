@@ -58,7 +58,6 @@ struct ContentView: View {
       if model.activeTab == "events" { model.tableAction = nil }
       searchFocused = true
     }
-    .sheet(isPresented: $model.preferencesOpen) { PreferencesView(prefs: prefs, model: model) }
   }
 
   private var searchBar: some View {
@@ -227,13 +226,7 @@ struct ContentView: View {
         .help("Rescan").accessibilityLabel(
           "Rescan")
       }
-      Button {
-        model.preferencesOpen = true
-      } label: {
-        Image(systemName: "gearshape")
-      }
-      .help("Open preferences").accessibilityLabel(
-        "Open preferences")
+      OpenSettingsButton()
       Button {
         indexDetailsOpen.toggle()
       } label: {
@@ -303,10 +296,13 @@ struct ContentView: View {
   }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-  var model: Model!
-  var window: NativeWindow!
-  var actions: FileActions!
+final class AppDelegate: NSObject, NSApplicationDelegate {
+  let model: Model
+  var window: NSWindow?
+  private var windowDelegate: SearchWindowDelegate?
+  private var previewResponder: PreviewResponder?
+  private var launched = false
+  private var started = false
   var benchmark: Benchmark?
   var scrollCheck: ScrollCheck?
   var selectionCheck: SelectionCheck?
@@ -319,20 +315,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var handler: EventHandlerRef?
   var monitor: Any?
   var instanceLock: Int32 = -1
+  override init() {
+    let args = CommandLine.arguments
+    let isolated = ["--benchmark", "--self-check", "--snapshot", "--live-check",
+      "--scroll-check", "--selection-check", "--feature-check", "--icon-check"]
+      .contains(where: args.contains)
+    model = Model(prefs: Preferences(isolated: isolated))
+    model.snapshotOnly = isolated
+    model.live = !isolated
+    super.init()
+  }
+
+  @MainActor func attachSearchWindow(_ window: NSWindow) {
+    guard self.window == nil else { return }
+    self.window = window
+    window.identifier = NSUserInterfaceItemIdentifier("EverythingMacSearch")
+    windowDelegate = SearchWindowDelegate(forwarding: window.delegate)
+    window.delegate = windowDelegate
+    let responder = PreviewResponder(preview: model.actions.preview)
+    responder.nextResponder = window.nextResponder
+    window.nextResponder = responder
+    previewResponder = responder
+    window.setContentSize(NSSize(width: 1200, height: 800))
+    if !model.snapshotOnly { window.setFrameAutosaveName("EverythingMacWindow") }
+    if model.snapshotOnly || !window.setFrameUsingName("EverythingMacWindow") { window.center() }
+    startIfReady()
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     let args = CommandLine.arguments
     if let index = args.firstIndex(of: "--icon-check"), args.indices.contains(index + 1) {
       IconCheck.run(output: args[index + 1])
       return
     }
-    let isolated =
-      args.contains("--benchmark") || args.contains("--self-check") || args.contains("--snapshot")
-      || args.contains("--live-check") || args.contains("--scroll-check")
-      || args.contains("--selection-check") || args.contains("--feature-check")
-    let prefs = Preferences(isolated: isolated)
-    model = Model(prefs: prefs)
-    model.snapshotOnly = isolated
-    model.live = !isolated
+    launched = true
+    startIfReady()
+  }
+
+  @MainActor private func startIfReady() {
+    guard launched, let window = window, !started else { return }
+    started = true
+    let args = CommandLine.arguments
+    let isolated = model.snapshotOnly
+    let prefs = model.prefs
     var migrationError: Error?
     if !isolated {
       do {
@@ -360,17 +385,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if let index = args.firstIndex(of: "--index"), args.indices.contains(index + 1) {
       model.snapshot = args[index + 1]
     }
-    actions = model.actions
-    window = NativeWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
-      styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
-    )
-    window.title = "EverythingMac"
-    window.delegate = self
-    window.preview = actions.preview
-    window.contentView = NSHostingView(rootView: ContentView(model: model, prefs: prefs))
-    if !isolated { window.setFrameAutosaveName("EverythingMacWindow") }
-    if isolated || !window.setFrameUsingName("EverythingMacWindow") { window.center() }
     window.makeKeyAndOrderFront(nil)
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
@@ -380,10 +394,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       self.model.shortcutMessage = nil
     }
     prefs.onApply = { [weak self] in
-      self?.configureMenu()
       self?.configureTray()
     }
-    configureMenu()
     configureTray()
     monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self = self else { return event }
@@ -391,7 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     if !isolated { registerShortcut() }
     if let index = args.firstIndex(of: "--feature-check"), args.indices.contains(index + 1) {
-      featureCheck = FeatureCheck(model: model, window: window, output: args[index + 1])
+      featureCheck = FeatureCheck(model: model, window: window, delegate: self, output: args[index + 1])
       featureCheck?.start()
       return
     }
@@ -428,60 +440,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       model.scan()
     }
   }
-  func configureMenu() {
-    let menu = NSMenu()
-    func submenu(_ title: String) -> NSMenu {
-      let item = NSMenuItem()
-      let child = NSMenu(title: title)
-      item.submenu = child
-      menu.addItem(item)
-      return child
-    }
-    let app = submenu("EverythingMac")
-    app.addItem(
-      withTitle: "About EverythingMac",
-      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
-    let preferences = app.addItem(
-      withTitle: "Preferences…", action: #selector(showPreferences),
-      keyEquivalent: ",")
-    preferences.target = self
-    app.addItem(
-      withTitle: "Hide", action: #selector(NSApplication.hide(_:)),
-      keyEquivalent: "h")
-    app.addItem(
-      withTitle: "Quit EverythingMac", action: #selector(NSApplication.terminate(_:)),
-      keyEquivalent: "q")
-    let edit = submenu("Edit")
-    for (title, action, key) in [
-      ("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
-      ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a"),
-    ] {
-      edit.addItem(
-        withTitle: title, action: Selector(action),
-        keyEquivalent: key)
-    }
-    let view = submenu("View")
-    view.addItem(
-      withTitle: "Toggle Fullscreen",
-      action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f"
-    ).keyEquivalentModifierMask = [.control, .command]
-    let windows = submenu("Window")
-    windows.addItem(
-      withTitle: "Minimize",
-      action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-    windows.addItem(
-      withTitle: "Close Window",
-      action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-    NSApp.windowsMenu = windows
-    let help = submenu("Help")
-    let reference = help.addItem(withTitle: "Search & Shortcuts", action: #selector(showSearchHelp), keyEquivalent: "/")
-    reference.target = self
-    let updates = help.addItem(
-      withTitle: "Get Updates", action: #selector(showUpdates),
-      keyEquivalent: "")
-    updates.target = self
-    NSApp.mainMenu = menu
-  }
   @objc func showSearchHelp() {
     if helpWindow == nil {
       let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 600),
@@ -498,16 +456,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     helpWindow?.makeKeyAndOrderFront(nil)
   }
-  @objc func showPreferences() { model.preferencesOpen = true }
   @objc func showUpdates() {
     NSWorkspace.shared.open(URL(string: "https://github.com/seedds/EverythingMac/releases")!)
   }
   @objc func showWindow() {
+    guard let window = window else { return }
+    if window.isMiniaturized { window.deminiaturize(nil) }
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
     model.focusSearch?()
   }
   @objc func toggleWindow() {
+    guard let window = window else { return }
     if window.isVisible && NSApp.isActive { window.orderOut(nil) } else { showWindow() }
   }
   func configureTray() {
@@ -548,7 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   func key(_ event: NSEvent) -> NSEvent? {
-    guard window.isKeyWindow, !model.preferencesOpen else { return event }
+    guard let window = window, window.isKeyWindow else { return event }
     if event.modifierFlags.contains(.command),
       event.charactersIgnoringModifiers?.lowercased() == "f"
     {
@@ -580,17 +540,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     return event
   }
-  func windowShouldClose(_ sender: NSWindow) -> Bool {
-    sender.orderOut(nil)
-    return false
-  }
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool
   {
     showWindow()
     return true
   }
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard let model = model, window != nil, !model.closeFinished else { return .terminateNow }
+    guard started, !model.closeFinished else { return .terminateNow }
     model.close { error in
       if let error = error {
         let alert = NSAlert()
@@ -598,12 +554,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.informativeText = error.localizedDescription
         alert.runModal()
       }
+      self.featureCheck?.didFinishTermination(error)
       NSApp.reply(toApplicationShouldTerminate: true)
     }
     return .terminateLater
   }
   func applicationDidBecomeActive(_ notification: Notification) {
-    guard let model = model, !model.snapshotOnly else { return }
+    guard !model.snapshotOnly else { return }
     model.hasFullDiskAccess = ["Library/Containers/com.apple.stocks", "Library/Safari"].contains {
       (try? FileManager.default.contentsOfDirectory(
         atPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent($0).path))
@@ -629,9 +586,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       Probe.run()
       return
     }
-    let delegate = AppDelegate()
-    NSApplication.shared.delegate = delegate
-    NSApplication.shared.run()
-    withExtendedLifetime(delegate) {}
+    EverythingMacApp.main()
+  }
+}
+
+struct EverythingMacApp: App {
+  @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+
+  var body: some Scene {
+    WindowGroup("EverythingMac") {
+      ContentView(model: delegate.model, prefs: delegate.model.prefs)
+        .background(WindowReader { delegate.attachSearchWindow($0) })
+    }
+    .commands {
+      // The index and selection belong to one search window.
+      CommandGroup(replacing: .newItem) {
+        Button("Close Window") {
+          NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: nil)
+        }.keyboardShortcut("w")
+      }
+      CommandGroup(replacing: .help) {
+        Button("Search & Shortcuts") { delegate.showSearchHelp() }
+          .keyboardShortcut("/")
+        Button("Get Updates") { delegate.showUpdates() }
+      }
+    }
+    Settings {
+      SettingsContent(model: delegate.model)
+    }
   }
 }

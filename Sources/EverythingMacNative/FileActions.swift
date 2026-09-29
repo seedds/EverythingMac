@@ -40,8 +40,13 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
     return false
   }
 }
-final class NativeWindow: NSWindow {
-  var preview: PreviewController?
+final class PreviewResponder: NSResponder {
+  let preview: PreviewController
+  init(preview: PreviewController) {
+    self.preview = preview
+    super.init()
+  }
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
   override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
   override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
     panel.dataSource = preview

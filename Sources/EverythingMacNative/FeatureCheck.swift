@@ -8,11 +8,14 @@ import SwiftUI
 final class FeatureCheck {
   let model: Model
   let window: NSWindow
+  unowned let delegate: AppDelegate
   let output: String
   var checks: [String] = []
-  init(model: Model, window: NSWindow, output: String) {
+  private var failure: String?
+  init(model: Model, window: NSWindow, delegate: AppDelegate, output: String) {
     self.model = model
     self.window = window
+    self.delegate = delegate
     self.output = output
   }
   func check(_ condition: @autoclosure () -> Bool, _ description: String) throws {
@@ -241,17 +244,77 @@ final class FeatureCheck {
     try await Task.sleep(nanoseconds: 300_000_000)
     if let popover = window.childWindows?.first { try render(popover, suffix: "library") }
     model.libraryOpen = false
-    model.preferencesOpen = true
+    guard let appMenu = NSApp.mainMenu?.items.first?.submenu,
+      let settingsIndex = appMenu.items.firstIndex(where: { $0.keyEquivalent == "," })
+    else { throw messageError("SwiftUI Settings command is missing") }
+    appMenu.performActionForItem(at: settingsIndex)
     try await Task.sleep(nanoseconds: 300_000_000)
-    if let sheet = window.attachedSheet { try render(sheet, suffix: "preferences") }
-    model.preferencesOpen = false
+    guard let settings = NSApp.windows.first(where: {
+      $0.identifier?.rawValue == "EverythingMacSettings"
+    }) else { throw messageError("SwiftUI Settings window is missing") }
+    try check(settings.isVisible && window.attachedSheet == nil, "Settings opens in an independent SwiftUI window")
+    try render(settings, suffix: "preferences")
+    func rootField(in view: NSView?) -> NSTextField? {
+      guard let view = view else { return nil }
+      if let field = view as? NSTextField, field.placeholderString == "Monitor root path" { return field }
+      return view.subviews.lazy.compactMap { rootField(in: $0) }.first
+    }
+    guard let field = rootField(in: settings.contentView), settings.makeFirstResponder(field),
+      let rootEditor = settings.firstResponder as? NSTextView else {
+      throw messageError("Cannot focus Settings root field")
+    }
+    rootEditor.selectAll(nil)
+    rootEditor.insertText("/discard-this-draft", replacementRange: rootEditor.selectedRange())
+    try await Task.sleep(nanoseconds: 100_000_000)
+    try check(field.stringValue == "/discard-this-draft", "Settings draft accepts edits")
+    settings.performClose(nil)
+    try await Task.sleep(nanoseconds: 100_000_000)
+    let savedRoot = model.prefs.root
+    model.prefs.root = "/updated-while-settings-closed"
+    appMenu.performActionForItem(at: settingsIndex)
+    try await Task.sleep(nanoseconds: 300_000_000)
+    try check(settings.isVisible, "Settings reopens after closing")
+    try await waitFor { rootField(in: settings.contentView)?.stringValue == self.model.prefs.root }
+    try check(rootField(in: settings.contentView)?.stringValue == model.prefs.root,
+      "Reopening Settings discards unsaved edits and reads current preferences")
+    settings.performClose(nil)
+    model.prefs.root = savedRoot
     try check(window.contentView?.bounds.width == 800, "Native layout renders at minimum width")
-    if let delegate = NSApp.delegate as? AppDelegate {
-      delegate.showSearchHelp()
-      try await Task.sleep(nanoseconds: 300_000_000)
-      try check(delegate.helpWindow?.isVisible == true, "Search help opens in a native window")
-      if let help = delegate.helpWindow { try render(help, suffix: "help") }
-      delegate.helpWindow?.orderOut(nil)
+    delegate.showSearchHelp()
+    try await Task.sleep(nanoseconds: 300_000_000)
+    try check(delegate.helpWindow?.isVisible == true, "Search help opens in a native window")
+    if let help = delegate.helpWindow { try render(help, suffix: "help") }
+    delegate.helpWindow?.orderOut(nil)
+    delegate.showWindow()
+    window.performClose(nil)
+    try check(!window.isVisible && !model.closed, "Closing search hides the window and keeps the engine alive")
+    delegate.showWindow()
+    try check(window.isVisible, "Search reopens after closing")
+    window.miniaturize(nil)
+    delegate.showWindow()
+    try check(!window.isMiniaturized && window.isVisible, "Activation restores a minimized search window")
+    delegate.toggleWindow()
+    try check(!window.isVisible, "Activation shortcut hides the visible search window")
+    delegate.toggleWindow()
+    try check(window.isVisible, "Activation shortcut reopens the search window")
+    window.orderOut(nil)
+    var pid = ProcessInfo.processInfo.processIdentifier
+    let target = NSAppleEventDescriptor(descriptorType: typeKernelProcessID,
+      bytes: &pid, length: MemoryLayout.size(ofValue: pid))
+    let reopen = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass),
+      eventID: AEEventID(kAEReopenApplication), targetDescriptor: target,
+      returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+    _ = try reopen.sendEvent(options: .noReply, timeout: 2)
+    try await waitFor { self.window.isVisible }
+    try check(NSApp.windows.filter { $0.title == "EverythingMac" && $0.isVisible }.count == 1,
+      "Dock reopen restores the existing search window without duplicates")
+    func menuItems(_ menu: NSMenu) -> [NSMenuItem] {
+      menu.items.flatMap { [$0] + ($0.submenu.map(menuItems) ?? []) }
+    }
+    let commands = NSApp.mainMenu.map(menuItems) ?? []
+    for (key, name) in [("w", "Close Window"), ("q", "Quit"), ("h", "Hide"), (",", "Settings")] {
+      try check(commands.contains { $0.keyEquivalent == key && $0.keyEquivalentModifierMask == .command },
+        "Standard Command-\(key) command is available for \(name)")
     }
   }
   func render(_ window: NSWindow, suffix: String) throws {
@@ -267,14 +330,22 @@ final class FeatureCheck {
         suffix + ".png"))
   }
   func finish(_ error: String?) {
-    model.close { _ in
-      let report: [String: Any] = ["checks": self.checks, "error": error ?? NSNull()]
-      if let data = try? JSONSerialization.data(
-        withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-      {
-        try? data.write(to: URL(fileURLWithPath: self.output))
-      }
-      NSApp.terminate(nil)
+    failure = error
+    if let error = error { fputs("Feature check failed: \(error)\n", stderr) }
+    // Exercise SwiftUI's forwarding to the application delegate and its async
+    // termination handshake, rather than closing the model before asking to quit.
+    // Request quit from the run loop, like a menu action. Calling terminate from
+    // a main-actor task blocks the dispatch queue needed by engine completion.
+    Timer.scheduledTimer(withTimeInterval: 0.01, repeats: false) { _ in NSApp.terminate(nil) }
+  }
+  func didFinishTermination(_ error: Error?) {
+    if model.closeFinished { checks.append("Application quit waits for engine shutdown") }
+    let outcome = failure ?? error?.localizedDescription
+      ?? (model.closeFinished ? nil : "Engine shutdown incomplete")
+    let report: [String: Any] = ["checks": checks, "error": outcome as Any? ?? NSNull()]
+    if let data = try? JSONSerialization.data(
+      withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+      try? data.write(to: URL(fileURLWithPath: output))
     }
   }
 }
