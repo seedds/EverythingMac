@@ -109,7 +109,7 @@ final class FileActions {
       let trashItem = self.trashItem
       run { for url in urls { try trashItem(url) } }
     case "terminal":
-      let app = model.prefs.terminal
+      let app = model.prefs.terminalApplication
       run {
         let url = urls[0]
         let directory =

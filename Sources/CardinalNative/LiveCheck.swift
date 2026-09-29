@@ -363,6 +363,10 @@ final class LiveCheck {
       guard value.includes.isEmpty, value.ignores.isEmpty, value.terminal.isEmpty else {
         throw messageError("Fresh preferences should have empty folder filters and terminal")
       }
+      guard value.terminalApplication == "/System/Applications/Utilities/Terminal.app",
+        value.terminal.isEmpty else {
+        throw messageError("Empty terminal should resolve to macOS Terminal without changing the setting")
+      }
     }
     try checkEmpty(prefs)
     try prefs.validate()
@@ -370,12 +374,12 @@ final class LiveCheck {
     try checkEmpty(Preferences(fileURL: file))
     prefs.includes = root.path
     prefs.ignores = "/tmp/ignored"
-    prefs.terminal = "/System/Applications/Utilities/Terminal.app"
+    prefs.terminal = "/Applications/Custom Terminal.app"
     try prefs.validate()
     try prefs.save()
     let reopened = Preferences(fileURL: file)
     guard reopened.includes == prefs.includes, reopened.ignores == prefs.ignores,
-      reopened.terminal == prefs.terminal else {
+      reopened.terminal == prefs.terminal, reopened.terminalApplication == prefs.terminal else {
       throw messageError("Explicit user preferences did not survive reopening")
     }
     reopened.restoreDefaults()

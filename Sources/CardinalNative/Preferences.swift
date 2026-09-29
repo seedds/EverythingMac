@@ -17,6 +17,10 @@ final class Preferences: ObservableObject {
   @Published var theme = "system"
   @Published var tray = false
   @Published var terminal = ""
+  var terminalApplication: String {
+    let path = terminal.trimmingCharacters(in: .whitespacesAndNewlines)
+    return path.isEmpty ? "/System/Applications/Utilities/Terminal.app" : path
+  }
   var sortKey = ""
   var sortAscending = true
   var onApply: (() -> Void)?
@@ -139,7 +143,7 @@ struct PreferencesView: View {
         Text("Terminal app (F9)")
         TextField("Path to a terminal application (.app)", text: $prefs.terminal)
           .accessibilityLabel("Terminal app for F9")
-        Text("Choose a terminal app to enable F9 for the selected folder or a file’s parent folder.")
+        Text("F9 opens the selected folder or a file’s parent folder. Leave empty to use macOS Terminal.")
           .font(.caption).foregroundColor(.secondary)
       }
       Button("Open Full Disk Access settings") {

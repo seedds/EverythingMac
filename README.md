@@ -181,7 +181,8 @@ for query latency, startup cost, and memory use.
 
 Normal launch loads EverythingMac's saved index when one exists. Otherwise it
 scans the configured monitor root. New installations start with empty include
-and ignore paths and no terminal application selected. Preferences and indexes
+and ignore paths and an empty terminal application setting (F9 uses macOS Terminal).
+Preferences and indexes
 from older apps are not imported. If a loaded index's root/include/ignore
 configuration differs from the saved preferences, it starts a rebuild.
 
