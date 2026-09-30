@@ -263,13 +263,21 @@ struct Sample: Codable {
   /// Events shown on the Events tab, recomputed only when its inputs change.
   private(set) var filteredEvents: [FileEvent] = []
   var activeTab = "files"
-  var selectionLoading = false {
+  /// Not published: a click's selection loads in milliseconds, and the window
+  /// need not redraw for it.
+  @ObservationIgnored var selectionLoading = false {
     didSet { if oldValue && !selectionLoading { selectionDidLoad?() } }
   }
   /// Called on the main thread after selectionLoading becomes false.
   @ObservationIgnored var selectionDidLoad: (() -> Void)?
   @ObservationIgnored var selectedPaths: [String] = []
-  var selectionCount = 0
+  /// The count from the latest selection reply; it stays until the next reply.
+  var selectionCount = 0 {
+    didSet { if hasSelection != (selectionCount > 0) { hasSelection = selectionCount > 0 } }
+  }
+  /// Menu commands read this rather than the count, so selecting another file
+  /// does not rebuild the menus.
+  private(set) var hasSelection = false
   var sortKey = ""
   var sortAscending = true
   var snapshotOnly = true
@@ -285,6 +293,8 @@ struct Sample: Codable {
   @ObservationIgnored var eventsFetchedAt: UInt64?
   @ObservationIgnored var saving = false
   @ObservationIgnored var refreshPending = false
+  /// Sizes or dates changed since the displayed rows were loaded.
+  @ObservationIgnored var visibleRowsStale = false
   /// Backfilled sizes/dates may reorder or refilter the displayed results.
   @ObservationIgnored var metadataRefreshPending = false
   @ObservationIgnored var metadataIndexing = false
@@ -463,7 +473,7 @@ struct Sample: Codable {
     let submittedState = currentSearchState
     searching = true
     searchIsBackground = background
-    error = nil
+    if error != nil { error = nil }
     pendingDraw = nil
     submittedAt = ProcessInfo.processInfo.systemUptime
     if inputAt == 0 { inputAt = submittedAt }
@@ -522,7 +532,7 @@ struct Sample: Codable {
       applyRestoredSelection(selection)
     } else {
       selectedPaths = []
-      selectionCount = 0
+      if selectionCount != 0 { selectionCount = 0 }
       selectionEpoch &+= 1
       // A new user search clears both the UI and the retained backend identities,
       // so a later background refresh cannot resurrect the old selection.
@@ -537,6 +547,7 @@ struct Sample: Codable {
     displayedGeneration = ticket
     cancelMetadata()
     self.rows = Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0) })
+    visibleRowsStale = false
     pendingPages.removeAll()
     pendingDraw = ticket
     let skipped = reply.skipped_cloud_files ?? 0

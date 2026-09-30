@@ -14,8 +14,7 @@ struct ContentView: View {
     model.activeTab == "files" ? $model.query : $model.eventFilter
   }
   private var busy: Bool {
-    model.searching || model.scanning || model.walking || model.selectionLoading
-      || (!model.ready && model.error == nil)
+    model.searching || model.scanning || model.walking || (!model.ready && model.error == nil)
   }
   private var lifecycle: String {
     model.scanning || model.walking ? "Updating"
@@ -29,11 +28,7 @@ struct ContentView: View {
       notices
       Divider()
       if model.activeTab == "files" {
-        ResultsTable(model: model).overlay {
-          if model.ready && !model.searching && model.total == 0 && model.error == nil {
-            ContentUnavailableView.search(text: model.query)
-          }
-        }
+        ResultsTable(model: model).overlay { EmptyResults(model: model) }
       } else {
         eventsTable
       }
@@ -209,6 +204,16 @@ struct ContentView: View {
   }
 }
 
+/// Reads the search state in its own view, so each search does not re-render the window.
+struct EmptyResults: View {
+  var model: Model
+  var body: some View {
+    if model.ready && !model.searching && model.total == 0 && model.error == nil {
+      ContentUnavailableView.search(text: model.query)
+    }
+  }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
   let model: Model
   var window: NSWindow?
@@ -220,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   var scrollCheck: ScrollCheck?
   var selectionCheck: SelectionCheck?
   var rescanCheck: RescanCheck?
+  var idleCheck: IdleCheck?
   var featureCheck: FeatureCheck?
   var selfCheck: SelfCheck?
   var liveCheck: LiveCheck?
@@ -231,7 +237,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   override init() {
     let args = CommandLine.arguments
     let isolated = ["--benchmark", "--self-check", "--snapshot", "--live-check",
-      "--scroll-check", "--selection-check", "--feature-check", "--icon-check", "--rescan-check"]
+      "--scroll-check", "--selection-check", "--feature-check", "--icon-check", "--rescan-check",
+      "--idle-check"]
       .contains(where: args.contains)
     model = Model(prefs: Preferences(isolated: isolated))
     model.snapshotOnly = isolated
@@ -249,6 +256,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     responder.nextResponder = window.nextResponder
     window.nextResponder = responder
     previewResponder = responder
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(searchWindowVisibilityChanged),
+      name: NSWindow.didChangeOcclusionStateNotification, object: window)
     window.setContentSize(NSSize(width: 1200, height: 800))
     if !model.snapshotOnly { window.setFrameAutosaveName("EverythingMacWindow") }
     if model.snapshotOnly || !window.setFrameUsingName("EverythingMacWindow") { window.center() }
@@ -338,6 +348,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       rescanCheck?.start()
       return
     }
+    if let index = args.firstIndex(of: "--idle-check"), args.indices.contains(index + 2) {
+      idleCheck = IdleCheck(
+        model: model, window: window, output: args[index + 1], index: args[index + 2])
+      idleCheck?.start()
+      return
+    }
     if let index = args.firstIndex(of: "--selection-check"), args.indices.contains(index + 1) {
       selectionCheck = SelectionCheck(model: model, window: window, output: args[index + 1])
       selectionCheck?.start()
@@ -370,6 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     helpWindow?.makeKeyAndOrderFront(nil)
   }
+  @objc func searchWindowVisibilityChanged() { model.searchWindowVisibilityChanged() }
   @objc func showUpdates() {
     NSWorkspace.shared.open(URL(string: "https://github.com/seedds/EverythingMac/releases")!)
   }
@@ -494,7 +511,7 @@ struct EverythingMacApp: App {
   /// File commands act on the results table only when it has keyboard focus,
   /// so they never take shortcuts from the search fields.
   private var canActOnFiles: Bool {
-    model.activeTab == "files" && model.resultsFocused && model.selectionCount > 0
+    model.activeTab == "files" && model.resultsFocused && model.hasSelection
   }
   private var liveUpdates: Binding<Bool> {
     Binding(get: { model.live }, set: { enabled in

@@ -141,7 +141,9 @@ struct ResultsTable: NSViewRepresentable {
     reset.target = context.coordinator
     table.headerView?.menu = headerMenu
     table.setDraggingSourceOperationMask(.copy, forLocal: false)
-    table.focusChanged = { [weak model] in model?.resultsFocused = $0 }
+    table.focusChanged = { [weak model] focused in
+      if model?.resultsFocused != focused { model?.resultsFocused = focused }
+    }
     table.firstDraw = { [weak model, weak table] in
       model?.drew($0)
       table?.awaitingFirstDraw = model?.pendingDraw != nil

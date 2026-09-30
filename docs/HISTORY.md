@@ -285,6 +285,22 @@ feature, live, tab, terminal, and trash checks passed. A new rescan check measur
 searches during a rescan of `/`, and a real disk image mounted inside a watched folder
 stayed out of the index.
 
+## Idle work and redraws — 0.1.67
+
+While the search window was hidden, the app still ran the displayed search again
+after each filesystem change, about every 2 s. It now keeps processing events and
+defers the search and the refresh of visible rows until the window is on screen again,
+using the window's occlusion state; checks count an open window as shown because other
+apps may cover it. Each arrow key in the results set the selection count to zero and
+back and toggled an observed loading flag, so the app's scenes and menus were
+re-evaluated for every row. The count now stays until the selection reply arrives,
+the menus read a separate `hasSelection`, the loading flag is not observed, and the
+empty-results placeholder has its own view. A new idle check measures CPU while idle
+and per arrow key, and the live check hides the window, changes a file, and confirms
+the search runs again only once the window is shown. Recorded checks: 1,837 Rust
+tests passed (the system-wide cancellation test excluded), and the self, sort,
+selection, feature, live, tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

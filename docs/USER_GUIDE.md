@@ -53,7 +53,7 @@ for Reveal in Finder and Copy Path.
 | F8 | Move selected files to macOS Trash. More than 50 items ask for confirmation; items inside a selected folder go with it. |
 | F9 | Open the selected folder, or a file’s parent, in the configured terminal. |
 | Command-Shift-Space (default) | Toggle the app window. Record, disable, or reset the shortcut in Settings → General. |
-| Escape / Close Window | Hide the window; live monitoring continues. |
+| Escape / Close Window | Hide the window; live monitoring continues, and the results update when it is shown again. |
 | Command-Q | Save the native checkpoint and quit. |
 
 While an input method such as Pinyin is composing text in the search or folder field,
@@ -154,7 +154,9 @@ The app processes filesystem events and writes checkpoints while idle, at most e
 10 minutes (within about a minute of a new scan), and before quitting. Folders that
 events report as new or changed, such as a large folder moved into place, are read in
 the background; searches continue meanwhile, and the results update when reading
-finishes. Changes made
+finishes. While the search window is hidden, minimized, on another Space, or covered by
+other windows, the index stays current but the displayed search is not repeated; it
+runs again as soon as the window is shown. Changes made
 since the last checkpoint are replayed from macOS filesystem events on the next launch. Cancelling a scan retains the previous index. If macOS blocks
 a filesystem call, cancellation releases the native engine queue while at most one
 scan worker remains outstanding. Another scan must wait for that worker to finish.

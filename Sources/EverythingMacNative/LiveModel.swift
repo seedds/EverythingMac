@@ -53,14 +53,12 @@ extension Model {
     else { return }
     // Poll less often while the search window is hidden.
     let now = ProcessInfo.processInfo.systemUptime
-    let visible = NSApp.windows.contains {
-      $0.identifier?.rawValue == "EverythingMacSearch" && $0.isVisible
-    }
-    guard visible || now - lastPoll >= 2 else { return }
+    let shown = searchWindowShown
+    guard shown || now - lastPoll >= 2 else { return }
     lastPoll = now
     polling = true
     let epoch = indexEpoch
-    let includeEvents = activeTab == "events"
+    let includeEvents = activeTab == "events" && shown
     // UInt64.max never matches the engine's count, forcing a first fetch.
     let since = includeEvents ? (eventsFetchedAt ?? .max) : 0
     engine.perform({ try decode(cn_poll($0, since, includeEvents)) }) { [weak self] result in
@@ -115,8 +113,15 @@ extension Model {
           self.refreshPending = true
         }
         // Rows on screen show sizes and dates updated in place without a new search.
-        if reply.metadata_changed == true && !self.refreshPending { self.refreshVisibleRows() }
-        if self.refreshPending && self.debounceWork == nil && !self.searching
+        // A hidden window keeps its index current, and updates its rows and runs
+        // its search again once it is shown.
+        if reply.metadata_changed == true { self.visibleRowsStale = true }
+        let shown = self.searchWindowShown
+        if self.visibleRowsStale && shown && !self.refreshPending {
+          self.visibleRowsStale = false
+          self.refreshVisibleRows()
+        }
+        if self.refreshPending && shown && self.debounceWork == nil && !self.searching
           && now - self.lastRefresh > 1
         {
           self.refreshPending = false
@@ -138,6 +143,18 @@ extension Model {
         }
       }
     }
+  }
+  /// Whether any part of the search window is on screen. Checks count an open window
+  /// as shown, since other apps' windows may cover theirs while they run.
+  var searchWindowShown: Bool {
+    NSApp.windows.contains {
+      $0.identifier?.rawValue == "EverythingMacSearch"
+        && (prefs.isolated ? $0.isVisible : $0.occlusionState.contains(.visible))
+    }
+  }
+  /// Brings results up to date as soon as the search window appears again.
+  func searchWindowVisibilityChanged() {
+    if searchWindowShown { poll() }
   }
   /// Seconds between idle saves: a fresh scan is saved soon; later changes are
   /// replayed from FSEvents after a restart, so saving rarely avoids stalls.
@@ -303,7 +320,6 @@ extension Model {
     let ticket = displayedGeneration
     selectionLoading = true
     selectedPaths = []
-    selectionCount = 0
     let ranges = indices.rangeView.map { [$0.lowerBound, $0.upperBound] }
     let cached = indices.count <= 1024 ? indices.compactMap { rows[$0]?.path } : []
     let fallback: String = cached.count == indices.count ? jsonString(cached) : "null"
@@ -317,7 +333,8 @@ extension Model {
       switch result {
       case .success(let reply) where reply.status == "ok":
         self.selectedPaths = reply.paths ?? []
-        self.selectionCount = reply.selection_count ?? 0
+        let count = reply.selection_count ?? 0
+        if self.selectionCount != count { self.selectionCount = count }
         if self.actions.preview.isVisible {
           if self.selectionCount == 0 {
             self.actions.preview.update([])
@@ -361,7 +378,8 @@ extension Model {
     }
     restoredSelection = indices
     selectedPaths = reply.paths ?? []
-    selectionCount = reply.selection_count ?? indices.count
+    let count = reply.selection_count ?? indices.count
+    if selectionCount != count { selectionCount = count }
     if selectionCount == 0 && actions.preview.isVisible { actions.preview.update([]) }
   }
   /// Resolves selected paths for an action; `limit` bounds them (0 for all).

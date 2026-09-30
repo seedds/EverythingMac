@@ -17,6 +17,11 @@ final class LiveCheck {
   var scanCounts = Set<Int>()
   var countBeforeEvent = 0
   var selectionBeforeSort: UInt64 = 0
+  var hiddenGeneration: UInt64 = 0
+  var hiddenIndexed = 0
+  var searchWindow: NSWindow? {
+    NSApp.windows.first { $0.identifier?.rawValue == "EverythingMacSearch" }
+  }
   let terminalValidationError = "Choose an installed terminal application in Preferences."
   var tabCheck: Bool { CommandLine.arguments.contains("--tab-check") }
   var trashCheck: Bool { CommandLine.arguments.contains("--trash-check") }
@@ -190,9 +195,35 @@ final class LiveCheck {
           )
           return
         }
-        next("File creation updates results and preserves selection by path")
+        checks.append("File creation updates results and preserves selection by path")
+        // A hidden window keeps its index current and searches again once shown.
+        searchWindow?.orderOut(nil)
+        hiddenGeneration = model.displayedGeneration
+        hiddenIndexed = model.indexedCount
+        try Data().write(to: root.appendingPathComponent("alpha-hidden.txt"))
+        step = 40
+        since = ProcessInfo.processInfo.systemUptime
+      case 40:
+        guard model.indexedCount > hiddenIndexed else { return }
+        guard model.displayedGeneration == hiddenGeneration, model.total == 2 else {
+          finish("A hidden window ran its search again")
+          return
+        }
+        searchWindow?.makeKeyAndOrderFront(nil)
+        step = 41
+        since = ProcessInfo.processInfo.systemUptime
+      case 41:
+        guard model.total == 3 else { return }
+        checks.append("A hidden window indexes changes and updates its results once shown")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("alpha-hidden.txt"))
+        step = 42
+        since = ProcessInfo.processInfo.systemUptime
+      case 42:
+        guard model.total == 2 else { return }
         _ = try FileActions.renameExclusive(
           path: root.appendingPathComponent("alpha-new.txt").path, name: "résumé.txt")
+        step = 2
+        since = ProcessInfo.processInfo.systemUptime
       case 2:
         guard model.total == 1 else { return }
         next("Rename reconciles live search")

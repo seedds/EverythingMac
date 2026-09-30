@@ -4,8 +4,9 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.66 studies cover live updates,
-parallel name matching, large selections, saving and startup memory, F8, and rescans and folder walks; the other matching study covers the
+These are workstation measurements. The 0.1.60–0.1.67 studies cover live updates,
+parallel name matching, large selections, saving and startup memory, F8, rescans and
+folder walks, and idle work; the other matching study covers the
 0.1.55 changes, and the versioned sorting studies cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
@@ -13,6 +14,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Idle work and redraws, 0.1.67](#idle-work-and-redraws-0167) | A hidden window ran no searches in 30 s of file changes instead of 8–10, using 328–386 ms of CPU instead of 809–945 ms, and its results were current 92–105 ms after it was shown. Each Down Arrow in the results used 2.8–2.9 ms of main-thread time instead of 8.3–8.5 ms. |
 | [Rescans, folder walks, and other volumes, 0.1.66](#rescans-folder-walks-and-other-volumes-0166) | During a 14 s rescan of `/`, 188 searches were drawn in a median 60 ms (55 ms without a rescan) and far pages loaded in 4.5 ms, where 0.1.65 served neither until the rescan finished. Moving a 200,000-file folder into the index held the engine for at most 132–136 ms instead of 666–799 ms. Skipping other volumes removed 834,966 of 5,034,016 entries. |
 | [Moving files to the Trash, 0.1.65](#moving-files-to-the-trash-0165) | After F8, a trashed file left the results after 14–20 ms instead of about 1.5 s, and 130 files after 70–85 ms instead of 0.5–1 s. |
 | [Saving and startup memory, 0.1.64](#saving-and-startup-memory-0164) | Opening 4,573,469 entries fell from 2.67 s and 818 MiB to 2.15 s and 538 MiB; each index save holds the engine for about 340 ms instead of 415–440 ms and needs 188 MiB less extra memory, and idle saves happen at most every 10 minutes. |
@@ -27,6 +29,45 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Idle work and redraws (0.1.67)
+
+Measured on 2026-09-30 on the same Apple M4 Pro with `./run.sh --idle-check` on a copy
+of the live index (4.54 million entries), showing every entry with the empty query.
+While measuring, a temporary file changed four times a second. The 0.1.66 and 0.1.67
+builds ran alternately, three times each, and 0.1.67 once more after the
+instrumentation below was removed.
+
+| Measurement | 0.1.66 | 0.1.67 |
+| --- | ---: | ---: |
+| Main-thread CPU per Down Arrow (100 presses) | 8.3–8.5 ms | 2.8–2.9 ms |
+| Down Arrow until its selection is applied, median | 7.8–8.5 ms | 5.3–5.6 ms |
+| Hidden window, 30 s: searches run | 8–10 | 0 |
+| Hidden window, 30 s: CPU, all threads | 809–945 ms | 328–386 ms |
+| Hidden window, 30 s: main-thread CPU | 205–316 ms | 92–118 ms |
+| Showing the window until current results are drawn | 309–1,026 ms | 92–105 ms |
+| Visible window, 30 s: searches run | 23–24 | 23–25 |
+
+**Arrow keys.** Each selection change set the selection count to zero and then to the
+reply's count, and set a loading flag that showed a progress indicator in the status
+bar. The menu commands read the count, so SwiftUI re-evaluated the app's scenes and
+rebuilt the menus 152–157 times per 100 presses, counted with temporary
+instrumentation. The count now stays until the reply arrives, the menus read only
+whether anything is selected, and the loading flag is not observed by views; the
+scenes and menus were re-evaluated 0 times. The window's top-level view also
+re-rendered 46–48 times in 30 s of visible refreshes, when a search started or cleared
+an error; the empty-results placeholder now observes those values in its own view, and
+the count fell to 0.
+
+**Hidden window.** A hidden window polled every 2 s and ran the displayed search after
+each change. It still polls, so the index stays current, but the search and the
+refresh of visible rows wait until the window is shown, which polls at once. The
+window counts as hidden while it is ordered out, minimized, on another Space, or fully
+covered. The remaining CPU is event processing and the check's own file changes.
+
+With the window visible, results still refresh at most once a second while files
+change, and the main thread spent 0.75–0.93 s per 30 s mostly on drawing refreshed
+rows and the status bar's live counts.
 
 ## Rescans, folder walks, and other volumes (0.1.66)
 

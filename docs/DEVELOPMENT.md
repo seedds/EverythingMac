@@ -156,8 +156,9 @@ cargo clippy --locked --workspace --all-targets
 ```
 
 The live check creates disposable fixtures and its own checkpoint. It exercises
-FSEvents, filters, selection, rename, Trash/recovery, Quick Look, saved-scope
-restoration, English-only packaging, fresh preference defaults, saved settings, and tab switching. A successful JSON
+FSEvents, filters, selection, a hidden window that searches again only once shown,
+rename, Trash/recovery, Quick Look, saved-scope restoration, English-only packaging,
+fresh preference defaults, saved settings, and tab switching. A successful JSON
 report contains `"error": null`; inspect the report rather than relying only on
 the process exit status.
 
@@ -234,6 +235,21 @@ cargo run --release -p everything-mac-native-prototype --example live_walk -- 20
 `longest_poll_ms` is the longest `cn_poll` call, which is the longest a search or row
 load waits on the app's serial engine queue; `indexed_after_ms` is the time from the
 move until the index contains every file.
+
+To measure what the app costs while nobody types, and per arrow key:
+
+```bash
+./run.sh --idle-check /tmp/everything-mac-idle.json \
+  ~/Library/Application\ Support/com.everything.mac/everything-mac.db
+```
+
+This loads a copy of the index live with your saved scope, as the rescan check does,
+and shows every entry with the empty query. `arrowKeys` presses Down Arrow 100 times
+in the results with live polling stopped, and reports main-thread and process CPU and
+the time until each selection reply is applied. `visible` and `hidden` each run for
+30 seconds while a temporary file changes four times a second, first with the window
+shown and then hidden, and report CPU time and how many searches ran. `showRefreshMS`
+is the time from showing the window until updated results are drawn.
 
 To measure selection restoration after broad searches against a read-only snapshot:
 
