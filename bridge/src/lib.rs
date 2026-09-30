@@ -33,7 +33,10 @@ struct State {
     checkpoint: Option<std::path::PathBuf>,
     /// The saved index this state was opened from, unchanged until `dirty` is set.
     loaded_from: Option<std::path::PathBuf>,
+    /// Indexed data changed since the index was opened or last saved.
     dirty: bool,
+    /// Only the FSEvents position advanced; saved when quitting or switching indexes.
+    events_dirty: bool,
     events: std::collections::VecDeque<Value>,
     processed_events: u64,
     sort: Option<sort::SortStatePayload>,
@@ -47,8 +50,8 @@ struct State {
     metadata: metadata::Indexing,
 }
 impl State {
-    fn new(mut cache: SearchCache, root: std::path::PathBuf) -> Self {
-        cache.prepare_sort_indexes();
+    /// Sort orders are built on first use, so opening skips columns never sorted.
+    fn new(cache: SearchCache, root: std::path::PathBuf) -> Self {
         Self {
             cache,
             root: root.clone(),
@@ -60,6 +63,7 @@ impl State {
             checkpoint: None,
             loaded_from: None,
             dirty: true,
+            events_dirty: false,
             events: Default::default(),
             processed_events: 0,
             sort: None,
@@ -570,14 +574,30 @@ mod tests {
                 assert!(started.elapsed() < Duration::from_secs(3));
                 std::thread::sleep(Duration::from_millis(5));
             }
-            assert_eq!(reply(live::cn_checkpoint(engine))["status"], "ok");
+            assert_eq!(reply(live::cn_checkpoint(engine, true))["status"], "ok");
             assert_eq!(inode(&index), index_inode, "unchanged index was rewritten");
+            // Progress through FSEvents alone waits for a save that includes events.
+            (*engine).0.lock().unwrap().events_dirty = true;
+            assert_eq!(reply(live::cn_checkpoint(engine, false))["status"], "ok");
+            assert_eq!(
+                inode(&index),
+                index_inode,
+                "periodic save wrote event progress"
+            );
+            assert_eq!(reply(live::cn_checkpoint(engine, true))["status"], "ok");
+            let index_inode = inode(&index);
+            assert_eq!(reply(live::cn_checkpoint(engine, true))["status"], "ok");
+            assert_eq!(
+                inode(&index),
+                index_inode,
+                "saved event progress was written again"
+            );
             // A different checkpoint must receive the loaded index.
             assert_eq!(
                 reply(live::cn_watch(engine, false, relocated_c.as_ptr()))["status"],
                 "ok"
             );
-            assert_eq!(reply(live::cn_checkpoint(engine))["status"], "ok");
+            assert_eq!(reply(live::cn_checkpoint(engine, false))["status"], "ok");
             assert_ne!(inode(&relocated), relocated_inode);
             assert_eq!(inode(&index), index_inode);
             cn_engine_close(engine);
@@ -767,7 +787,7 @@ mod tests {
             let updated = search(11);
             assert_eq!(updated["modified"], 1_700_000_000_u64);
             assert_eq!(updated["created"], created);
-            assert_eq!(reply(live::cn_checkpoint(engine))["status"], "ok");
+            assert_eq!(reply(live::cn_checkpoint(engine, true))["status"], "ok");
             cn_engine_close(engine);
             assert_eq!(fs::read(&old).unwrap(), old_bytes);
             fs::remove_file(&file).unwrap();
@@ -1331,7 +1351,7 @@ mod tests {
                 reply(cn_watch(engine, false, destination.as_ptr()))["status"],
                 "ok"
             );
-            assert_eq!(reply(cn_checkpoint(engine))["status"], "ok");
+            assert_eq!(reply(cn_checkpoint(engine, true))["status"], "ok");
             cn_engine_close(engine);
             assert_eq!(fs::read(&source).unwrap(), before);
             let mut reopened = ptr::null_mut();

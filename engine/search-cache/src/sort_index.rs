@@ -342,6 +342,35 @@ mod tests {
         order_ids(cache, column)
     }
 
+    fn built(cache: &SearchCache) -> Vec<SortColumn> {
+        COLUMNS
+            .into_iter()
+            .filter(|column| cache.sort_indexes.orders[*column as usize].is_some())
+            .collect()
+    }
+
+    #[test]
+    fn orders_are_built_only_when_a_sort_needs_them() {
+        let temp = tempdir::TempDir::new("lazy-orders").unwrap();
+        fs::write(temp.path().join("a"), "a").unwrap();
+        let mut cache = SearchCache::walk_fs(temp.path());
+        assert!(built(&cache).is_empty());
+        let token = CancellationToken::noop();
+        let mut results = cache.search_empty(token).unwrap();
+        cache
+            .sort_results(&mut results, SortColumn::Mtime, false, token)
+            .unwrap();
+        // A date order ranks ties by name, and the name order by path.
+        assert_eq!(
+            built(&cache),
+            [
+                SortColumn::Filename,
+                SortColumn::FullPath,
+                SortColumn::Mtime
+            ]
+        );
+    }
+
     #[test]
     fn metadata_backfill_keeps_name_and_path_orders() {
         let temp = tempdir::TempDir::new("sort-backfill").unwrap();

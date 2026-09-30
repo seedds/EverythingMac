@@ -227,7 +227,7 @@ final class LiveCheck {
         }
         next("Backend sort ordering")
         pending = true
-        model.engine.perform({ try decode(cn_checkpoint($0)) }) { [weak self] result in
+        model.engine.perform({ try decode(cn_checkpoint($0, true)) }) { [weak self] result in
           guard let self = self else { return }
           self.pending = false
           if case .failure(let e) = result {

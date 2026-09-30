@@ -139,8 +139,9 @@ saved index read-only; **Index → Enable Live Updates** makes it live. A live i
 saved before switching, and if the chosen file cannot be opened the current index stays loaded. Pausing live
 updates lasts until the next launch. Include paths override ignored ancestors.
 
-The app processes filesystem events and writes checkpoints during idle intervals
-and before quitting. Cancelling a scan retains the previous index. If macOS blocks
+The app processes filesystem events and writes checkpoints while idle, at most every
+10 minutes (within about a minute of a new scan), and before quitting. Changes made
+since the last checkpoint are replayed from macOS filesystem events on the next launch. Cancelling a scan retains the previous index. If macOS blocks
 a filesystem call, cancellation releases the native engine queue while at most one
 scan worker remains outstanding. Another scan must wait for that worker to finish.
 

@@ -34,6 +34,23 @@ pub struct PersistentStorage {
     pub rescan_count: u64,
 }
 
+/// A borrowed view of the cache with exactly the serialized layout of
+/// `PersistentStorage` (postcard writes slices, paths, and `&str` keys like the
+/// owned types), so saving needs no copy of the slab or the name index.
+#[derive(Serialize)]
+pub(crate) struct PersistentStorageRef<'a> {
+    pub version: Num<LSF_VERSION>,
+    pub exclusion_patterns: &'a [String],
+    pub last_event_id: u64,
+    pub path: &'a Path,
+    pub ignore_paths: &'a [PathBuf],
+    pub include_paths: &'a [PathBuf],
+    pub slab_root: SlabIndex,
+    pub slab: &'a ThinSlab<SlabNode>,
+    pub name_index: &'a BTreeMap<&'static str, SortedSlabIndices>,
+    pub rescan_count: u64,
+}
+
 // v7 retains its original field order for postcard compatibility.
 #[derive(Serialize, Deserialize)]
 struct LegacyStorage {
@@ -89,7 +106,7 @@ pub fn read_cache_with_format(path: &Path) -> Result<(PersistentStorage, bool)> 
     Ok((storage, legacy))
 }
 
-pub fn write_cache_to_file(path: &Path, storage: &PersistentStorage) -> Result<()> {
+pub fn write_cache_to_file(path: &Path, storage: &impl Serialize) -> Result<()> {
     let cache_encode_time = Instant::now();
     let parent = path
         .parent()
@@ -124,7 +141,7 @@ pub fn write_cache_to_file(path: &Path, storage: &PersistentStorage) -> Result<(
 
 /// Encodes a complete zstd frame, returning buffered flush and frame-finish errors
 /// that dropping the writers would silently discard.
-fn encode_storage<W: Write>(output: W, storage: &PersistentStorage) -> Result<W> {
+fn encode_storage<W: Write>(output: W, storage: &impl Serialize) -> Result<W> {
     let mut encoder = zstd::Encoder::new(output, 6).context("Failed to create zstd encoder")?;
     encoder
         .multithread(available_parallelism().map(|x| x.get() as u32).unwrap_or(4))
@@ -248,6 +265,23 @@ mod tests {
         fs::create_dir_all(blocked.join("occupied")).unwrap();
         assert!(write_cache_to_file(&blocked, &storage).is_err());
         assert!(!blocked.with_extension("sctmp").exists());
+    }
+
+    #[test]
+    fn borrowed_snapshot_matches_the_owned_encoding() {
+        let temp = tempdir::TempDir::new("borrowed-snapshot").unwrap();
+        fs::create_dir(temp.path().join("dir")).unwrap();
+        for name in ["a.txt", "dir/b.txt", "dir/a.txt"] {
+            fs::write(temp.path().join(name), name).unwrap();
+        }
+        let borrowed = temp.path().join("borrowed.db");
+        let owned = temp.path().join("owned.db");
+        let cache = SearchCache::walk_fs(temp.path());
+        cache.flush_snapshot_to_file(&borrowed).unwrap();
+        cache.flush_to_file(&owned).unwrap();
+        let decode = |path: &Path| zstd::decode_all(File::open(path).unwrap()).unwrap();
+        assert_eq!(decode(&borrowed), decode(&owned));
+        assert!(read_cache_from_file(&borrowed).is_ok());
     }
 
     #[test]

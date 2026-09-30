@@ -119,12 +119,12 @@ extension Model {
           self.refreshPending = false
           self.lastRefresh = now
           self.submit(background: true)
-        } else if now - self.lastSave > 60 && now - self.inputAt > 10 && !self.searching
-          && self.debounceWork == nil
+        } else if now - self.lastSave > self.checkpointInterval && now - self.inputAt > 10
+          && !self.searching && self.debounceWork == nil
         {
           self.saving = true
           self.lastSave = now
-          self.engine.perform({ try decode(cn_checkpoint($0)) }) { [weak self] result in
+          self.engine.perform({ try decode(cn_checkpoint($0, false)) }) { [weak self] result in
             self?.saving = false
             switch result {
             case .failure(let e):
@@ -136,6 +136,9 @@ extension Model {
       }
     }
   }
+  /// Seconds between idle saves: a fresh scan is saved soon; later changes are
+  /// replayed from FSEvents after a restart, so saving rarely avoids stalls.
+  var checkpointInterval: Double { snapshotDate == "Not saved yet" ? 60 : 600 }
   /// Sorting or filtering by size or date, whose results change as metadata is indexed.
   var displayDependsOnMetadata: Bool {
     ["size", "mtime", "ctime"].contains(sortKey)

@@ -118,7 +118,7 @@ final class Engine {
     queue.async {
       if saveCurrent && self.handle != nil {
         // Best effort: unsaved live changes are otherwise replayed from FSEvents.
-        _ = try? decode(cn_checkpoint(self.handle))
+        _ = try? decode(cn_checkpoint(self.handle, true))
       }
       if !keepCurrent {
         cn_engine_close(self.handle)
@@ -172,7 +172,7 @@ final class Engine {
     queue.async {
       var error: Error?
       if save && self.handle != nil {
-        do { _ = try decode(cn_checkpoint(self.handle)) } catch let e { error = e }
+        do { _ = try decode(cn_checkpoint(self.handle, true)) } catch let e { error = e }
       }
       cn_engine_close(self.handle)
       self.handle = nil

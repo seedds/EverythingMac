@@ -284,11 +284,8 @@ impl NameIndex {
         removed
     }
 
-    pub(crate) fn as_persistent(&self) -> BTreeMap<Box<str>, SortedSlabIndices> {
-        self.map
-            .iter()
-            .map(|(name, indices)| ((*name).to_string().into_boxed_str(), indices.clone()))
-            .collect()
+    pub(crate) fn map(&self) -> &BTreeMap<&'static str, SortedSlabIndices> {
+        &self.map
     }
 
     pub fn into_persistent(self) -> BTreeMap<Box<str>, SortedSlabIndices> {

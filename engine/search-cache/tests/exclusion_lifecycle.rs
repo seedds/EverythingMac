@@ -12,7 +12,7 @@ fn exclusions_survive_events_snapshots_and_rescans() {
     fs::write(root.join("keep.txt"), "x").unwrap();
     let rules = Exclusions::compile(root, &["node_modules/".into(), "*.log".into()]).unwrap();
     let walk = WalkData::new(root, &[], &[], false, || false).with_exclusions(rules);
-    let mut cache = SearchCache::walk_fs_with_walk_data(&walk, &STOP).unwrap();
+    let cache = SearchCache::walk_fs_with_walk_data(&walk, &STOP).unwrap();
     let db = root.join("index.db");
     cache.flush_snapshot_to_file(&db).unwrap();
     let bytes = fs::read(&db).unwrap();

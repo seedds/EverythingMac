@@ -238,6 +238,19 @@ composing. A feature check drives the field editor through the same text-input c
 an input method makes; it reproduced the reset before the fix. Recorded checks: 70
 feature checks and the self, sort, selection, live, tab, and terminal checks passed.
 
+## Saving and startup memory — 0.1.64
+
+Index saves serialize directly from the cache instead of copying the name index and
+swapping out the slab, with byte-identical output. Periodic idle saves moved from every
+minute to at most every 10 minutes (one minute until a new scan is first saved) and no
+longer rewrite the index when only the FSEvents position advanced; quitting and
+switching indexes still save it. Opening an index no longer builds all six sort orders;
+each is built by the first search that needs it. zstd level 3 was measured for saves
+and rejected: 9% faster for a 3.7% larger file. Recorded checks: 1,828 Rust tests
+passed (the system-wide cancellation test excluded), clippy passed, and the self, sort,
+selection, feature, live, tab, and terminal checks passed; `--trash-check` timed out at
+step 23 as before.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

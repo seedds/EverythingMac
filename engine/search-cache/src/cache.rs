@@ -2,7 +2,9 @@ use crate::{
     FileNodes, NameIndex, SearchOptions, SearchResultNode, SlabIndex, SlabNode,
     SlabNodeMetadataCompact, State, ThinSlab,
     highlight::derive_highlight_terms,
-    persistent::{PersistentStorage, read_cache_from_file, write_cache_to_file},
+    persistent::{
+        PersistentStorage, PersistentStorageRef, read_cache_from_file, write_cache_to_file,
+    },
     query_preprocessor::{expand_query_home_dirs, strip_query_quotes},
 };
 use anyhow::{Context, Result, anyhow};
@@ -968,30 +970,22 @@ impl SearchCache {
         self.instance
     }
 
-    pub fn flush_snapshot_to_file(&mut self, cache_path: &Path) -> Result<()> {
-        let name_index = self.name_index.as_persistent();
-        let slab = self.file_nodes.take_slab();
-
-        let storage = PersistentStorage {
+    /// Writes a snapshot directly from the cache, without copying the slab or the
+    /// name index.
+    pub fn flush_snapshot_to_file(&self, cache_path: &Path) -> Result<()> {
+        let storage = PersistentStorageRef {
             version: Num,
-            exclusion_patterns: self.exclusion_patterns().to_vec(),
+            exclusion_patterns: self.exclusion_patterns(),
             last_event_id: self.last_event_id,
-            rescan_count: self.rescan_count,
-            path: self.file_nodes.path().to_path_buf(),
-            ignore_paths: self.file_nodes.ignore_paths().clone(),
-            include_paths: self.file_nodes.include_paths().clone(),
+            path: self.file_nodes.path(),
+            ignore_paths: self.file_nodes.ignore_paths(),
+            include_paths: self.file_nodes.include_paths(),
             slab_root: self.file_nodes.root(),
-            name_index,
-            slab,
+            slab: self.file_nodes.slab(),
+            name_index: self.name_index.map(),
+            rescan_count: self.rescan_count,
         };
-
-        let flush_result =
-            write_cache_to_file(cache_path, &storage).context("Write cache to file failed.");
-
-        let PersistentStorage { slab, .. } = storage;
-        self.file_nodes.put_slab(slab);
-
-        flush_result
+        write_cache_to_file(cache_path, &storage).context("Write cache to file failed.")
     }
 
     pub fn flush_to_file(self, cache_path: &Path) -> Result<()> {

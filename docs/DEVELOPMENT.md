@@ -107,8 +107,13 @@ name index in parallel key ranges; the process-wide name pool is only used to
 intern names.
 
 Checkpoints are written to a temporary file, synced to disk, and then renamed over
-the index, so a failed save leaves the previous index intact. An index that has not
-changed since it was opened or last saved is not rewritten.
+the index, so a failed save leaves the previous index intact. They are serialized
+directly from the cache, without copying the slab or name index. An index that has
+not changed since it was opened or last saved is not rewritten. Idle saves happen at
+most every 10 minutes (every minute until a new scan is first saved) and skip progress
+that only advanced the FSEvents position; quitting and switching indexes save that
+too, and later changes are replayed from FSEvents on the next launch. Sort orders are
+built on first use, so opening an index builds none and unsorted views never do.
 
 Access to the active engine is serialized on a background queue. Generation tags
 reject obsolete search/row responses. Cancellation does not require the engine

@@ -33,8 +33,9 @@ CNBuffer cn_poll(CNEngine *engine, uint64_t since_processed, bool include_events
 CNBuffer cn_scan(const char *root, const char *ignores, const char *includes, const char *patterns, const CNRequest *request, CNEngine **out);
 CNBuffer cn_validate_exclusions(const char *patterns);
 // Skips the write when the index is unchanged since it was opened from, or last
-// saved to, the configured checkpoint.
-CNBuffer cn_checkpoint(CNEngine *engine);
+// saved to, the configured checkpoint. Progress through FSEvents alone is written
+// only with include_events (quit and index switches); later launches replay it.
+CNBuffer cn_checkpoint(CNEngine *engine, bool include_events);
 CNBuffer cn_sort(CNEngine *engine, const char *sort);
 CNBuffer cn_paths(CNEngine *engine, uint64_t generation, const char *indices);
 CNBuffer cn_locate(CNEngine *engine, uint64_t generation, const char *paths);

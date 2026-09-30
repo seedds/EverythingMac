@@ -235,7 +235,7 @@ pub unsafe extern "C" fn cn_poll(
                     changed = true;
                 }
             }
-            state.dirty |= state.cache.last_event_id() != old_checkpoint;
+            state.events_dirty |= state.cache.last_event_id() != old_checkpoint;
             if state.needs_rescan {
                 break;
             }
@@ -353,8 +353,10 @@ pub unsafe extern "C" fn cn_scan(
 
 /// # Safety
 /// Valid serialized engine; only its previously configured native checkpoint is written.
+/// Periodic saves pass `include_events = false`: progress through FSEvents alone
+/// is replayed on the next launch, so it is written only when quitting or switching.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cn_checkpoint(engine: *mut Engine) -> Buffer {
+pub unsafe extern "C" fn cn_checkpoint(engine: *mut Engine, include_events: bool) -> Buffer {
     guarded(|| {
         let engine = unsafe { engine.as_ref() }.ok_or("No index loaded")?;
         let mut state = engine
@@ -368,7 +370,8 @@ pub unsafe extern "C" fn cn_checkpoint(engine: *mut Engine) -> Buffer {
         if state.needs_rescan {
             return Err("Rescan required before saving index".into());
         }
-        if !state.dirty && path.exists() {
+        let unsaved = state.dirty || (include_events && state.events_dirty);
+        if !unsaved && path.exists() {
             return Ok(json!({"status":"ok"}));
         }
         fs::create_dir_all(path.parent().ok_or("No checkpoint parent")?)
@@ -387,6 +390,7 @@ pub unsafe extern "C" fn cn_checkpoint(engine: *mut Engine) -> Buffer {
             .flush_snapshot_to_file(&path)
             .map_err(|e| format!("{e:#}"))?;
         state.dirty = false;
+        state.events_dirty = false;
         Ok(json!({"status":"ok"}))
     })
 }

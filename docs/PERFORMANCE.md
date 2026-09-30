@@ -4,8 +4,8 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.62 studies cover live updates,
-parallel name matching, and large selections; the other matching study covers the
+These are workstation measurements. The 0.1.60–0.1.64 studies cover live updates,
+parallel name matching, large selections, and saving and startup memory; the other matching study covers the
 0.1.55 changes, and the versioned sorting studies cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
@@ -13,6 +13,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Saving and startup memory, 0.1.64](#saving-and-startup-memory-0164) | Opening 4,573,469 entries fell from 2.67 s and 818 MiB to 2.15 s and 538 MiB; each index save holds the engine for about 340 ms instead of 415–440 ms and needs 188 MiB less extra memory, and idle saves happen at most every 10 minutes. |
 | [Large selections, 0.1.62](#large-selections-0162) | Selecting all 4,573,469 results fell from about 2.8 s and 239 MiB to 37 ms and 70 MiB, and restoring that selection after a search from about 4 s to about 70 ms. |
 | [Parallel name matching, 0.1.61](#parallel-name-matching-0161) | Unscoped case-insensitive name queries fell from 26–188 ms to 3–10.5 ms on 4,573,469 entries, with identical ordered results; folder-scoped queries gained less, and exact/prefix lookups, the all-files query, and index loading were unchanged. |
 | [Live updates, 0.1.60](#live-updates-0160) | An attribute change on a 167,000-item app bundle fell from 1.24 s plus a 170 ms re-sort to under 1 ms with no re-sort; file edits no longer repeat the search. |
@@ -24,6 +25,37 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Saving and startup memory (0.1.64)
+
+Measured on 2026-09-30 on the same read-only copy of the **4,573,469-entry
+snapshot**, comparing 0.1.63 with 0.1.64 and alternating builds. Opening and search
+figures come from `scripts/benchmark-sort.swift` (three processes per sort, each with
+one initial and three measured searches of all files). Save figures come from a
+temporary Swift probe, not included in the repository, that opened the copy, pointed
+its checkpoint at a scratch file, and timed one `cn_checkpoint` call while sampling
+memory every 5 ms (three processes per build).
+
+| Measurement | 0.1.63 | 0.1.64 |
+| --- | ---: | ---: |
+| Open the index | 2,668–2,675 ms | 2,139–2,158 ms |
+| Memory after opening | 818–819 MiB | 538 MiB |
+| First search after opening, unsorted | 17.4 ms | 17.6 ms |
+| First search after opening, sorted by name | 18.0 ms | 167.2 ms |
+| First search after opening, sorted by date modified | 17.7 ms | 270.7 ms |
+| Repeated searches | 17.3–17.7 ms | 17.2–17.9 ms |
+| Peak memory during the searches (unsorted / name / date) | 894 / 893 / 893 MiB | 614 / 684 / 788 MiB |
+| One index save, holding the engine | 413–439 ms | 339–343 ms |
+| Extra memory during the save | 334–335 MiB | 187–188 MiB |
+| Saved file | 84.6 MB | 84.6 MB |
+
+Version 0.1.63 built all six sort orders while opening, including one the app never
+uses. Version 0.1.64 builds an order on the first search that needs it, so the first
+sorted search pays for that column once; opening plus a first name-sorted search
+still finishes about 390 ms sooner. Saves now serialize from the cache without first
+copying the name index. The saved bytes are unchanged. Compression level 3 was also
+measured: it saved about 9% of the save time and produced a 3.7% larger file, so
+level 6 was kept.
 
 ## Large selections (0.1.62)
 
