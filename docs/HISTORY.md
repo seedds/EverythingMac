@@ -343,6 +343,33 @@ the status bar, and the content and tag tests. Recorded checks: 1,644 Rust tests
 clippy passed, and the self, sort, selection, feature, live, tab, terminal, and trash
 checks passed.
 
+## Faster filters and combined queries — 0.1.70
+
+A review found that filters and combined queries were slow on large indexes:
+- `ext:` and the type groups checked every indexed item and copied each extension.
+- Combining result lists hashed up to 4.5 million entries.
+- A folder-field search listed nested matching folders' contents once per matching
+  ancestor.
+- `size:`, `dm:`, and `dc:` read missing metadata one item at a time while holding the
+  engine, and read unreadable items again on every search.
+
+Now:
+- Extension filters without an earlier term use the name index.
+- Per-result filters check chunks in parallel, and the list of all items is collected
+  in parallel.
+- Combining uses a bitset.
+- Subtrees are listed once, keeping the previous order.
+- Missing metadata is read in parallel before filtering, and a search that read
+  metadata marks the index for saving.
+
+On 4,573,469 entries these queries fell from 40–795 ms to 2–37 ms with identical
+results; see [Performance](PERFORMANCE.md#filters-and-combined-queries-0170). The
+`query_timing` example measures queries against an index copy or a fresh walk. A
+globstar test failed whenever the temporary folder's random name ended in `a`; it now
+uses a longer folder name. Recorded checks: 1,650 Rust tests passed (the system-wide
+cancellation test excluded), clippy passed, and the self, sort, selection, feature,
+live, tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

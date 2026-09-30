@@ -238,6 +238,19 @@ cargo run --release -p everything-mac-native-prototype --example live_walk -- 20
 load waits on the app's serial engine queue; `indexed_after_ms` is the time from the
 move until the index contains every file.
 
+To time queries in the engine against a copy of an index, or against a fresh walk of a
+folder whose sizes and dates are not read yet:
+
+```bash
+cargo run --release -p search-cache --example query_timing -- \
+  snapshot /tmp/index-copy.db 6 'ext:rs' '!a' 'src=rs'
+cargo run --release -p search-cache --example query_timing -- \
+  walk /Applications 5 'size:>1mb'
+```
+
+Each line gives the median time and checksums of the result order and set, so two
+builds can be compared. A `FOLDER=` prefix fills the folder field.
+
 To measure what the app costs while nobody types, and per arrow key:
 
 ```bash

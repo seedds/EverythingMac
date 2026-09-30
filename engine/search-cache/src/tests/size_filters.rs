@@ -1,4 +1,5 @@
 use super::prelude::*;
+use super::support::list_file_names;
 
 #[test]
 fn test_size_filters() {
@@ -1462,4 +1463,33 @@ fn test_size_decimal_rounding() {
     // Test rounding behavior - 1.4999kb rounds to 1535.897 bytes, which is less than 1536
     let results2 = cache.search("size:>=1.5kb").unwrap();
     assert_eq!(results2.len(), 1);
+}
+
+#[test]
+fn size_and_date_filters_read_missing_metadata_once() {
+    let tmp = TempDir::new("query_size_load_once").unwrap();
+    fs::write(tmp.path().join("kept.bin"), vec![0u8; 2048]).unwrap();
+    fs::write(tmp.path().join("gone.bin"), vec![0u8; 2048]).unwrap();
+    let mut cache = SearchCache::walk_fs(tmp.path());
+    let gone = cache
+        .node_index_for_path(&tmp.path().join("gone.bin"))
+        .unwrap();
+    assert!(cache.file_nodes[gone].metadata.is_none());
+    fs::remove_file(tmp.path().join("gone.bin")).unwrap();
+
+    let hits = cache.search("size:>1kb").unwrap();
+    assert_eq!(list_file_names(&cache, &hits), ["kept.bin"]);
+    assert!(cache.take_metadata_loaded());
+    assert!(!cache.take_metadata_loaded());
+    assert!(cache.file_nodes[gone].metadata.is_unaccessible());
+
+    // An unreadable item is not read again on every search; events update it.
+    fs::write(tmp.path().join("gone.bin"), vec![0u8; 2048]).unwrap();
+    let hits = cache.search("bin size:>1kb").unwrap();
+    assert_eq!(list_file_names(&cache, &hits), ["kept.bin"]);
+    assert!(!cache.take_metadata_loaded());
+
+    let hits = cache.search("bin dm:>2000-01-01").unwrap();
+    assert_eq!(list_file_names(&cache, &hits), ["kept.bin"]);
+    assert!(!cache.take_metadata_loaded());
 }

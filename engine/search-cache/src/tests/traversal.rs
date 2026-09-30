@@ -120,3 +120,54 @@ fn test_all_subnodes_cancellation() {
     let result = cache.all_subnodes(root_idx, token);
     assert!(result.is_none(), "Should return None when cancelled");
 }
+
+#[test]
+fn all_subnodes_once_matches_each_root_in_turn_without_repeats() {
+    let tmp = TempDir::new("subnodes_once").unwrap();
+    // Nested roots share subtrees: outer/mid/inner, outer/mid/inner/deep.
+    for dir in ["outer/mid/inner/deep", "outer/side", "other/leaf"] {
+        fs::create_dir_all(tmp.path().join(dir)).unwrap();
+    }
+    for file in [
+        "outer/top.txt",
+        "outer/mid/m.txt",
+        "outer/mid/inner/i.txt",
+        "outer/mid/inner/deep/d.txt",
+        "outer/side/s.txt",
+        "other/leaf/l.txt",
+    ] {
+        fs::write(tmp.path().join(file), b"x").unwrap();
+    }
+    let cache = SearchCache::walk_fs(tmp.path());
+    let id = |path: &str| cache.node_index_for_path(&tmp.path().join(path)).unwrap();
+    let (outer, mid, inner, deep, other) = (
+        id("outer"),
+        id("outer/mid"),
+        id("outer/mid/inner"),
+        id("outer/mid/inner/deep"),
+        id("other"),
+    );
+    let file = id("outer/top.txt");
+    for roots in [
+        vec![outer, mid, inner],
+        vec![inner, mid, outer],
+        vec![mid, outer, deep, inner],
+        vec![deep, other, outer, deep, file, mid],
+        vec![file, other, other],
+        vec![],
+    ] {
+        let mut expected = Vec::new();
+        for &root in &roots {
+            for node in cache.all_subnodes(root, CancellationToken::noop()).unwrap() {
+                if !expected.contains(&node) {
+                    expected.push(node);
+                }
+            }
+        }
+        assert_eq!(
+            cache.all_subnodes_once(&roots, CancellationToken::noop()),
+            Some(expected),
+            "{roots:?}"
+        );
+    }
+}

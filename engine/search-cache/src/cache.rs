@@ -2,6 +2,7 @@ use crate::{
     FileNodes, NameIndex, SearchOptions, SearchResultNode, SlabIndex, SlabNode,
     SlabNodeMetadataCompact, State, ThinSlab,
     highlight::derive_highlight_terms,
+    node_set::NodeSet,
     persistent::{
         PersistentStorage, PersistentStorageRef, read_cache_from_file, write_cache_to_file,
     },
@@ -61,6 +62,8 @@ pub struct SearchCache {
     stop: &'static AtomicBool,
     /// Set when events updated an item's metadata in place; see `take_metadata_changed`.
     metadata_changed: bool,
+    /// Set when a size or date filter read metadata; see `take_metadata_loaded`.
+    pub(crate) metadata_loaded: bool,
     /// Per-slot counters bumped when a node is removed; in memory only.
     slot_generations: Vec<u32>,
     instance: u64,
@@ -112,7 +115,12 @@ impl SearchOutcome {
             return Self::cancelled();
         };
 
-        let merged_nodes = Self::merge_preserve_order(primary_nodes, secondary_nodes);
+        let mut seen = NodeSet::default();
+        let merged_nodes = primary_nodes
+            .into_iter()
+            .chain(secondary_nodes)
+            .filter(|&index| seen.insert(index))
+            .collect();
         let merged_highlights =
             Self::merge_preserve_order(primary_highlights, secondary_highlights);
         Self {
@@ -334,6 +342,7 @@ impl SearchCache {
             name_index,
             stop: cancel,
             metadata_changed: false,
+            metadata_loaded: false,
             slot_generations: Vec::new(),
             instance: NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed),
             sort_indexes: Default::default(),
@@ -361,6 +370,7 @@ impl SearchCache {
             name_index: NameIndex::default(),
             stop: cancel,
             metadata_changed: false,
+            metadata_loaded: false,
             slot_generations: Vec::new(),
             instance: NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed),
             sort_indexes: Default::default(),
@@ -498,18 +508,9 @@ impl SearchCache {
             return Ok(SearchOutcome::cancelled());
         };
 
-        let mut scoped_nodes = Vec::new();
-        for (i, index) in nodes.into_iter().enumerate() {
-            if cancellation_token.is_cancelled_sparse(i).is_none() {
-                return Ok(SearchOutcome::cancelled());
-            }
-            let Some(descendants) = self.all_subnodes(index, cancellation_token) else {
-                return Ok(SearchOutcome::cancelled());
-            };
-            scoped_nodes.extend(descendants);
-        }
-
-        let scoped_nodes = SearchOutcome::merge_preserve_order(Vec::new(), scoped_nodes);
+        let Some(scoped_nodes) = self.all_subnodes_once(&nodes, cancellation_token) else {
+            return Ok(SearchOutcome::cancelled());
+        };
         Ok(SearchOutcome {
             nodes: Some(scoped_nodes),
             highlights,
@@ -656,6 +657,55 @@ impl SearchCache {
             *i += 1;
             out.push(child);
             self.all_subnodes_recursive(child, out, i, cancel)?;
+        }
+        Some(())
+    }
+
+    /// The subnodes of every root, each listed once: the order of `all_subnodes` of
+    /// each root in turn with repeats removed. Walks each node at most once, so
+    /// nested roots, such as the many folders matching a short folder search, do
+    /// not walk their shared subtrees again.
+    pub(crate) fn all_subnodes_once(
+        &self,
+        roots: &[SlabIndex],
+        cancel: CancellationToken,
+    ) -> Option<Vec<SlabIndex>> {
+        let mut out = Vec::new();
+        let mut listed = NodeSet::default();
+        // Roots whose subnodes are all listed.
+        let mut walked = NodeSet::default();
+        let mut i = 0;
+        for &root in roots {
+            cancel.is_cancelled_sparse(i)?;
+            i += 1;
+            // A listed node's subnodes were listed after it.
+            if listed.contains(root) || !walked.insert(root) {
+                continue;
+            }
+            self.list_new_subnodes(root, &mut out, &mut listed, &walked, &mut i, cancel)?;
+        }
+        Some(out)
+    }
+
+    fn list_new_subnodes(
+        &self,
+        index: SlabIndex,
+        out: &mut Vec<SlabIndex>,
+        listed: &mut NodeSet,
+        walked: &NodeSet,
+        i: &mut usize,
+        cancel: CancellationToken,
+    ) -> Option<()> {
+        for &child in &self.file_nodes[index].children {
+            cancel.is_cancelled_sparse(*i)?;
+            *i += 1;
+            if !listed.insert(child) {
+                continue;
+            }
+            out.push(child);
+            if !walked.contains(child) {
+                self.list_new_subnodes(child, out, listed, walked, i, cancel)?;
+            }
         }
         Some(())
     }
@@ -976,6 +1026,12 @@ impl SearchCache {
     /// updates keep node IDs, so they do not count as structural changes.
     pub fn take_metadata_changed(&mut self) -> bool {
         std::mem::take(&mut self.metadata_changed)
+    }
+
+    /// Whether a size or date filter read metadata the indexer had not stored yet
+    /// since the last call. The index then differs from its saved copy.
+    pub fn take_metadata_loaded(&mut self) -> bool {
+        std::mem::take(&mut self.metadata_loaded)
     }
 
     /// Stores fresh metadata for an indexed item whose event reports only attribute

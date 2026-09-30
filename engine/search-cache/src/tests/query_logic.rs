@@ -150,12 +150,14 @@ fn test_globstar_dedup_nested_bar_paths() {
 #[test]
 fn test_globstar_dedup_trailing_expansion() {
     let tmp = TempDir::new("query_globstar_trailing").unwrap();
-    fs::create_dir_all(tmp.path().join("a/a")).unwrap();
-    fs::write(tmp.path().join("a/file.txt"), b"x").unwrap();
-    fs::write(tmp.path().join("a/a/file.txt"), b"x").unwrap();
+    // `dup/**` lists everything under folders whose names end in "dup"; a
+    // one-letter name could also match the temporary folder's random name.
+    fs::create_dir_all(tmp.path().join("dup/dup")).unwrap();
+    fs::write(tmp.path().join("dup/file.txt"), b"x").unwrap();
+    fs::write(tmp.path().join("dup/dup/file.txt"), b"x").unwrap();
     let mut cache = SearchCache::walk_fs(tmp.path());
 
-    let hits = cache.search("a/**").unwrap();
+    let hits = cache.search("dup/**").unwrap();
     let mut rel_paths = hits
         .iter()
         .map(|i| {
@@ -177,9 +179,9 @@ fn test_globstar_dedup_trailing_expansion() {
         "globstar should dedup trailing expansion"
     );
     let mut expected = vec![
-        PathBuf::from("a/a"),
-        PathBuf::from("a/a/file.txt"),
-        PathBuf::from("a/file.txt"),
+        PathBuf::from("dup/dup"),
+        PathBuf::from("dup/dup/file.txt"),
+        PathBuf::from("dup/file.txt"),
     ];
     expected.sort();
     assert_eq!(unique, expected);

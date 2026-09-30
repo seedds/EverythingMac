@@ -235,6 +235,9 @@ pub unsafe extern "C" fn cn_search(
             )
             .map_err(|e| format!("{e:#}"))?;
         let search_ms = started.elapsed().as_secs_f64() * 1000.0;
+        if state.cache.take_metadata_loaded() {
+            state.dirty = true;
+        }
         if token.is_cancelled().is_none() || outcome.nodes.is_none() {
             return Ok(json!({"status":"cancelled"}));
         }
@@ -488,6 +491,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ids, vec![regular_id, sparse_id]);
+    }
+
+    #[test]
+    fn size_search_that_reads_metadata_marks_index_unsaved() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("sized.bin"), b"12345").unwrap();
+        let mut state = State::new(SearchCache::walk_fs(temp.path()), temp.path().into());
+        state.dirty = false;
+        let engine = Box::into_raw(Box::new(Engine(Arc::new(Mutex::new(state)))));
+        let query = CString::new("sized size:5").unwrap();
+        let empty = CString::new("").unwrap();
+        unsafe {
+            for (generation, loads) in [(1, true), (2, false)] {
+                let request = cn_request_new();
+                let result = reply(cn_search(
+                    engine,
+                    request,
+                    generation,
+                    query.as_ptr(),
+                    empty.as_ptr(),
+                    false,
+                ));
+                cn_request_free(request);
+                assert_eq!(result["total"], 1);
+                let mut state = (*engine).0.lock().unwrap();
+                assert_eq!(state.dirty, loads, "search {generation}");
+                state.dirty = false;
+            }
+            cn_engine_close(engine);
+        }
     }
 
     #[test]

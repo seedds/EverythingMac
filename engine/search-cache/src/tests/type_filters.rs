@@ -1,4 +1,5 @@
 use super::prelude::*;
+use super::support::node_name;
 
 #[test]
 fn test_type_and_macro_filters() {
@@ -1592,4 +1593,29 @@ fn test_type_spreadsheet_all_variants() {
 
     let results = cache.search("type:spreadsheet").unwrap();
     assert_eq!(results.len(), 5);
+}
+
+#[test]
+fn extension_filters_match_files_ignoring_case_with_or_without_a_base() {
+    let tmp = TempDir::new("ext_name_index").unwrap();
+    fs::create_dir(tmp.path().join("pkg.rs")).unwrap();
+    for file in ["Main.RS", "lib.rs", "notes.txt", "trailing.", "rs"] {
+        fs::write(tmp.path().join(file), b"x").unwrap();
+    }
+    let mut cache = SearchCache::walk_fs(tmp.path());
+    for (query, expected) in [
+        ("ext:rs", &["Main.RS", "lib.rs"][..]),
+        ("ext:.RS", &["Main.RS", "lib.rs"]),
+        ("ext:rs;TXT", &["Main.RS", "lib.rs", "notes.txt"]),
+        ("Main ext:rs", &["Main.RS"]),
+        ("pkg ext:rs", &[]),
+        ("type:code", &["Main.RS", "lib.rs"]),
+        ("i type:code", &["Main.RS", "lib.rs"]),
+        ("doc:", &["notes.txt"]),
+    ] {
+        let hits = cache.search(query).unwrap();
+        let mut names: Vec<_> = hits.iter().map(|&hit| node_name(&cache, hit)).collect();
+        names.sort();
+        assert_eq!(names, expected, "{query}");
+    }
 }

@@ -1,15 +1,16 @@
 use crate::{
     SearchCache, SearchOptions, SegmentKind, SegmentMatcher, SegmentMatcherConcrete, SlabIndex,
     SlabNodeMetadataCompact, build_segment_matchers,
+    node_set::{NodeSet, dedup_in_place},
 };
 use anyhow::{Result, anyhow, bail};
 use everything_mac_syntax::{
     ArgumentKind, ComparisonOp, Expr, Filter, FilterArgument, FilterKind, RangeSeparator, Term,
 };
 use fswalk::NodeFileType;
-use hashbrown::HashSet;
 use jiff::{Timestamp, civil::Date, tz::TimeZone};
 use query_segmentation::query_segmentation;
+use rayon::prelude::*;
 use regex::RegexBuilder;
 use search_cancel::CancellationToken;
 use std::path::Path;
@@ -75,7 +76,7 @@ impl SearchCache {
         token: CancellationToken,
     ) -> Result<Option<Vec<SlabIndex>>> {
         let mut result: Vec<SlabIndex> = Vec::new();
-        let mut seen: HashSet<SlabIndex> = HashSet::new();
+        let mut seen = NodeSet::default();
         for part in parts {
             let candidate = self.evaluate_expr(part, base, options, token)?;
             let Some(nodes) = candidate else {
@@ -186,7 +187,7 @@ impl SearchCache {
     ) -> Option<Vec<SlabIndex>> {
         token.is_cancelled()?;
         let mut names = Vec::new();
-        let mut candidates = HashSet::new();
+        let mut candidates = NodeSet::default();
         for (i, &index) in base.iter().enumerate() {
             token.is_cancelled_sparse(i)?;
             let name = self.file_nodes[index].name();
@@ -205,7 +206,7 @@ impl SearchCache {
                 for &index in indices.iter() {
                     token.is_cancelled_sparse(visited)?;
                     visited += 1;
-                    if candidates.contains(&index) {
+                    if candidates.contains(index) {
                         nodes.push(index);
                     }
                 }
@@ -296,7 +297,7 @@ impl SearchCache {
             && saw_matcher
             && let Some(nodes) = &mut nodes
         {
-            dedup_indices_in_place(nodes);
+            dedup_in_place(nodes);
         }
         nodes
     }
@@ -397,20 +398,19 @@ impl SearchCache {
         token: CancellationToken,
     ) -> Option<Vec<SlabIndex>> {
         let mut matches = Vec::new();
-        let mut visited = 0usize;
-        for &node in parents {
-            token.is_cancelled_sparse(visited)?;
-            let descendants = self.all_subnodes(node, token)?;
-            for descendant in descendants {
-                token.is_cancelled_sparse(visited)?;
-                visited += 1;
-                let name = self.file_nodes[descendant].name();
-                if matcher.matches(name) {
-                    matches.push((name, descendant));
-                }
+        for (i, descendant) in self
+            .all_subnodes_once(parents, token)?
+            .into_iter()
+            .enumerate()
+        {
+            token.is_cancelled_sparse(i)?;
+            let name = self.file_nodes[descendant].name();
+            if matcher.matches(name) {
+                matches.push((name, descendant));
             }
         }
-        matches.sort_unstable_by_key(|(name, _)| *name);
+        // Stable, so equal names keep the order in which they were found.
+        matches.sort_by_key(|(name, _)| *name);
         Some(matches.into_iter().map(|(_, index)| index).collect())
     }
 
@@ -419,19 +419,13 @@ impl SearchCache {
         parents: &[SlabIndex],
         token: CancellationToken,
     ) -> Option<Vec<SlabIndex>> {
-        let mut matches = Vec::new();
-        let mut visited = 0usize;
-        for &node in parents {
-            token.is_cancelled_sparse(visited)?;
-            let descendants = self.all_subnodes(node, token)?;
-            for descendant in descendants {
-                token.is_cancelled_sparse(visited)?;
-                visited += 1;
-                let name = self.file_nodes[descendant].name();
-                matches.push((name, descendant));
-            }
-        }
-        matches.sort_unstable_by_key(|(name, _)| *name);
+        let mut matches: Vec<_> = self
+            .all_subnodes_once(parents, token)?
+            .into_iter()
+            .map(|descendant| (self.file_nodes[descendant].name(), descendant))
+            .collect();
+        token.is_cancelled()?;
+        matches.sort_by_key(|(name, _)| *name);
         Some(matches.into_iter().map(|(_, index)| index).collect())
     }
 
@@ -603,8 +597,9 @@ impl SearchCache {
             }
         }
 
+        let file_nodes = &self.file_nodes;
         Ok(filter_nodes(nodes, token, |index| {
-            self.file_nodes[index].file_type_hint() == file_type
+            file_nodes[index].file_type_hint() == file_type
         }))
     }
 
@@ -618,18 +613,34 @@ impl SearchCache {
         if extensions.is_empty() {
             bail!("ext: requires non-empty extensions");
         }
-        let Some(nodes) = self.nodes_from_base(base, token) else {
-            return Ok(None);
+        Ok(self.filter_files_by_extension(base, &extensions, token))
+    }
+
+    /// Files whose extension, ignoring ASCII case, is one of `extensions`. Without a
+    /// base, only names with a listed extension are visited in the name index,
+    /// in the same order as filtering every node.
+    fn filter_files_by_extension(
+        &self,
+        base: Option<Vec<SlabIndex>>,
+        extensions: &[impl AsRef<str> + Sync],
+        token: CancellationToken,
+    ) -> Option<Vec<SlabIndex>> {
+        let has_extension = |name: &str| {
+            extension_of(name).is_some_and(|ext| {
+                extensions
+                    .iter()
+                    .any(|listed| listed.as_ref().eq_ignore_ascii_case(ext))
+            })
         };
-        Ok(filter_nodes(nodes, token, |index| {
-            let node = &self.file_nodes[index];
-            if node.file_type_hint() != NodeFileType::File {
-                return false;
-            }
-            extension_of(node.name())
-                .map(|ext| extensions.contains(ext.as_str()))
-                .unwrap_or(false)
-        }))
+        let nodes = match base {
+            Some(nodes) => nodes,
+            None => self.name_index.matching_nodes(|| has_extension, token)?,
+        };
+        let file_nodes = &self.file_nodes;
+        filter_nodes(nodes, token, |index| {
+            let node = &file_nodes[index];
+            node.file_type_hint() == NodeFileType::File && has_extension(node.name())
+        })
     }
 
     fn evaluate_parent_filter(
@@ -790,20 +801,7 @@ impl SearchCache {
         if extensions.is_empty() {
             return Ok(Some(Vec::new()));
         }
-        let Some(nodes) = self.nodes_from_base(base, token) else {
-            return Ok(None);
-        };
-        Ok(filter_nodes(nodes, token, |index| {
-            let node = &self.file_nodes[index];
-            if node.file_type_hint() != NodeFileType::File {
-                return false;
-            }
-            if let Some(ext) = extension_of(node.name()) {
-                extensions.iter().any(|needle| *needle == ext)
-            } else {
-                false
-            }
-        }))
+        Ok(self.filter_files_by_extension(base, extensions, token))
     }
 
     fn evaluate_size_filter(
@@ -816,18 +814,17 @@ impl SearchCache {
         let Some(nodes) = self.nodes_from_base(base, token) else {
             return Ok(None);
         };
+        if self.load_missing_metadata(&nodes, true, token).is_none() {
+            return Ok(None);
+        }
+        let file_nodes = &self.file_nodes;
         Ok(filter_nodes(nodes, token, |index| {
-            let node = &self.file_nodes[index];
-            if node.file_type_hint() != NodeFileType::File {
-                return false;
-            }
-            let metadata = self.ensure_metadata(index);
-            let Some(meta) = metadata.as_ref() else {
-                return false;
-            };
-            let size = meta.size();
-
-            predicate.matches(size as u64)
+            let node = &file_nodes[index];
+            node.file_type_hint() == NodeFileType::File
+                && node
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|meta| predicate.matches(meta.size() as u64))
         }))
     }
 
@@ -843,11 +840,19 @@ impl SearchCache {
         let Some(nodes) = self.nodes_from_base(base, token) else {
             return Ok(None);
         };
+        if self.load_missing_metadata(&nodes, false, token).is_none() {
+            return Ok(None);
+        }
+        let file_nodes = &self.file_nodes;
         Ok(filter_nodes(nodes, token, |index| {
-            let Some(timestamp) = self.node_timestamp(index, field) else {
+            let Some(meta) = file_nodes[index].metadata.as_ref() else {
                 return false;
             };
-            predicate.matches(timestamp)
+            match field {
+                DateField::Modified => meta.mtime(),
+                DateField::Created => meta.ctime(),
+            }
+            .is_some_and(|value| predicate.matches(value.get() as i64))
         }))
     }
 
@@ -873,74 +878,73 @@ impl SearchCache {
         }
     }
 
-    fn node_timestamp(&mut self, index: SlabIndex, field: DateField) -> Option<i64> {
-        let metadata = self.ensure_metadata(index);
-        let meta = metadata.as_ref()?;
-        match field {
-            DateField::Modified => meta.mtime(),
-            DateField::Created => meta.ctime(),
+    /// Reads the sizes and dates of `nodes` that the metadata indexer has not
+    /// reached yet, in parallel, before a size or date filter checks them. Items
+    /// already found unreadable are not read again. Stops early when cancelled,
+    /// keeping what was read.
+    fn load_missing_metadata(
+        &mut self,
+        nodes: &[SlabIndex],
+        files_only: bool,
+        token: CancellationToken,
+    ) -> Option<()> {
+        let file_nodes = &self.file_nodes;
+        let missing: Vec<SlabIndex> = nodes
+            .par_iter()
+            .copied()
+            .filter(|&index| {
+                let node = &file_nodes[index];
+                node.metadata.is_none()
+                    && (!files_only || node.file_type_hint() == NodeFileType::File)
+            })
+            .collect();
+        if missing.is_empty() {
+            return Some(());
         }
-        .map(|value| value.get() as i64)
-    }
-
-    fn ensure_metadata(&mut self, index: SlabIndex) -> SlabNodeMetadataCompact {
-        let current = self.file_nodes[index].metadata;
-        if current.is_some() {
-            return current;
+        let loaded: Vec<Option<SlabNodeMetadataCompact>> = missing
+            .par_iter()
+            .map(|&index| {
+                token.is_cancelled()?;
+                let path = file_nodes.node_path(index)?;
+                Some(match std::fs::symlink_metadata(path) {
+                    Ok(data) => SlabNodeMetadataCompact::some(data.into()),
+                    Err(_) => SlabNodeMetadataCompact::unaccessible(),
+                })
+            })
+            .collect();
+        for (index, metadata) in missing.into_iter().zip(loaded) {
+            let Some(metadata) = metadata else {
+                continue;
+            };
+            let node = &mut self.file_nodes[index];
+            let type_changed = node.file_type_hint() != metadata.file_type_hint();
+            node.metadata = metadata;
+            self.sort_indexes.metadata_changed(index, type_changed);
+            self.metadata_loaded = true;
         }
-        let path = self
-            .node_path(index)
-            .expect("node index is not present in slab");
-        let metadata = match std::fs::symlink_metadata(&path) {
-            Ok(data) => SlabNodeMetadataCompact::some(data.into()),
-            Err(_) => SlabNodeMetadataCompact::unaccessible(),
-        };
-        let type_changed = current.file_type_hint() != metadata.file_type_hint();
-        self.file_nodes[index].metadata = metadata;
-        self.sort_indexes.metadata_changed(index, type_changed);
-        metadata
+        token.is_cancelled()
     }
 }
 
-fn normalize_extensions(argument: &FilterArgument) -> HashSet<String> {
-    let mut values = HashSet::new();
+fn normalize_extensions(argument: &FilterArgument) -> Vec<&str> {
     match &argument.kind {
-        ArgumentKind::List(list) => {
-            for item in list {
-                if let Some(ext) = normalize_extension(item) {
-                    values.insert(ext);
-                }
-            }
-        }
-        _ => {
-            if let Some(ext) = normalize_extension(&argument.raw) {
-                values.insert(ext);
-            }
-        }
+        ArgumentKind::List(list) => list
+            .iter()
+            .filter_map(|item| normalize_extension(item))
+            .collect(),
+        _ => normalize_extension(&argument.raw).into_iter().collect(),
     }
-    values
 }
 
-fn normalize_extension(raw: &str) -> Option<String> {
+fn normalize_extension(raw: &str) -> Option<&str> {
     let trimmed = raw.trim().trim_start_matches('.');
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_ascii_lowercase())
-    }
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
-fn extension_of(name: &str) -> Option<String> {
-    let pos = name.rfind('.')?;
-    if pos + 1 >= name.len() {
-        return None;
-    }
-    Some(name[pos + 1..].to_ascii_lowercase())
-}
-
-fn dedup_indices_in_place(indices: &mut Vec<SlabIndex>) {
-    let mut seen = HashSet::with_capacity(indices.len());
-    indices.retain(|index| seen.insert(*index));
+/// The text after the last dot, keeping its case.
+fn extension_of(name: &str) -> Option<&str> {
+    let (_, ext) = name.rsplit_once('.')?;
+    (!ext.is_empty()).then_some(ext)
 }
 
 #[derive(Clone, Copy)]
@@ -1487,20 +1491,33 @@ fn size_unit_multiplier(unit: &str) -> Result<u64> {
     Ok(multiplier)
 }
 
+/// Nodes per parallel chunk in `filter_nodes`; smaller inputs are checked serially.
+const FILTER_CHUNK: usize = 16 * 1024;
+
+/// Keeps the nodes `predicate` accepts, in order, checking chunks in parallel.
+/// The predicate must only read the index; filters needing metadata load it first.
 fn filter_nodes(
     nodes: Vec<SlabIndex>,
     token: CancellationToken,
-    mut predicate: impl FnMut(SlabIndex) -> bool,
+    predicate: impl Fn(SlabIndex) -> bool + Sync,
 ) -> Option<Vec<SlabIndex>> {
-    let mut filtered = Vec::with_capacity(nodes.len());
-    let mut counter = 0usize;
-    for index in nodes {
-        // While filtering dc: dm:, lstat is slow. Thus we check cancellation more frequently.
-        token.is_cancelled_sparse(counter)?;
-        counter = counter.wrapping_add(4);
-        if predicate(index) {
-            filtered.push(index);
-        }
+    let keep = |chunk: &[SlabIndex]| -> Option<Vec<SlabIndex>> {
+        token.is_cancelled()?;
+        Some(
+            chunk
+                .iter()
+                .copied()
+                .filter(|&index| predicate(index))
+                .collect(),
+        )
+    };
+    if nodes.len() <= FILTER_CHUNK {
+        return keep(&nodes);
+    }
+    let parts: Vec<Option<Vec<SlabIndex>>> = nodes.par_chunks(FILTER_CHUNK).map(keep).collect();
+    let mut filtered = Vec::with_capacity(parts.iter().flatten().map(Vec::len).sum());
+    for part in parts {
+        filtered.extend(part?);
     }
     Some(filtered)
 }
@@ -1518,8 +1535,8 @@ fn intersect_in_place(
         values.clear();
         return Some(());
     }
-    let rhs_set: HashSet<SlabIndex> = rhs.iter().copied().collect();
-    values.retain(|index| rhs_set.contains(index));
+    let rhs_set = NodeSet::from_indices(rhs);
+    values.retain(|&index| rhs_set.contains(index));
     Some(())
 }
 
@@ -1532,8 +1549,8 @@ fn difference_in_place(
     if values.is_empty() || rhs.is_empty() {
         return Some(());
     }
-    let rhs_set: HashSet<SlabIndex> = rhs.iter().copied().collect();
-    values.retain(|index| !rhs_set.contains(index));
+    let rhs_set = NodeSet::from_indices(rhs);
+    values.retain(|&index| !rhs_set.contains(index));
     Some(())
 }
 
@@ -1543,6 +1560,19 @@ mod candidate_matching_tests {
     use everything_mac_sdk::{EventFlag, FsEvent};
     use std::fs;
     use tempdir::TempDir;
+
+    #[test]
+    fn filter_nodes_keeps_order_across_parallel_chunks() {
+        let nodes: Vec<_> = (0..FILTER_CHUNK * 5 + 7)
+            .rev()
+            .map(SlabIndex::new)
+            .collect();
+        let expected: Vec<_> = nodes.iter().copied().filter(|i| i.get() % 3 == 0).collect();
+        assert_eq!(
+            filter_nodes(nodes, CancellationToken::noop(), |i| i.get() % 3 == 0),
+            Some(expected)
+        );
+    }
 
     fn fixture() -> (TempDir, SearchCache) {
         let dir = TempDir::new("candidate_matching").unwrap();

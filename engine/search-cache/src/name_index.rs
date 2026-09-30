@@ -1,6 +1,5 @@
 use crate::{FileNodes, NAME_POOL, SlabIndex};
 use hashbrown::HashSet;
-use itertools::Itertools;
 use rayon::prelude::*;
 use search_cancel::CancellationToken;
 use serde::{Deserialize, Serialize};
@@ -201,19 +200,9 @@ impl NameIndex {
         self.map.is_empty()
     }
 
+    /// Every indexed node in name order, collected from ranges of names in parallel.
     pub fn all_indices(&self, cancellation_token: CancellationToken) -> Option<Vec<SlabIndex>> {
-        self.map
-            .values()
-            .flat_map(|indices| indices.iter().copied())
-            .enumerate()
-            .map(|(i, index)| {
-                cancellation_token
-                    .is_cancelled_sparse(i)
-                    .map(|()| index)
-                    .ok_or(())
-            })
-            .try_collect()
-            .ok()
+        self.matching_nodes(|| |_: &str| true, cancellation_token)
     }
 
     pub fn get(&self, name: &str) -> Option<&SortedSlabIndices> {

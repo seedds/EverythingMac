@@ -4,9 +4,9 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.67 studies cover live updates,
+These are workstation measurements. The 0.1.60–0.1.70 studies cover live updates,
 parallel name matching, large selections, saving and startup memory, F8, rescans and
-folder walks, and idle work; the other matching study covers the
+folder walks, idle work, and filters; the other matching study covers the
 0.1.55 changes, and the versioned sorting studies cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
@@ -14,6 +14,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Filters and combined queries, 0.1.70](#filters-and-combined-queries-0170) | On 4,573,469 entries, `ext:`, `type:`, `audio:` and `doc:` fell from 141–197 ms to 2–3.2 ms, `size:`, `dm:`, `dc:`, `file:` and `folder:` from 39–58 ms to 4.6–8.9 ms, `!a` and `a\|b` from 46–51 ms to about 10 ms, and a folder search whose matching folders nest from 550–795 ms to 35–37 ms, with identical results. Filtering sizes and dates the indexer had not read yet took 1.4–1.5 s instead of 2.5–2.6 s for 420,683 entries. |
 | [Idle work and redraws, 0.1.67](#idle-work-and-redraws-0167) | A hidden window ran no searches in 30 s of file changes instead of 8–10, using 328–386 ms of CPU instead of 809–945 ms, and its results were current 92–105 ms after it was shown. Each Down Arrow in the results used 2.8–2.9 ms of main-thread time instead of 8.3–8.5 ms. |
 | [Rescans, folder walks, and other volumes, 0.1.66](#rescans-folder-walks-and-other-volumes-0166) | During a 14 s rescan of `/`, 188 searches were drawn in a median 60 ms (55 ms without a rescan) and far pages loaded in 4.5 ms, where 0.1.65 served neither until the rescan finished. Moving a 200,000-file folder into the index held the engine for at most 132–136 ms instead of 666–799 ms. Skipping other volumes removed 834,966 of 5,034,016 entries. |
 | [Moving files to the Trash, 0.1.65](#moving-files-to-the-trash-0165) | After F8, a trashed file left the results after 14–20 ms instead of about 1.5 s, and 130 files after 70–85 ms instead of 0.5–1 s. |
@@ -29,6 +30,91 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Filters and combined queries (0.1.70)
+
+Measured on 2026-09-30 on the same Apple M4 Pro with the `query_timing` example on the
+read-only copy of the **4,573,469-entry snapshot** used for 0.1.61, whose sizes and
+dates are all indexed. Each build loaded the snapshot once and ran each query six
+times; the table gives the median time for the engine to return the unsorted result
+list. Sorting, row retrieval, and index loading are excluded.
+
+| Query | Folder field | Matches | 0.1.69 | 0.1.70 |
+| --- | --- | ---: | ---: | ---: |
+| (all files) | | 4,573,469 | 17.3 ms | 1.5 ms |
+| `file:` | | 3,580,014 | 39.7 ms | 4.9 ms |
+| `folder:` | | 863,128 | 38.7 ms | 4.6 ms |
+| `ext:rs` | | 19,173 | 140.9 ms | 2.0 ms |
+| `ext:rs;swift;py` | | 325,858 | 142.5 ms | 2.9 ms |
+| `a ext:rs` | | 7,620 | 83.9 ms | 7.6 ms |
+| `type:picture` | | 219,053 | 196.5 ms | 3.2 ms |
+| `audio:` | | 3,358 | 173.6 ms | 2.3 ms |
+| `doc:` | | 244,521 | 171.0 ms | 2.8 ms |
+| `size:>100mb` | | 509 | 50.4 ms | 8.1 ms |
+| `dm:today` | | 50,132 | 51.3 ms | 7.4 ms |
+| `dc:thisyear` | | 3,625,765 | 57.9 ms | 8.9 ms |
+| `a size:>1mb` | | 22,351 | 22.7 ms | 7.1 ms |
+| `!a` | | 1,935,759 | 46.0 ms | 9.6 ms |
+| `a b` | | 1,198,718 | 20.1 ms | 8.4 ms |
+| `a !b` | | 1,438,992 | 32.1 ms | 11.7 ms |
+| `a\|b` | | 2,940,450 | 51.2 ms | 10.1 ms |
+| `infolder:/Users/f2pgod !a` | | 811,491 | 37.5 ms | 19.8 ms |
+| `rs` | `e` | 169,199 | 794.9 ms | 35.0 ms |
+| `b` | `a` | 1,495,177 | 549.6 ms | 36.6 ms |
+| `rs` | `src` | 24,025 | 10.1 ms | 8.7 ms |
+| `e/**` | | 2,854,812 | 313.8 ms | 246.3 ms |
+| `src/**/*.rs` | | 18,710 | 6.9 ms | 5.5 ms |
+| `a` | | 2,637,710 | 2.7 ms | 2.5 ms |
+| `infolder:/Users/f2pgod` | | 2,008,728 | 6.4 ms | 6.6 ms |
+
+**What changed.**
+- `ext:` and the `type:`, `audio:`, `video:`, `doc:`, and `exe:` groups checked every
+  indexed item and allocated a lowercase copy of each extension. Without an earlier
+  term they now look only at names with a listed extension in the name index, and
+  compare extensions without copying.
+- Filters that check each result, such as `file:`, `folder:`, `size:`, `dm:`, and
+  `dc:`, check chunks of 16,384 results in parallel.
+- The list of every item, where those filters start, is collected from ranges of
+  names in parallel.
+- Combining results, as in `!a`, `a|b`, `a b`, and filters after a word, hashed up to
+  4.5 million entries; it now uses a bitset with one bit per index slot.
+- A folder-field search listed the contents of each matching folder in turn, so
+  folders inside other matching folders were listed again, then removed as
+  duplicates. Each item is now visited once. `**` in paths works the same way.
+
+Every query returned the same results in the same order in both builds, except the
+`**` queries: they return the same results, but files with equal names now keep the
+order of the folder walk, where an unstable sort previously left it arbitrary.
+
+**Sizes and dates not yet indexed.** After a scan, a background indexer reads sizes and
+dates; until it reaches an item, `size:`, `dm:`, and `dc:` read it themselves. They
+did so one item at a time while the search held the engine. They now read all missing
+items in parallel first, and do not read again an item that could not be read. To
+measure this, the example walked `/Applications` (420,683 entries) without metadata
+before every run; each build ran each query five times, in two alternating rounds.
+
+| Query | Matches | 0.1.69 | 0.1.70 |
+| --- | ---: | ---: | ---: |
+| `size:>1mb` | 5,588 | 2,523–2,644 ms | 1,418–1,523 ms |
+| `dm:thisyear` | 333,967 | 2,462–2,580 ms | 1,414–1,520 ms |
+| `a size:>1mb` | 4,053 | 1,627–1,663 ms | 502–532 ms |
+
+Reading files relative to an open folder with `fstatat` was slower than reading full
+paths in parallel, so the engine reads full paths. A search that reads metadata now
+marks the index as changed, so the next save keeps it.
+
+Reproduce with a copy of an index:
+
+```sh
+PATH="$HOME/.cargo/bin:$PATH" cargo build --locked --release -p search-cache \
+  --example query_timing
+target/release/examples/query_timing snapshot /path/to/copied-index.db 6 \
+  '!a' 'ext:rs' 'dm:today' 'e=rs'
+target/release/examples/query_timing walk /Applications 5 'size:>1mb'
+```
+
+A `FOLDER=` prefix fills the folder field. Each line reports checksums of the result
+order and of the result set, so two builds can be compared.
 
 ## Idle work and redraws (0.1.67)
 
