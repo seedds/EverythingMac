@@ -4,14 +4,16 @@
 
 ## Reading these results
 
-These are workstation measurements. The matching study covers the 0.1.55 matching
-changes; the versioned sorting studies cover historical releases.
+These are workstation measurements. The matching studies cover the 0.1.55 matching
+changes and the parallel name matching that followed 0.1.60; the versioned sorting
+studies cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
 An empty query can be faster than a filtered query because it avoids substring matching.
 
 | Study | What it establishes |
 | --- | --- |
+| [Parallel name matching, after 0.1.60](#parallel-name-matching-2026-09-30) | Unscoped case-insensitive name queries fell from 26–188 ms to 3–10.5 ms on 4,573,469 entries, with identical ordered results; folder-scoped queries gained less, and exact/prefix lookups, the all-files query, and index loading were unchanged. |
 | [Maintained orders, 0.1.41](#maintained-orders-0141) | Search, sort, and first-page retrieval over 4,621,437 entries took about 18–19 ms for the empty query; the 2.58-million-match filtered query took about 187–194 ms on first calls. Index opening and preparation took about 2.73 s. |
 | [Indexed metadata, 0.1.40](#indexed-metadata-0140) | Removing filesystem reads eliminated large waits, but full-index sorts still took roughly 2.8–3.3 s. |
 | [Original sorting, 0.1.39](#original-sorting-0139) | Broad uncapped sorts stalled on filesystem reads; some runs timed out before producing results. |
@@ -20,6 +22,46 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Parallel name matching (2026-09-30)
+
+Measured on the same read-only copy of a **4,573,469-entry snapshot**, on the
+workstation described above, comparing the 0.1.60 bridge with the change that
+matches live names in the name index, scanning key ranges in parallel. Previously a
+case-insensitive query ran its regex serially over every name the process had
+interned, collected matches into a sorted set, and looked each one up again.
+
+Each query ran in a fresh process with `scripts/benchmark-sort.py` (one initial call
+and five measured calls) or the benchmark binary directly for the folder and
+case-sensitive rows (one initial and six measured calls). Each build ran twice,
+alternating; the table reports the median of the two per-run medians of first-page
+time, which includes search, the stated sort, and retrieving the first 128 rows.
+Index loading, typing debounce, and UI rendering are excluded. No builds or other
+benchmarks ran concurrently.
+
+| Query | Folder query | Case sensitive | Sort | Matches | 0.1.60 | After |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `a` | None | No | Name | 2,637,710 | 188.30 ms | 10.45 ms |
+| `a` | None | No | None | 2,637,710 | 180.82 ms | 3.02 ms |
+| `.py` | None | No | Name | 507,270 | 48.78 ms | 7.32 ms |
+| `.js` | None | No | Name | 124,879 | 35.88 ms | 4.44 ms |
+| `.swift` | None | No | Name | 43,931 | 33.73 ms | 4.12 ms |
+| `everything-mac` | None | No | Name | 193 | 26.05 ms | 3.19 ms |
+| `swift` | `/Users/` | No | Name | 18,799 | 65.90 ms | 29.13 ms |
+| `swift` | `/Documents/` | No | Name | 10,719 | 29.92 ms | 24.34 ms |
+| `rs` | `/everything_mac/` | No | Name | 2,734 | 8.49 ms | 3.17 ms |
+| `/Cargo.toml/` | None | Yes | Name | 646 | 0.29 ms | 0.30 ms |
+| `/Cargo` | None | Yes | Name | 1,542 | 0.31 ms | 0.30 ms |
+| (all files) | None | No | Name | 4,573,469 | 18.12 ms | 17.61 ms |
+
+Index loading took a median of 2,675 ms before and 2,696 ms after; the difference
+is within run-to-run variation. Exact and prefix lookups were already direct and did
+not change. Folder-scoped queries gain less because much of their time is spent
+enumerating the folder scope rather than matching names.
+
+For fourteen queries, including the complete 2,637,710-result `a` lists with and
+without name sorting, wildcard, Unicode, case-sensitive, and folder-scoped cases,
+every result path and its position were identical between the two builds.
 
 ## Exact, prefix, and scoped matching (2026-09-29)
 

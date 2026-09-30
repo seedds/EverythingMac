@@ -1,6 +1,6 @@
 use crate::{
     SearchCache, SearchOptions, SegmentKind, SegmentMatcher, SegmentMatcherConcrete, SlabIndex,
-    SlabNodeMetadataCompact, build_segment_matchers, cache::NAME_POOL,
+    SlabNodeMetadataCompact, build_segment_matchers,
 };
 use anyhow::{Result, anyhow, bail};
 use everything_mac_syntax::{
@@ -17,7 +17,7 @@ use regex::RegexBuilder;
 use search_cancel::CancellationToken;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
-use std::{collections::BTreeSet, fs::File, io::Read, path::Path};
+use std::{fs::File, io::Read, path::Path};
 
 pub(crate) const CONTENT_BUFFER_BYTES: usize = 64 * 1024;
 
@@ -209,16 +209,18 @@ impl SearchCache {
         token: CancellationToken,
     ) -> Option<Vec<SlabIndex>> {
         token.is_cancelled()?;
-        let mut names = BTreeSet::new();
+        let mut names = Vec::new();
         let mut candidates = HashSet::new();
         for (i, &index) in base.iter().enumerate() {
             token.is_cancelled_sparse(i)?;
             let name = self.file_nodes[index].name();
             if matcher.matches(name) {
                 candidates.insert(index);
-                names.insert(name);
+                names.push(name);
             }
         }
+        names.sort_unstable();
+        names.dedup();
         let mut nodes = Vec::new();
         let mut visited = 0;
         for (i, name) in names.into_iter().enumerate() {
@@ -323,28 +325,44 @@ impl SearchCache {
         nodes
     }
 
+    /// Matches live names directly in the name index, in name then path order.
     fn match_initial_segment(
         &self,
         matcher: &SegmentMatcherConcrete,
         token: CancellationToken,
     ) -> Option<Vec<SlabIndex>> {
-        let names: BTreeSet<_> = match matcher {
+        token.is_cancelled()?;
+        let index = &self.name_index;
+        match matcher {
             SegmentMatcherConcrete::Plain { kind, needle } => match kind {
-                SegmentKind::Substr => NAME_POOL.search_substr(needle, token),
-                SegmentKind::Prefix => NAME_POOL.search_prefix(needle, token),
-                SegmentKind::Suffix => NAME_POOL.search_suffix(needle, token),
-                SegmentKind::Exact => NAME_POOL.search_exact(needle, token),
+                SegmentKind::Exact => {
+                    let nodes = index
+                        .get(needle)
+                        .map(|indices| indices.iter().copied().collect())
+                        .unwrap_or_default();
+                    token.is_cancelled().map(|()| nodes)
+                }
+                SegmentKind::Prefix => index.prefix_nodes(needle, token),
+                SegmentKind::Suffix => {
+                    index.matching_nodes(|| |name: &str| name.ends_with(needle.as_str()), token)
+                }
+                SegmentKind::Substr => {
+                    let finder = memchr::memmem::Finder::new(needle.as_bytes());
+                    index.matching_nodes(
+                        || |name: &str| finder.find(name.as_bytes()).is_some(),
+                        token,
+                    )
+                }
             },
-            SegmentMatcherConcrete::Regex { regex } => NAME_POOL.search_regex(regex, token),
-        }?;
-        let mut nodes = Vec::with_capacity(names.len());
-        for (i, name) in names.iter().enumerate() {
-            token.is_cancelled_sparse(i)?;
-            if let Some(indices) = self.name_index.get(name) {
-                nodes.extend(indices.iter().copied());
-            }
+            // Each range gets its own clone: clones do not share the regex cache pool.
+            SegmentMatcherConcrete::Regex { regex } => index.matching_nodes(
+                || {
+                    let regex = regex.clone();
+                    move |name: &str| regex.is_match(name)
+                },
+                token,
+            ),
         }
-        Some(nodes)
     }
 
     fn match_direct_child_segments(
@@ -1986,5 +2004,47 @@ mod candidate_matching_tests {
             }])
             .unwrap();
         verify(&mut cache);
+    }
+
+    #[test]
+    fn initial_segment_matches_a_serial_scan_of_live_names() {
+        let (_dir, mut cache) = fixture();
+        cache.name_index.refresh_splits();
+        let mut matchers = vec![];
+        for kind in [
+            SegmentKind::Substr,
+            SegmentKind::Prefix,
+            SegmentKind::Suffix,
+            SegmentKind::Exact,
+        ] {
+            for needle in [
+                "report",
+                "Report.txt",
+                "caf",
+                ".txt",
+                "é",
+                "unrelated-1",
+                "",
+            ] {
+                matchers.push(SegmentMatcherConcrete::Plain {
+                    kind,
+                    needle: needle.to_string(),
+                });
+            }
+        }
+        for pattern in ["report", "^(?:caf)", r"(?:\.txt)$", "^unrelated-.*3$", "É"] {
+            let regex = RegexBuilder::new(pattern)
+                .case_insensitive(true)
+                .build()
+                .unwrap();
+            matchers.push(SegmentMatcherConcrete::Regex { regex });
+        }
+        for matcher in &matchers {
+            let expected = cache.name_index.serial_nodes(|name| matcher.matches(name));
+            let actual = cache
+                .match_initial_segment(matcher, CancellationToken::noop())
+                .unwrap();
+            assert_eq!(actual, expected, "{matcher:?}");
+        }
     }
 }

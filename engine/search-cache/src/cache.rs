@@ -316,9 +316,10 @@ impl SearchCache {
         slab: FileNodes,
         last_event_id: u64,
         rescan_count: u64,
-        name_index: NameIndex,
+        mut name_index: NameIndex,
         cancel: &'static AtomicBool,
     ) -> Self {
+        name_index.refresh_splits();
         Self {
             file_nodes: slab,
             last_event_id,
