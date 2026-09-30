@@ -24,15 +24,20 @@ CNRequest *cn_scan_request_new(void);
 void cn_cancel_scan(void);
 // Thread-safe while request is alive; does not access the engine.
 size_t cn_scan_count(const CNRequest *request);
+// Whether no scan was started or cancelled since this request's; also thread-safe.
+bool cn_scan_current(const CNRequest *request);
 CNBuffer cn_watch(CNEngine *engine, bool enabled, const char *checkpoint);
 // Includes `events` only when include_events is set and processed_events differs
 // from since_processed. `changed` invalidates row IDs; `metadata_changed` (sizes and
 // dates indexed or updated in place) keeps them valid. `watcher_stopped` reports a
-// lost FSEvents stream.
+// lost FSEvents stream. `walking` means folders changed by events are still being
+// read without the engine lock; later events wait, and a later poll applies them.
 CNBuffer cn_poll(CNEngine *engine, uint64_t since_processed, bool include_events);
 // Applies removals the app made itself (JSON array of absolute paths) without
 // waiting for FSEvents; `changed` invalidates row IDs as in cn_poll.
 CNBuffer cn_remove_paths(CNEngine *engine, const char *paths);
+// Blocks until the scan finishes; it needs no engine, so searches can continue.
+// Volumes other than the startup disk are skipped unless an include path selects them.
 CNBuffer cn_scan(const char *root, const char *ignores, const char *includes, const char *patterns, const CNRequest *request, CNEngine **out);
 CNBuffer cn_validate_exclusions(const char *patterns);
 // Skips the write when the index is unchanged since it was opened from, or last

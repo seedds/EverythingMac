@@ -186,6 +186,20 @@ impl EventWatcher {
         }
     }
 
+    /// A watcher that receives what is sent through the returned sender instead of
+    /// FSEvents, for tests.
+    pub fn manual() -> (Sender<Vec<FsEvent>>, EventWatcher) {
+        let (sender, receiver) = unbounded();
+        let (_cancellation_token, _) = bounded(1);
+        (
+            sender,
+            EventWatcher {
+                receiver,
+                _cancellation_token,
+            },
+        )
+    }
+
     pub fn spawn(
         path: String,
         since_event_id: FSEventStreamEventId,

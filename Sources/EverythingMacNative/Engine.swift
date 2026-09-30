@@ -33,6 +33,7 @@ struct Reply: Decodable {
   let metadata_changed: Bool?
   let watcher_stopped: Bool?
   let metadata_indexing: Bool?
+  let walking: Bool?
   let processed_events: UInt64?
   let events: [FileEvent]?
   let paths: [String]?
@@ -57,6 +58,8 @@ func decode(_ buffer: CNBuffer) throws -> Reply {
 // All handle access, including destruction, belongs to this serial queue.
 final class Engine {
   let queue = DispatchQueue(label: "everything.mac.engine", qos: .userInitiated)
+  // Scans build a separate index, so the current one stays searchable meanwhile.
+  private let scanQueue = DispatchQueue(label: "everything.mac.scan", qos: .userInitiated)
   private var handle: OpaquePointer?
   func perform(
     _ operation: @escaping (OpaquePointer?) throws -> Reply,
@@ -72,37 +75,44 @@ final class Engine {
     progress: @escaping (Int) -> Void = { _ in },
     completion: @escaping (Result<Reply, Error>) -> Void
   ) {
-    cn_cancel()
     cn_cancel_scan()
     let request = SearchRequest(scan: true)
     let progressTimer = DispatchSource.makeTimerSource(queue: .main)
     progressTimer.schedule(deadline: .now(), repeating: .milliseconds(200))
     progressTimer.setEventHandler { progress(Int(cn_scan_count(request.pointer))) }
     progressTimer.resume()
-    queue.async {
-      let result = Result { () throws -> Reply in
-        var replacement: OpaquePointer?
-        defer { cn_engine_close(replacement) }
-        let reply = try root.withCString { r in
+    scanQueue.async {
+      let replacement = ScannedIndex()
+      let scanned = Result { () throws -> Reply in
+        try root.withCString { r in
           try jsonString(ignores).withCString { i in
             try jsonString(includes).withCString { n in
               try jsonString(patterns).withCString { p in
-                try decode(cn_scan(r, i, n, p, request.pointer, &replacement))
+                try decode(cn_scan(r, i, n, p, request.pointer, &replacement.handle))
               }
             }
           }
         }
-        if reply.status == "ok" {
-          _ = try decode(cn_transfer_selection(self.handle, replacement))
-          cn_engine_close(self.handle)
-          self.handle = replacement
-          replacement = nil
-        }
-        return reply
       }
-      DispatchQueue.main.async {
-        progressTimer.cancel()
-        completion(result)
+      self.queue.async {
+        defer { cn_engine_close(replacement.handle) }
+        let result = Result { () throws -> Reply in
+          let reply = try scanned.get()
+          guard reply.status == "ok" else { return reply }
+          // Opening or closing an index, or Cancel Scan, discards a finished scan.
+          guard cn_scan_current(request.pointer) else {
+            return try JSONDecoder().decode(Reply.self, from: Data(#"{"status":"cancelled"}"#.utf8))
+          }
+          _ = try decode(cn_transfer_selection(self.handle, replacement.handle))
+          cn_engine_close(self.handle)
+          self.handle = replacement.handle
+          replacement.handle = nil
+          return reply
+        }
+        DispatchQueue.main.async {
+          progressTimer.cancel()
+          completion(result)
+        }
       }
     }
   }
@@ -183,6 +193,11 @@ final class Engine {
   deinit { cn_engine_close(handle) }
 }
 
+// A scan's new index, passed from the scan queue to the engine queue.
+private final class ScannedIndex: @unchecked Sendable {
+  var handle: OpaquePointer?
+}
+
 // Captures keep the request alive through its queued operation and any
 // concurrent reads of the scan progress counter.
 private final class SearchRequest: @unchecked Sendable {
@@ -240,6 +255,8 @@ struct Sample: Codable {
   let prefs: Preferences
   var live = false
   var scanning = false
+  /// Folders changed by filesystem events are being read in the background.
+  var walking = false
   var indexStatus = "Saved index"
   var events: [FileEvent] = [] { didSet { filterEvents() } }
   var eventFilter = "" { didSet { if eventFilter != oldValue { filterEvents() } } }
@@ -271,6 +288,8 @@ struct Sample: Codable {
   /// Backfilled sizes/dates may reorder or refilter the displayed results.
   @ObservationIgnored var metadataRefreshPending = false
   @ObservationIgnored var metadataIndexing = false
+  /// Whether the running search is a background refresh.
+  @ObservationIgnored var searchIsBackground = false
   @ObservationIgnored var lastRefresh = 0.0
   @ObservationIgnored var lastSave = ProcessInfo.processInfo.systemUptime
   @ObservationIgnored var indexEpoch: UInt64 = 0
@@ -353,6 +372,7 @@ struct Sample: Codable {
     generation &+= 1
     ready = false
     searching = false
+    walking = false
     selectionEpoch &+= 1
     selectionLoading = false
     selectedPaths = []
@@ -385,14 +405,12 @@ struct Sample: Codable {
         if !self.snapshotOnly {
           self.setLive()
           self.startTimer()
-          if self.scopeDiffersFromPreferences() {
-            self.scan()
-            return
-          }
         }
         self.status = "Loaded \(reply.total ?? 0) indexed entries in \(Int(self.loadedMS)) ms"
         self.inputAt = ProcessInfo.processInfo.systemUptime
         self.submit()
+        // The loaded index stays searchable while it is rebuilt for new settings.
+        if !self.snapshotOnly && self.scopeDiffersFromPreferences() { self.scan() }
       case .failure(let error):
         if let previous {
           self.snapshot = previous.snapshot
@@ -444,6 +462,7 @@ struct Sample: Codable {
     let ticket = generation
     let submittedState = currentSearchState
     searching = true
+    searchIsBackground = background
     error = nil
     pendingDraw = nil
     submittedAt = ProcessInfo.processInfo.systemUptime

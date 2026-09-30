@@ -208,6 +208,33 @@ immediate Copy, Copy during refresh, and cancellation when the selection or sear
 changes. Every file action, including copying, waits for a pending selection
 automatically.
 
+To measure searching during a full rescan of a saved index:
+
+```bash
+./run.sh --rescan-check /tmp/everything-mac-rescan.json \
+  ~/Library/Application\ Support/com.everything.mac/everything-mac.db
+```
+
+This copies the index into a temporary folder and uses your saved root, include,
+ignore, and exclusion settings without changing them or the saved index. It loads the
+copy live, records how many entries remain after the first poll (which drops other
+volumes from indexes saved before 0.1.66), times 25 searches, then rescans and keeps
+searching and loading a page far from the top until the rescan finishes. The report
+compares `idleSearchMS` with `searchMS` and `pageMS` during the rescan; each search is
+timed from submission until its rows are drawn. It reads the whole monitored root, so
+a rescan of `/` takes as long as a normal rebuild.
+
+To time how long live updates hold the engine while a large folder is moved into a
+watched index, using real FSEvents in a temporary folder:
+
+```bash
+cargo run --release -p everything-mac-native-prototype --example live_walk -- 200000
+```
+
+`longest_poll_ms` is the longest `cn_poll` call, which is the longest a search or row
+load waits on the app's serial engine queue; `indexed_after_ms` is the time from the
+move until the index contains every file.
+
 To measure selection restoration after broad searches against a read-only snapshot:
 
 ```bash

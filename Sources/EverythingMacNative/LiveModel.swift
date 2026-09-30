@@ -86,7 +86,10 @@ extension Model {
         if self.processedEventCount != Int(clamping: processed) {
           self.processedEventCount = Int(clamping: processed)
         }
+        let walking = reply.walking == true
+        if self.walking != walking { self.walking = walking }
         var status = "\(reply.total ?? 0) indexed · \(processed) events"
+        if walking { status += " · Updating changed folders…" }
         if reply.metadata_indexing == true {
           status += " · Indexing file sizes and dates…"
         } else if !self.live {
@@ -188,23 +191,14 @@ extension Model {
       }
     }
   }
+  /// The current index stays searchable until the scan replaces it.
   func scan(useCurrentConfig: Bool = false) {
     guard !scanning, !snapshotOnly, !closed else { return }
-    cn_cancel()
-    cn_cancel_scan()
-    debounceWork?.cancel()
-    debounceWork = nil
-    indexEpoch &+= 1
     let epoch = indexEpoch
-    generation &+= 1
-    pendingDraw = nil
-    searching = false
-    let hadIndex = ready
     let previousIndexStatus = indexStatus
     let previousCount = indexedCount
     let previousEvents = processedEventCount
     scanning = true
-    ready = false
     error = nil
     status = "Scanning…"
     indexedCount = 0
@@ -224,14 +218,15 @@ extension Model {
       switch result {
       case .success(let reply):
         guard reply.status == "ok" else {
-          self.ready = hadIndex
           self.indexStatus = previousIndexStatus
           self.indexedCount = previousCount
           self.processedEventCount = previousEvents
           self.status = "Scan cancelled; previous index retained"
-          if hadIndex { self.submit(background: true) }
           return
         }
+        // Replies about the replaced index no longer apply.
+        self.indexEpoch &+= 1
+        self.walking = false
         self.root = reply.root ?? scanRoot
         self.loadedIgnores = reply.ignores ?? ignores
         self.loadedIncludes = reply.includes ?? includes
@@ -254,9 +249,13 @@ extension Model {
         self.resetEvents()
         self.setLive()
         self.startTimer()
-        self.submit(background: true)
+        // Run the displayed search again on the new index. A search still running
+        // used the previous index and runs again as the same kind of search; one
+        // still being typed waits for its own delay.
+        if self.debounceWork == nil {
+          self.submit(background: !self.searching || self.searchIsBackground)
+        }
       case .failure(let e):
-        self.ready = hadIndex
         self.indexStatus = previousIndexStatus
         self.indexedCount = previousCount
         self.processedEventCount = previousEvents

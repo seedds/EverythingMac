@@ -2,8 +2,15 @@
 use super::*;
 use crossbeam_channel::TryRecvError;
 use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent};
-use search_cache::{HandleFSEError, NodeIdentity, WalkData};
-use std::{collections::HashSet, fs, os::fd::AsRawFd, path::PathBuf};
+use search_cache::{EventScan, HandleFSEError, NodeIdentity, ScannedEvents, WalkData};
+use std::{
+    collections::HashSet,
+    fs,
+    os::fd::AsRawFd,
+    path::PathBuf,
+    sync::{LazyLock, atomic::Ordering, mpsc},
+    time::Duration,
+};
 
 // A filesystem syscall can wait on a disconnected volume or an OS permission
 // prompt. Keep at most one scan worker alive, and let cancellation release the
@@ -94,6 +101,113 @@ fn watch(state: &mut State) {
     );
 }
 
+/// How long a poll waits for the walks it starts before leaving them to finish in
+/// the background, so that small changes still appear in the same poll.
+const WALK_WAIT: Duration = Duration::from_millis(50);
+
+/// Walks of the folders an event batch changed, running without the engine lock.
+/// Later batches wait for them, since they may depend on the result. Dropping it
+/// cancels the walks.
+pub(super) struct PendingWalk {
+    result: mpsc::Receiver<Option<ScannedEvents>>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for PendingWalk {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+// Like full scans, walks must not occupy the search pool while a syscall blocks.
+static WALK_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .thread_name(|i| format!("everything-mac-native-live-walk-{i}"))
+        .build()
+        .expect("create live walk pool")
+});
+
+fn start_walk(scan: EventScan) -> PendingWalk {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let (sender, result) = mpsc::sync_channel(1);
+    #[cfg(test)]
+    let gate = super::tests::walk_gate(scan.paths());
+    WALK_POOL.spawn(move || {
+        let scanned = catch_unwind(AssertUnwindSafe(|| {
+            scan.scan(|| stop.load(Ordering::Relaxed))
+        }))
+        .ok()
+        .flatten();
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            gate();
+        }
+        let _ = sender.send(scanned);
+    });
+    PendingWalk { result, cancel }
+}
+
+/// Applies the pending walk if it finishes by `deadline`. Returns whether no walk
+/// is left pending.
+fn finish_walk(state: &mut State, deadline: Instant, changed: &mut bool) -> bool {
+    let Some(walk) = &state.walk else {
+        return true;
+    };
+    let scanned = match walk
+        .result
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    {
+        Ok(scanned) => scanned,
+        Err(mpsc::RecvTimeoutError::Timeout) => return false,
+        Err(mpsc::RecvTimeoutError::Disconnected) => None,
+    };
+    state.walk = None;
+    let Some(scanned) = scanned else {
+        // Only a panic ends a walk early; what it covered needs a full rescan.
+        state.watcher = None;
+        state.needs_rescan = true;
+        *changed = true;
+        return true;
+    };
+    apply_scanned(state, scanned, changed);
+    // The walk may have read items that the app removed while it ran.
+    let removed = std::mem::take(&mut state.removed_during_walk);
+    if !removed.is_empty() {
+        *changed |= remove_paths(state, removed);
+    }
+    true
+}
+
+fn apply_scanned(state: &mut State, scanned: ScannedEvents, changed: &mut bool) {
+    let old_checkpoint = state.cache.last_event_id();
+    *changed |= state.cache.apply_fs_events(scanned);
+    state.events_dirty |= state.cache.last_event_id() != old_checkpoint;
+}
+
+/// Removes paths the app itself removed. Returns whether the index changed.
+fn remove_paths(state: &mut State, paths: Vec<PathBuf>) -> bool {
+    // Keep the FSEvents position: these events are replayed confirmations.
+    let id = state.cache.last_event_id();
+    let events = paths
+        .into_iter()
+        .map(|path| FsEvent {
+            path,
+            id,
+            flag: EventFlag::ItemRemoved,
+        })
+        .collect();
+    match state.cache.handle_fs_events(events) {
+        Ok(changed) => changed,
+        Err(HandleFSEError::Rescan) => {
+            state.watcher = None;
+            state.needs_rescan = true;
+            true
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn cn_scan_request_new() -> *mut Request {
     Box::into_raw(Box::new(Request(
@@ -144,6 +258,14 @@ pub extern "C" fn cn_cancel_scan() {
     let _ = CancellationToken::new_scan();
 }
 
+/// Whether no scan was started or cancelled since `request`'s.
+/// # Safety
+/// The request must remain alive throughout this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cn_scan_current(request: *const Request) -> bool {
+    unsafe { request.as_ref() }.is_some_and(|r| r.0.is_cancelled().is_some())
+}
+
 /// # Safety
 /// Valid serialized handle. The checkpoint filename must belong to the native app.
 #[unsafe(no_mangle)]
@@ -171,6 +293,8 @@ pub unsafe extern "C" fn cn_watch(
         state.watcher = None;
         if enabled {
             watch(&mut state);
+            // Indexes saved before scans skipped other volumes still contain them.
+            state.prune_volumes = true;
         }
         drop(state);
         // Registering a live/native index also migrates snapshots whose dates
@@ -199,7 +323,16 @@ pub unsafe extern "C" fn cn_poll(
         let mut metadata_changed = std::mem::take(&mut state.metadata.changed);
         let mut changed = false;
         let mut watcher_stopped = false;
+        if std::mem::take(&mut state.prune_volumes) {
+            changed |= state.cache.remove_other_volumes();
+        }
+        // Walks started by earlier polls are not waited for.
+        let mut walking = !finish_walk(&mut state, Instant::now(), &mut changed);
+        let deadline = Instant::now() + WALK_WAIT;
         for _ in 0..16 {
+            if walking || state.needs_rescan {
+                break;
+            }
             let events = match state.watcher.as_ref().map(|w| w.try_recv()) {
                 Some(Ok(events)) => events,
                 Some(Err(TryRecvError::Disconnected)) => {
@@ -226,18 +359,22 @@ pub unsafe extern "C" fn cn_poll(
                 state.events.truncate(500);
                 Some(event)
             }).collect();
-            let old_checkpoint = state.cache.last_event_id();
-            match state.cache.handle_fs_events(events) {
-                Ok(touched) => changed |= touched,
+            match state.cache.plan_fs_events(events) {
+                // Without paths to read, applying only records the event position.
+                Ok(scan) if scan.is_empty() => {
+                    if let Some(scanned) = scan.scan(|| false) {
+                        apply_scanned(&mut state, scanned, &mut changed);
+                    }
+                }
+                Ok(scan) => {
+                    state.walk = Some(start_walk(scan));
+                    walking = !finish_walk(&mut state, deadline, &mut changed);
+                }
                 Err(HandleFSEError::Rescan) => {
                     state.watcher = None;
                     state.needs_rescan = true;
                     changed = true;
                 }
-            }
-            state.events_dirty |= state.cache.last_event_id() != old_checkpoint;
-            if state.needs_rescan {
-                break;
             }
         }
         // Attribute-only events update sizes and dates in place, keeping row IDs.
@@ -251,7 +388,7 @@ pub unsafe extern "C" fn cn_poll(
             state.dirty = true;
         }
         let mut reply = json!({"status":"ok", "changed":changed, "needs_rescan":state.needs_rescan,
-            "metadata_changed":metadata_changed, "watcher_stopped":watcher_stopped,
+            "metadata_changed":metadata_changed, "watcher_stopped":watcher_stopped, "walking":walking,
             "total":state.cache.get_total_files(), "processed_events":state.processed_events,
             "metadata_indexing":state.metadata.active()});
         // The event list is only for the visible Events tab, and only when it changed.
@@ -276,24 +413,11 @@ pub unsafe extern "C" fn cn_remove_paths(engine: *mut Engine, paths: *const c_ch
             .0
             .lock()
             .map_err(|_| "Engine faulted; reopen index")?;
-        // Keep the FSEvents position: these events are replayed confirmations.
-        let id = state.cache.last_event_id();
-        let events = paths
-            .into_iter()
-            .map(|path| FsEvent {
-                path,
-                id,
-                flag: EventFlag::ItemRemoved,
-            })
-            .collect();
-        let changed = match state.cache.handle_fs_events(events) {
-            Ok(changed) => changed,
-            Err(HandleFSEError::Rescan) => {
-                state.watcher = None;
-                state.needs_rescan = true;
-                true
-            }
-        };
+        // A folder walk that is still running may have read these paths already.
+        if state.walk.is_some() {
+            state.removed_during_walk.extend(paths.iter().cloned());
+        }
+        let changed = remove_paths(&mut state, paths);
         if changed {
             state.results.clear();
             state.generation = 0;
@@ -360,11 +484,14 @@ pub unsafe extern "C" fn cn_scan(
                 .build()
                 .map_err(|e| e.to_string())?;
             let exclusions = fswalk::Exclusions::compile(&root, &patterns)?;
+            // Other volumes are left out unless an include path selects them.
+            let volumes = search_cache::other_volumes(&root, &includes);
             let cache = pool.install(|| {
                 let walk = WalkData::new(&root, &ignores, &includes, false, move || {
                     token.is_cancelled().is_none()
                 })
-                .with_exclusions(exclusions);
+                .with_exclusions(exclusions)
+                .with_volumes(&volumes);
                 with_scan_progress(&walk, &progress, || {
                     SearchCache::walk_fs_with_walk_data(&walk, &STOP)
                 })

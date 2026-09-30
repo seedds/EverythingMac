@@ -16,7 +16,7 @@ results table, and a compact bottom status bar**.
 | Search Library button | Left of the search field, beside Aa; browse saved searches and recent history. |
 | Aa button | Left of the search field; toggles case-sensitive matching. |
 | Results table | Name, Path, Size on disk, Modified, and Created columns, with resizable widths and single-line middle truncation. |
-| Bottom status bar | Lifecycle state (Ready, Updating, Paused; hover for index details), Files/Events segmented control with counts, rescan, selection count, and search duration. |
+| Bottom status bar | Lifecycle state (Ready, Updating, Paused; hover for index details), Files/Events segmented control with counts, rescan, selection count, and search duration. Updating also appears while folders changed on disk are read in the background. |
 | Index menu | Live Updates on/off (Paused in the status bar while off), Rescan (Option-Command-R), and Cancel Scan. |
 
 Enter submits a search immediately. Typing uses a **100 ms debounce** by default;
@@ -115,7 +115,16 @@ scans the configured monitor root. New installations start with empty include
 and ignore paths and an empty terminal application setting (F9 uses macOS Terminal).
 Preferences and indexes
 from older apps are not imported. If a loaded index's root/include/ignore/exclusion-pattern
-configuration differs from the saved preferences, it starts a rebuild.
+configuration differs from the saved preferences, it starts a rebuild; the loaded index
+stays searchable until the rebuilt one replaces it.
+
+The index covers the startup disk. Other volumes mounted inside the monitored root are
+skipped: external and network drives, disk images, Xcode Simulator runtimes, system
+volumes such as Preboot and Recovery, and `/dev`. To search one, add its mount point
+(such as `/Volumes/Backup`) or a folder on it to Include paths. An included volume is
+indexed with the next rebuild and read in the background whenever it is mounted.
+Indexes saved by 0.1.65 or earlier drop their entries from other volumes on the next
+launch, without a rescan.
 
 Native data is stored separately:
 
@@ -134,13 +143,18 @@ still open the old filename without changing it. An existing `everything-mac.db`
 takes precedence; migration failures preserve the old file and stop startup scanning.
 
 Choose a monitored root in **Settings → Index**, and use the bottom rescan button or
-**Index → Rescan** to rebuild the current scope. **File → Open Index…** opens another
+**Index → Rescan** to rebuild the current scope. Searching, scrolling, and file actions
+keep working on the current index during a rescan, and the new index replaces it when
+the scan finishes. **File → Open Index…** opens another
 saved index read-only; **Index → Enable Live Updates** makes it live. A live index is
 saved before switching, and if the chosen file cannot be opened the current index stays loaded. Pausing live
 updates lasts until the next launch. Include paths override ignored ancestors.
 
 The app processes filesystem events and writes checkpoints while idle, at most every
-10 minutes (within about a minute of a new scan), and before quitting. Changes made
+10 minutes (within about a minute of a new scan), and before quitting. Folders that
+events report as new or changed, such as a large folder moved into place, are read in
+the background; searches continue meanwhile, and the results update when reading
+finishes. Changes made
 since the last checkpoint are replayed from macOS filesystem events on the next launch. Cancelling a scan retains the previous index. If macOS blocks
 a filesystem call, cancellation releases the native engine queue while at most one
 scan worker remains outstanding. Another scan must wait for that worker to finish.

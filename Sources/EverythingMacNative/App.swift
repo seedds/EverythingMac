@@ -14,11 +14,11 @@ struct ContentView: View {
     model.activeTab == "files" ? $model.query : $model.eventFilter
   }
   private var busy: Bool {
-    model.searching || model.scanning || model.selectionLoading
+    model.searching || model.scanning || model.walking || model.selectionLoading
       || (!model.ready && model.error == nil)
   }
   private var lifecycle: String {
-    model.scanning ? "Updating"
+    model.scanning || model.walking ? "Updating"
       : !model.ready ? "Initializing"
       : !model.live && !model.snapshotOnly ? "Paused" : "Ready"
   }
@@ -219,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   var benchmark: Benchmark?
   var scrollCheck: ScrollCheck?
   var selectionCheck: SelectionCheck?
+  var rescanCheck: RescanCheck?
   var featureCheck: FeatureCheck?
   var selfCheck: SelfCheck?
   var liveCheck: LiveCheck?
@@ -230,7 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   override init() {
     let args = CommandLine.arguments
     let isolated = ["--benchmark", "--self-check", "--snapshot", "--live-check",
-      "--scroll-check", "--selection-check", "--feature-check", "--icon-check"]
+      "--scroll-check", "--selection-check", "--feature-check", "--icon-check", "--rescan-check"]
       .contains(where: args.contains)
     model = Model(prefs: Preferences(isolated: isolated))
     model.snapshotOnly = isolated
@@ -330,6 +331,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     if let index = args.firstIndex(of: "--live-check"), args.indices.contains(index + 1) {
       liveCheck = LiveCheck(model: model, output: args[index + 1])
       liveCheck?.start()
+      return
+    }
+    if let index = args.firstIndex(of: "--rescan-check"), args.indices.contains(index + 2) {
+      rescanCheck = RescanCheck(model: model, output: args[index + 1], index: args[index + 2])
+      rescanCheck?.start()
       return
     }
     if let index = args.firstIndex(of: "--selection-check"), args.indices.contains(index + 1) {

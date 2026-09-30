@@ -11,8 +11,7 @@ use anyhow::{Context, Result, anyhow};
 use everything_mac_sdk::{EventFlag, FsEvent, ScanType, current_event_id};
 use everything_mac_syntax::{Expr, Filter, FilterKind, Term, optimize_query, parse_query};
 use fswalk::{
-    Node, NodeFileType, NodeMetadata, WalkData, should_ignore_path, walk_it,
-    walk_it_without_root_chain,
+    Node, NodeFileType, NodeMetadata, OtherVolumes, WalkData, walk_it, walk_it_without_root_chain,
 };
 use hashbrown::HashSet;
 use namepool::NamePool;
@@ -774,52 +773,52 @@ impl SearchCache {
         current
     }
 
-    fn should_ignore(&self, path: &Path) -> bool {
-        should_ignore_path(
-            path,
-            self.file_nodes.ignore_paths(),
-            self.file_nodes.include_paths(),
-        )
+    /// Walks `path` again and replaces its node; returns the new node's index.
+    /// - If path is not under the watch root, None is returned.
+    /// - Procedure contains metadata fetching, if metadata fetching failed, None is returned.
+    #[cfg(test)]
+    fn scan_path_recursive(&mut self, path: &Path) -> Option<SlabIndex> {
+        let stop = self.stop;
+        let scanned = self
+            .scan_config()
+            .scan(path.to_path_buf(), &move || stop.load(Ordering::Relaxed))?;
+        self.apply_scanned_path(scanned)
     }
 
-    // `Self::scan_path_recursive`function returns index of the constructed node(with metadata provided).
-    // - If path is not under the watch root, None is returned.
-    // - Procedure contains metadata fetching, if metadata fetching failed, None is returned.
-    fn scan_path_recursive(&mut self, path: &Path) -> Option<SlabIndex> {
-        // Ensure path is under the watch root
-        if path.symlink_metadata().err().map(|e| e.kind()) == Some(ErrorKind::NotFound) {
-            self.remove_node_path(path);
-            return None;
-        };
-        // Case-insensitive volumes also resolve a name that differs from the stored
-        // one only by case or Unicode normalization, such as the old side of
-        // `mv Foo foo`. Index the stored name, and drop siblings whose spelling no
-        // longer exists.
-        let stored_path;
-        let mut respelled = false;
-        let path = match (path.parent(), path.file_name(), on_disk_name(path)) {
-            (Some(parent), Some(requested), Some(stored)) if stored != requested => {
-                stored_path = parent.join(stored);
-                respelled = true;
-                stored_path.as_path()
-            }
-            _ => path,
-        };
-        if self.should_ignore(path)
-            || self
-                .file_nodes
-                .exclusions
-                .is_excluded(path, path.symlink_metadata().is_ok_and(|m| m.is_dir()))
-        {
-            self.remove_node_path(path);
-            return None;
+    /// Copies what walks of event paths need, so that they can run without the cache.
+    fn scan_config(&self) -> ScanConfig {
+        ScanConfig {
+            root: self.file_nodes.path().to_path_buf(),
+            ignores: self.file_nodes.ignore_paths().clone(),
+            includes: self.file_nodes.include_paths().clone(),
+            exclusions: self.file_nodes.exclusions.clone(),
+            volumes: None,
         }
+    }
+
+    /// Replaces the node at a scanned path with what the scan found.
+    fn apply_scanned_path(&mut self, scanned: ScannedPath) -> Option<SlabIndex> {
+        let (path, respelled, node) = match scanned.outcome {
+            ScanOutcome::Missing => {
+                self.remove_node_path(&scanned.requested);
+                return None;
+            }
+            ScanOutcome::Ignored(path) => {
+                self.remove_node_path(&path);
+                return None;
+            }
+            ScanOutcome::Walked {
+                path,
+                respelled,
+                node,
+            } => (path, respelled, node),
+        };
         let parent_path = path.parent().expect(
             "scan_path_recursive doesn't expected to scan root(should be filtered outside)",
         );
         // Ensure node of the path parent is existed
         let parent = self.create_node_chain(parent_path);
-        // Remove node(if exists) and do a full rescan
+        // Remove the old node, and siblings whose spelling no longer exists.
         let name = path.file_name();
         let stale: Vec<SlabIndex> = self.file_nodes[parent]
             .children
@@ -837,21 +836,10 @@ impl SearchCache {
         for old_node in stale {
             self.remove_node(old_node);
         }
-        // For incremental data, we need metadata
-        let walk_data = WalkData::new(
-            path,
-            self.file_nodes.ignore_paths(),
-            self.file_nodes.include_paths(),
-            true,
-            || self.stop.load(Ordering::Relaxed),
-        )
-        .with_exclusions(self.file_nodes.exclusions.clone());
-        walk_it_without_root_chain(&walk_data).map(|node| {
-            let node = self.create_node_slab_update_name_index_and_name_pool(Some(parent), &node);
-            // A new ID cannot already be a child; skip `add_children`'s scan.
-            self.file_nodes[parent].children.push(node);
-            node
-        })
+        let node = self.create_node_slab_update_name_index_and_name_pool(Some(parent), &node);
+        // A new ID cannot already be a child; skip `add_children`'s scan.
+        self.file_nodes[parent].children.push(node);
+        Some(node)
     }
 
     // `Self::scan_path_nonrecursive`function returns index of the constructed node.
@@ -1166,6 +1154,19 @@ impl SearchCache {
     /// Returns whether a batch touched indexed data (including removals).
     /// Ignored paths and history/no-op events still advance the event checkpoint.
     pub fn handle_fs_events(&mut self, events: Vec<FsEvent>) -> Result<bool, HandleFSEError> {
+        let stop = self.stop;
+        let scan = self.plan_fs_events(events)?;
+        // Stopping leaves the batch unapplied, to be replayed from FSEvents.
+        Ok(scan
+            .scan(move || stop.load(Ordering::Relaxed))
+            .is_some_and(|scanned| self.apply_fs_events(scanned)))
+    }
+
+    /// Handles a batch of events up to reading changed paths from disk: reports when
+    /// a full rescan is needed and updates attributes in place. The returned scan
+    /// needs no access to the cache, so it can run while searches continue; pass its
+    /// result to `apply_fs_events`.
+    pub fn plan_fs_events(&mut self, events: Vec<FsEvent>) -> Result<EventScan, HandleFSEError> {
         let max_event_id = events.iter().map(|e| e.id).max();
         // If rescan needed, early exit.
         if events.iter().any(|event| {
@@ -1182,7 +1183,6 @@ impl SearchCache {
             self.rescan_count = self.rescan_count.saturating_add(1);
             return Err(HandleFSEError::Rescan);
         }
-        let mut changed = false;
         // Attribute-only changes update indexed items in place: IDs stay valid and a
         // folder's subtree is not walked again. File-level events report changed
         // children separately, so these events never stand in for descendants.
@@ -1193,19 +1193,167 @@ impl SearchCache {
                     .is_some_and(|kind| self.update_metadata_in_place(&event.path, kind))
             })
             .collect();
-        for scan_path in scan_paths(events) {
-            info!("Scanning path: {scan_path:?}");
-            let existed = self.node_index_for_path(&scan_path).is_some();
-            let folder = self.scan_path_recursive(&scan_path);
+        Ok(EventScan {
+            paths: scan_paths(events),
+            max_event_id,
+            config: self.scan_config(),
+        })
+    }
+
+    /// Applies what an `EventScan` read from disk. Returns whether indexed items changed.
+    pub fn apply_fs_events(&mut self, scanned: ScannedEvents) -> bool {
+        let mut changed = false;
+        for scanned_path in scanned.paths {
+            let existed = self.node_index_for_path(&scanned_path.requested).is_some();
+            let folder = self.apply_scanned_path(scanned_path);
             changed |= existed || folder.is_some();
             if folder.is_some() {
                 info!("Node changed: {folder:?}");
             }
         }
-        if let Some(max_event_id) = max_event_id {
+        if let Some(max_event_id) = scanned.max_event_id {
             self.update_last_event_id(max_event_id);
         }
-        Ok(changed)
+        changed
+    }
+
+    /// Removes items on other volumes, which scans now skip, from an index saved
+    /// before they did. Returns whether any were indexed.
+    pub fn remove_other_volumes(&mut self) -> bool {
+        let volumes = crate::other_volumes(self.file_nodes.path(), self.file_nodes.include_paths());
+        self.remove_volumes(&volumes)
+    }
+
+    pub(crate) fn remove_volumes(&mut self, volumes: &OtherVolumes) -> bool {
+        let mut changed = false;
+        for mount in volumes.skipped() {
+            changed |= self.remove_node_path(mount).is_some();
+        }
+        changed
+    }
+}
+
+/// The paths a batch of events must read again from disk, with the settings their
+/// walks need; see `SearchCache::plan_fs_events`.
+pub struct EventScan {
+    paths: Vec<PathBuf>,
+    max_event_id: Option<u64>,
+    config: ScanConfig,
+}
+
+impl EventScan {
+    /// Whether nothing needs to be read from disk.
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+
+    /// Uses `volumes` instead of the mount table.
+    pub fn with_volumes(mut self, volumes: OtherVolumes) -> Self {
+        self.config.volumes = Some(volumes);
+        self
+    }
+
+    /// Reads the paths from disk. Returns `None` if `cancel` returned true.
+    pub fn scan(mut self, cancel: impl Fn() -> bool + Send + Sync) -> Option<ScannedEvents> {
+        if !self.paths.is_empty() && self.config.volumes.is_none() {
+            self.config.volumes = Some(crate::other_volumes(
+                &self.config.root,
+                &self.config.includes,
+            ));
+        }
+        let mut paths = Vec::with_capacity(self.paths.len());
+        for path in self.paths {
+            paths.push(self.config.scan(path, &cancel)?);
+        }
+        Some(ScannedEvents {
+            paths,
+            max_event_id: self.max_event_id,
+        })
+    }
+}
+
+/// What an `EventScan` found on disk, for `SearchCache::apply_fs_events`.
+pub struct ScannedEvents {
+    paths: Vec<ScannedPath>,
+    max_event_id: Option<u64>,
+}
+
+struct ScanConfig {
+    root: PathBuf,
+    ignores: Vec<PathBuf>,
+    includes: Vec<PathBuf>,
+    exclusions: fswalk::Exclusions,
+    /// Read from the mount table when a scan starts, unless set.
+    volumes: Option<OtherVolumes>,
+}
+
+struct ScannedPath {
+    /// The path an event named.
+    requested: PathBuf,
+    outcome: ScanOutcome,
+}
+
+enum ScanOutcome {
+    Missing,
+    /// The path, as spelled on disk, is ignored, excluded or on another volume.
+    Ignored(PathBuf),
+    /// The walked item, at its path as spelled on disk.
+    Walked {
+        path: PathBuf,
+        respelled: bool,
+        node: Node,
+    },
+}
+
+impl ScanConfig {
+    /// Returns `None` if cancelled.
+    fn scan(&self, requested: PathBuf, cancel: &(impl Fn() -> bool + Sync)) -> Option<ScannedPath> {
+        info!("Scanning path: {requested:?}");
+        if requested.symlink_metadata().err().map(|e| e.kind()) == Some(ErrorKind::NotFound) {
+            return Some(ScannedPath {
+                requested,
+                outcome: ScanOutcome::Missing,
+            });
+        }
+        // Case-insensitive volumes also resolve a name that differs from the stored
+        // one only by case or Unicode normalization, such as the old side of
+        // `mv Foo foo`. Index the stored name, and drop siblings whose spelling no
+        // longer exists.
+        let (path, respelled) = match (
+            requested.parent(),
+            requested.file_name(),
+            on_disk_name(&requested),
+        ) {
+            (Some(parent), Some(name), Some(stored)) if stored != name => {
+                (parent.join(stored), true)
+            }
+            _ => (requested.clone(), false),
+        };
+        let none = OtherVolumes::default();
+        let volumes = self.volumes.as_ref().unwrap_or(&none);
+        // For incremental data, we need metadata
+        let walk_data = WalkData::new(&path, &self.ignores, &self.includes, true, cancel)
+            .with_exclusions(self.exclusions.clone())
+            .with_volumes(volumes);
+        let outcome = if walk_data.ignores(&path)
+            || self
+                .exclusions
+                .is_excluded(&path, path.symlink_metadata().is_ok_and(|m| m.is_dir()))
+        {
+            ScanOutcome::Ignored(path)
+        } else {
+            let node = walk_it_without_root_chain(&walk_data)?;
+            ScanOutcome::Walked {
+                path,
+                respelled,
+                node,
+            }
+        };
+        Some(ScannedPath { requested, outcome })
     }
 }
 
@@ -2979,6 +3127,90 @@ mod tests {
         // Try to scan a path that doesn't exist
         let result = cache.scan_path_recursive(&root.join("existing/nonexistent.txt"));
         assert!(result.is_none(), "should return None for nonexistent path");
+    }
+
+    #[test]
+    fn event_scans_run_apart_from_the_cache_and_apply_later() {
+        let temp_dir = TempDir::new("event_scan_apart").unwrap();
+        let root = temp_dir.path();
+        let mut cache = SearchCache::walk_fs(root);
+        fs::create_dir_all(root.join("new/sub")).unwrap();
+        fs::File::create(root.join("new/sub/a.txt")).unwrap();
+        let id = cache.last_event_id() + 1;
+        let scan = cache
+            .plan_fs_events(vec![FsEvent {
+                path: root.join("new"),
+                id,
+                flag: EventFlag::ItemCreated | EventFlag::ItemIsDir,
+            }])
+            .unwrap();
+        assert_eq!(scan.paths(), [root.join("new")]);
+        let scanned = scan.scan(|| false).unwrap();
+        // Nothing changes, including the event position, until the scan is applied.
+        assert!(cache.node_index_for_path(&root.join("new")).is_none());
+        assert_ne!(cache.last_event_id(), id);
+        assert!(cache.apply_fs_events(scanned));
+        assert!(
+            cache
+                .node_index_for_path(&root.join("new/sub/a.txt"))
+                .is_some()
+        );
+        assert_eq!(cache.last_event_id(), id);
+        // A cancelled scan leaves the batch unapplied.
+        let scan = cache
+            .plan_fs_events(vec![FsEvent {
+                path: root.join("new"),
+                id: id + 1,
+                flag: EventFlag::ItemRemoved | EventFlag::ItemIsDir,
+            }])
+            .unwrap();
+        assert!(scan.scan(|| true).is_none());
+        assert_eq!(cache.last_event_id(), id);
+    }
+
+    #[test]
+    fn other_volumes_are_left_out_of_live_updates_and_old_indexes() {
+        let temp_dir = TempDir::new("other_volumes_live").unwrap();
+        let root = temp_dir.path();
+        for dir in ["usb/sub", "backup/keep", "backup/other"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        // An index saved before scans skipped other volumes.
+        let mut cache = SearchCache::walk_fs(root);
+        let includes = [root.join("backup/keep")];
+        let volumes =
+            fswalk::OtherVolumes::new(root, &includes, [root.join("usb"), root.join("backup")]);
+        assert!(cache.remove_volumes(&volumes));
+        assert!(cache.node_index_for_path(&root.join("usb")).is_none());
+        assert!(!cache.remove_volumes(&volumes), "Nothing is left to remove");
+        // Events on a skipped volume, including its mount, add nothing.
+        fs::File::create(root.join("usb/sub/new.txt")).unwrap();
+        let id = cache.last_event_id() + 1;
+        let events = vec![
+            FsEvent {
+                path: root.join("usb"),
+                id,
+                flag: EventFlag::Mount | EventFlag::ItemIsDir,
+            },
+            FsEvent {
+                path: root.join("usb/sub/new.txt"),
+                id,
+                flag: EventFlag::ItemCreated | EventFlag::ItemIsFile,
+            },
+        ];
+        let scanned = cache
+            .plan_fs_events(events)
+            .unwrap()
+            .with_volumes(volumes)
+            .scan(|| false)
+            .unwrap();
+        assert!(!cache.apply_fs_events(scanned));
+        assert!(cache.node_index_for_path(&root.join("usb")).is_none());
+        assert!(
+            cache
+                .node_index_for_path(&root.join("usb/sub/new.txt"))
+                .is_none()
+        );
     }
 
     #[test]

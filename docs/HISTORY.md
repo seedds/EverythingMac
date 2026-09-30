@@ -264,6 +264,27 @@ completion, passes, and reports F8 timings. Recorded checks: 1,829 Rust tests pa
 (the system-wide cancellation test excluded), clippy passed, and the self, sort,
 selection, feature, live, tab, terminal, and trash checks passed.
 
+## Rescans, folder walks, and other volumes — 0.1.66
+
+A rescan ran on the app's serial engine queue and marked the index as not ready, so
+searches, scrolling to unloaded rows, and file actions waited for the whole rebuild.
+Scans now run on their own queue and the new index replaces the current one on the
+engine queue only when it is finished; a finished scan is discarded if an index was
+opened, the app closed, or the scan was cancelled meanwhile. Folders that FSEvents
+report as new or changed were walked inside `cn_poll` under the engine lock with a
+cancel flag that nothing set. Event handling is now split into planning, a walk that
+needs no cache, and applying: `cn_poll` starts walks on a separate pool, waits up to
+50 ms for small ones, and otherwise returns `walking` and applies the result on a later
+poll, holding back later events until then and re-applying removals the app made
+meanwhile. With the default root `/`, scans also crossed into every mounted volume, and
+mounting a drive walked it inline; the index now covers the startup disk, and other
+volumes are skipped unless an include path selects them. Indexes saved earlier drop
+those entries on the first poll. Recorded checks: 1,837 Rust tests passed (the
+system-wide cancellation test excluded), clippy passed, and the self, sort, selection,
+feature, live, tab, terminal, and trash checks passed. A new rescan check measured
+searches during a rescan of `/`, and a real disk image mounted inside a watched folder
+stayed out of the index.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

@@ -1,4 +1,5 @@
 mod exclusions;
+mod volumes;
 pub use exclusions::Exclusions;
 use rayon::{iter::ParallelBridge, prelude::ParallelIterator};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::UNIX_EPOCH,
 };
+pub use volumes::OtherVolumes;
 
 #[derive(Serialize, Debug)]
 pub struct Node {
@@ -132,6 +134,9 @@ pub struct WalkData<'w, F: Fn() -> bool> {
     pub include_paths: &'w [PathBuf],
     /// If set, metadata will be collected for each file node(folder node will get free metadata).
     need_metadata: bool,
+    volumes: Option<&'w OtherVolumes>,
+    /// `ignore_directories` plus mount points above include paths, if there are any.
+    volume_ignores: Vec<PathBuf>,
 }
 
 impl<F> std::fmt::Debug for WalkData<'_, F>
@@ -166,6 +171,8 @@ impl<'w> WalkData<'w, fn() -> bool> {
             ignore_directories: &[],
             include_paths: &[],
             need_metadata,
+            volumes: None,
+            volume_ignores: Vec::new(),
         }
     }
 }
@@ -187,6 +194,8 @@ impl<'w, F: Fn() -> bool> WalkData<'w, F> {
             ignore_directories,
             include_paths,
             need_metadata,
+            volumes: None,
+            volume_ignores: Vec::new(),
         }
     }
 
@@ -195,8 +204,29 @@ impl<'w, F: Fn() -> bool> WalkData<'w, F> {
         self
     }
 
+    /// Skips other volumes mounted below the root; see `OtherVolumes`.
+    pub fn with_volumes(mut self, volumes: &'w OtherVolumes) -> Self {
+        self.volume_ignores = if volumes.partial().is_empty() {
+            Vec::new()
+        } else {
+            [self.ignore_directories, volumes.partial()].concat()
+        };
+        self.volumes = Some(volumes);
+        self
+    }
+
     fn should_ignore(&self, path: &Path) -> bool {
-        should_ignore_path(path, self.ignore_directories, self.include_paths)
+        let ignores = if self.volume_ignores.is_empty() {
+            self.ignore_directories
+        } else {
+            &self.volume_ignores
+        };
+        should_ignore_path(path, ignores, self.include_paths)
+    }
+
+    /// Whether a walk would leave out `path`, including when it is on a skipped volume.
+    pub fn ignores(&self, path: &Path) -> bool {
+        self.should_ignore(path) || self.volumes.is_some_and(|volumes| volumes.covers(path))
     }
 
     fn is_cancelled(&self) -> bool {
@@ -285,6 +315,9 @@ fn walk<F: Fn() -> bool + Send + Sync>(path: &Path, walk_data: &WalkData<'_, F>)
                                         return None;
                                     }
                                     if data.is_dir() {
+                                        if walk_data.volumes.is_some_and(|v| v.skips(&path)) {
+                                            return None;
+                                        }
                                         walk(&path, walk_data)
                                     } else {
                                         walk_data.num_files.fetch_add(1, Ordering::Relaxed);
@@ -540,6 +573,52 @@ mod tests {
             link.children.is_empty(),
             "symlink directory should not be traversed"
         );
+    }
+
+    #[test]
+    fn other_volumes_are_skipped_except_for_included_folders() {
+        let tmp = TempDir::new("fswalk_volumes").unwrap();
+        let root = tmp.path();
+        for dir in ["usb/sub", "backup/keep", "backup/other", "home"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in [
+            "usb/sub/a.txt",
+            "backup/keep/b.txt",
+            "backup/other/c.txt",
+            "home/d.txt",
+        ] {
+            fs::File::create(root.join(file)).unwrap();
+        }
+        let includes = [root.join("backup/keep")];
+        let volumes = OtherVolumes::new(root, &includes, [root.join("usb"), root.join("backup")]);
+        let walk_data = WalkData::new(root, &[], &includes, false, || false).with_volumes(&volumes);
+        let node = walk_it_without_root_chain(&walk_data).unwrap();
+        let mut found = vec![];
+        fn collect(node: &Node, prefix: &Path, found: &mut Vec<PathBuf>) {
+            for child in &node.children {
+                let path = prefix.join(&*child.name);
+                collect(child, &path, found);
+                found.push(path);
+            }
+        }
+        collect(&node, Path::new(""), &mut found);
+        found.sort();
+        let expected: Vec<PathBuf> = [
+            "backup",
+            "backup/keep",
+            "backup/keep/b.txt",
+            "home",
+            "home/d.txt",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+        assert_eq!(found, expected);
+        assert!(walk_data.ignores(&root.join("usb/sub/a.txt")));
+        assert!(walk_data.ignores(&root.join("backup/other")));
+        assert!(!walk_data.ignores(&root.join("backup/keep/b.txt")));
+        assert!(!walk_data.ignores(&root.join("home/d.txt")));
     }
 
     // ── should_ignore tests (prefix-based matching) ──────────────────────

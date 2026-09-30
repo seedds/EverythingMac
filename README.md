@@ -54,7 +54,8 @@ require approval in Privacy & Security and renewed permissions after an update.
 Launch the installed app and grant **Full Disk Access** in System Settings when
 needed to search protected locations. Normal startup opens the saved index or
 scans the configured root when no index exists. Choose the monitored root and
-configure scope and exclusions in **Settings → Index** (Command-,).
+configure scope and exclusions in **Settings → Index** (Command-,). The index covers
+the startup disk; add other drives to Include paths to search them.
 
 Type a filename or a query such as `report*.txt`. Use the Folder scope field to
 narrow the results and **Aa** for case sensitivity. Press Down to enter results,

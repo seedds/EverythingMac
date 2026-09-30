@@ -48,6 +48,12 @@ struct State {
     selection_positions: Vec<usize>,
     selection_generation: Option<u64>,
     metadata: metadata::Indexing,
+    /// Folders an event batch changed, being walked without the engine lock.
+    walk: Option<live::PendingWalk>,
+    /// Paths `cn_remove_paths` removed during that walk, removed again after it.
+    removed_during_walk: Vec<std::path::PathBuf>,
+    /// Remove items on other volumes on the next poll; see `cn_watch`.
+    prune_volumes: bool,
 }
 impl State {
     /// Sort orders are built on first use, so opening skips columns never sorted.
@@ -73,6 +79,9 @@ impl State {
             selection_positions: vec![],
             selection_generation: None,
             metadata: Default::default(),
+            walk: None,
+            removed_during_walk: vec![],
+            prune_volumes: false,
         }
     }
 }
@@ -316,8 +325,34 @@ pub unsafe extern "C" fn cn_buffer_free(buffer: Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{ffi::CString, fs};
+    use std::{ffi::CString, fs, path::PathBuf, sync::mpsc, time::Duration};
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    type WalkGate = (PathBuf, Box<dyn FnOnce() + Send>);
+    static WALK_GATES: Mutex<Vec<WalkGate>> = Mutex::new(Vec::new());
+
+    /// Holds the next walk of paths below `folder` once it has read them: the
+    /// receiver hears when that happens, and the walk finishes once the sender
+    /// sends or is dropped.
+    fn hold_walk(folder: &Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (scanned, walked) = mpsc::channel();
+        let (release, held) = mpsc::channel::<()>();
+        let gate = Box::new(move || {
+            let _ = scanned.send(());
+            let _ = held.recv();
+        });
+        WALK_GATES.lock().unwrap().push((folder.to_owned(), gate));
+        (walked, release)
+    }
+
+    /// Run by a walk of `paths` after reading them.
+    pub(super) fn walk_gate(paths: &[PathBuf]) -> Option<Box<dyn FnOnce() + Send>> {
+        let mut gates = WALK_GATES.lock().unwrap();
+        let held = gates
+            .iter()
+            .position(|(folder, _)| paths.iter().any(|path| path.starts_with(folder)))?;
+        Some(gates.remove(held).1)
+    }
 
     #[test]
     fn scan_count_is_readable_before_traversal_finishes() {
@@ -639,6 +674,124 @@ mod tests {
             flag,
         }];
         assert!(!state.cache.handle_fs_events(confirmation).unwrap());
+    }
+
+    #[test]
+    fn folder_walks_run_without_the_engine_lock_and_hold_back_later_events() {
+        use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let mut state = State::new(SearchCache::walk_fs(&root), root.clone());
+        let (events, watcher) = EventWatcher::manual();
+        state.watcher = Some(watcher);
+        let id = state.cache.last_event_id();
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        let folder = root.join("folder");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("a.txt"), "a").unwrap();
+        fs::write(folder.join("b.txt"), "b").unwrap();
+        let later = root.join("later.txt");
+        fs::write(&later, "l").unwrap();
+        let (walked, release) = hold_walk(&folder);
+        let dir = EventFlag::ItemCreated | EventFlag::ItemIsDir;
+        let file = EventFlag::ItemCreated | EventFlag::ItemIsFile;
+        events
+            .send(vec![FsEvent {
+                path: folder.clone(),
+                id: id + 1,
+                flag: dir,
+            }])
+            .unwrap();
+        events
+            .send(vec![FsEvent {
+                path: later.clone(),
+                id: id + 2,
+                flag: file,
+            }])
+            .unwrap();
+        unsafe {
+            let polled = reply(live::cn_poll(&mut engine, 0, false));
+            assert_eq!(polled["walking"], true);
+            assert_eq!(polled["changed"], false);
+            // The next batch may depend on the folder, so it waits for the walk.
+            assert_eq!(polled["processed_events"], 1);
+        }
+        walked.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            engine.0.try_lock().is_ok(),
+            "Searches must not wait for folder walks"
+        );
+        // The app trashes a file that the walk has already read.
+        let trashed = folder.join("a.txt");
+        fs::remove_file(&trashed).unwrap();
+        let paths = CString::new(json!([trashed]).to_string()).unwrap();
+        unsafe {
+            assert_eq!(
+                reply(live::cn_remove_paths(&mut engine, paths.as_ptr()))["changed"],
+                false
+            );
+            assert_eq!(reply(live::cn_poll(&mut engine, 0, false))["walking"], true);
+        }
+        drop(release);
+        let started = Instant::now();
+        let mut changed = false;
+        loop {
+            let polled = unsafe { reply(live::cn_poll(&mut engine, 0, false)) };
+            changed |= polled["changed"] == true;
+            if polled["walking"] == false && polled["processed_events"] == 2 {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(changed);
+        let mut state = engine.0.lock().unwrap();
+        assert!(
+            state
+                .cache
+                .node_index_for_path(&folder.join("b.txt"))
+                .is_some()
+        );
+        assert!(
+            state.cache.node_index_for_path(&trashed).is_none(),
+            "Removals made during the walk are applied again after it"
+        );
+        assert!(state.cache.node_index_for_path(&later).is_some());
+        assert_eq!(state.cache.last_event_id(), id + 2);
+        assert!(state.events_dirty && state.walk.is_none());
+    }
+
+    #[test]
+    fn closing_the_engine_does_not_wait_for_a_folder_walk() {
+        use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let mut state = State::new(SearchCache::walk_fs(&root), root.clone());
+        let (events, watcher) = EventWatcher::manual();
+        state.watcher = Some(watcher);
+        let id = state.cache.last_event_id() + 1;
+        let engine = Box::into_raw(Box::new(Engine(Arc::new(Mutex::new(state)))));
+        let folder = root.join("folder");
+        fs::create_dir(&folder).unwrap();
+        let (walked, release) = hold_walk(&folder);
+        let flag = EventFlag::ItemCreated | EventFlag::ItemIsDir;
+        events
+            .send(vec![FsEvent {
+                path: folder,
+                id,
+                flag,
+            }])
+            .unwrap();
+        unsafe {
+            assert_eq!(reply(live::cn_poll(engine, 0, false))["walking"], true);
+            walked.recv_timeout(Duration::from_secs(5)).unwrap();
+            let started = Instant::now();
+            cn_engine_close(engine);
+            assert!(started.elapsed() < Duration::from_secs(1));
+        }
+        drop(release);
     }
 
     #[test]

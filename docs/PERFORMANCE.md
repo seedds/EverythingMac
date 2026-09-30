@@ -4,8 +4,8 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.65 studies cover live updates,
-parallel name matching, large selections, saving and startup memory, and F8; the other matching study covers the
+These are workstation measurements. The 0.1.60–0.1.66 studies cover live updates,
+parallel name matching, large selections, saving and startup memory, F8, and rescans and folder walks; the other matching study covers the
 0.1.55 changes, and the versioned sorting studies cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
@@ -13,6 +13,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Rescans, folder walks, and other volumes, 0.1.66](#rescans-folder-walks-and-other-volumes-0166) | During a 14 s rescan of `/`, 188 searches were drawn in a median 60 ms (55 ms without a rescan) and far pages loaded in 4.5 ms, where 0.1.65 served neither until the rescan finished. Moving a 200,000-file folder into the index held the engine for at most 132–136 ms instead of 666–799 ms. Skipping other volumes removed 834,966 of 5,034,016 entries. |
 | [Moving files to the Trash, 0.1.65](#moving-files-to-the-trash-0165) | After F8, a trashed file left the results after 14–20 ms instead of about 1.5 s, and 130 files after 70–85 ms instead of 0.5–1 s. |
 | [Saving and startup memory, 0.1.64](#saving-and-startup-memory-0164) | Opening 4,573,469 entries fell from 2.67 s and 818 MiB to 2.15 s and 538 MiB; each index save holds the engine for about 340 ms instead of 415–440 ms and needs 188 MiB less extra memory, and idle saves happen at most every 10 minutes. |
 | [Large selections, 0.1.62](#large-selections-0162) | Selecting all 4,573,469 results fell from about 2.8 s and 239 MiB to 37 ms and 70 MiB, and restoring that selection after a search from about 4 s to about 70 ms. |
@@ -26,6 +27,55 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Rescans, folder walks, and other volumes (0.1.66)
+
+Measured on 2026-09-30 on the same Apple M4 Pro, with a copy of a live index of
+5,034,016 entries for the monitored root `/`.
+
+**Other volumes.** The saved index included 834,966 entries from volumes other than
+the startup disk: 805,362 from an Xcode Simulator runtime volume, 28,889 from Preboot,
+and a few hundred from `/dev`, Recovery, and other system volumes. Scans and live
+updates now skip them. Removing them from the saved index took 76 ms once; later checks
+of the mount table take about 27 µs. In the rescan check below, the first poll left
+4,199,354 entries.
+
+**Searching during a rescan.** `./run.sh --rescan-check` loads the copy, rescans it, and
+keeps searching while the rescan runs. Each search is timed from submission until its
+rows are drawn, so the times include the table redraw.
+
+| Measurement | Result |
+| --- | ---: |
+| Full rescan of `/` | 12.8–14.4 s, 4,293,816 entries |
+| Searches before the rescan (25) | median 54.5 ms, p90 57.0 ms, max 60.0 ms |
+| Searches during the rescan (188) | median 59.9 ms, p90 63.9 ms, max 74.2 ms |
+| Page loads 20,000 rows down during the rescan (187) | median 4.5 ms, max 10.3 ms |
+
+In 0.1.65, a rescan marked the index as not ready, so typed searches were not run, and
+row loads waited on the engine queue until the rescan finished. The rescanned index
+held 94,462 more entries than the pruned copy because files were created after the copy
+was saved: about 78,000 temporary files under `/private/var/folders` and 13,000 build
+outputs.
+
+**Moving a large folder into place.** `cargo run --release --example live_walk -- 200000`
+moves a folder of 200,000 empty files into a watched temporary index and polls every
+100 ms with real FSEvents. Each build ran three times.
+
+| Measurement | 0.1.65 | 0.1.66 |
+| --- | ---: | ---: |
+| Longest `cn_poll` (engine queue blocked) | 666–799 ms | 132–136 ms |
+| Folder fully indexed after the move | 774–910 ms | 934–1,167 ms |
+
+In 0.1.65 the poll read all 200,000 files while holding the engine lock. Version 0.1.66
+reads them on a separate pool and applies the result on a later poll; inserting the
+entries still holds the engine for about 130 ms. The folder appears slightly later
+because it is applied on the next poll, which the app runs every 0.5 s. With 20,000
+files, the walk finishes within the 50 ms that a poll waits, and both versions took
+41–46 ms.
+
+Mounting a 500-file disk image inside a watched folder added nothing to the index,
+and a full scan skipped it; with the mount point in Include paths, the scan indexed all
+500 files.
 
 ## Moving files to the Trash (0.1.65)
 
