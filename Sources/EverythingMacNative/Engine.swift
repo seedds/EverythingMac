@@ -291,6 +291,10 @@ struct Sample: Codable {
   /// processed_events when `events` was last fetched; nil after an index swap.
   @ObservationIgnored var eventsFetchedAt: UInt64?
   @ObservationIgnored var saving = false
+  /// Set when a scan fails or is cancelled, so an index that needs a rescan is not
+  /// rescanned again on every poll; the Rescan command still runs, and a
+  /// successful scan clears it.
+  @ObservationIgnored var automaticRescanPaused = false
   @ObservationIgnored var refreshPending = false
   /// Sizes or dates changed since the displayed rows were loaded.
   @ObservationIgnored var visibleRowsStale = false
@@ -432,6 +436,12 @@ struct Sample: Codable {
           self.submit()
           self.error =
             "Cannot open \((path as NSString).lastPathComponent): \(error.localizedDescription). The current index is still loaded."
+          return
+        }
+        if !self.snapshotOnly {
+          // The app's own index only mirrors the disk, so a damaged one is rebuilt.
+          self.scan()
+          self.error = "The saved index could not be read (\(error.localizedDescription)); rebuilding it."
           return
         }
         self.error =

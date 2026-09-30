@@ -1,6 +1,14 @@
 use super::{Entry, Slab};
 use std::{io, num::NonZeroUsize};
 
+/// The largest key accepted: callers keep slot indices in `u32` handles.
+const MAX_KEY: usize = u32::MAX as usize - 1;
+
+/// Vacant slots a key may leave below it, beyond twice the entries read so far.
+/// A saved slab has vacant slots only where values were removed, so real data stays
+/// far below this; a damaged key fails instead of mapping and filling a huge file.
+const MAX_GAP: usize = 1 << 24;
+
 /// A helper struct for reconstructing a `Slab` from arbitrary key/value pairs during deserialization.
 ///
 /// The `Builder` is used to incrementally rebuild a slab by inserting key/value pairs,
@@ -36,6 +44,16 @@ impl<T> Builder<T> {
     }
 
     pub(crate) fn pair(&mut self, key: usize, value: T) -> io::Result<()> {
+        let limit = self.slab.len().saturating_mul(2).saturating_add(MAX_GAP);
+        if key > limit.min(MAX_KEY) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "slot {key} is out of range after {} entries",
+                    self.slab.len()
+                ),
+            ));
+        }
         self.slab.builder_reserve_slot(key)?;
         let entry = self.slab.builder_entry_mut(key);
         match entry {

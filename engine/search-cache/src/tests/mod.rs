@@ -12,6 +12,7 @@ mod prelude {
 mod support;
 
 mod cache_flow;
+mod damaged_index;
 mod date_edges;
 mod date_keywords;
 mod date_volume;

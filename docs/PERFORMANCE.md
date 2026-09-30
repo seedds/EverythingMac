@@ -4,9 +4,9 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.70 studies cover live updates,
+These are workstation measurements. The 0.1.60–0.1.71 studies cover live updates,
 parallel name matching, large selections, saving and startup memory, F8, rescans and
-folder walks, idle work, and filters; the other matching study covers the
+folder walks, idle work, filters, and index checks; the other matching study covers the
 0.1.55 changes, and the versioned sorting studies cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
@@ -14,6 +14,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Checking saved indexes, 0.1.71](#checking-saved-indexes-0171) | Checking a saved index's checksum and structure adds 103–113 ms (4.4–4.8%) to opening 4,573,469 entries. A damaged copy fails in 0–2.1 s, where 0.1.70 could use more than 11 GB of memory and 100 TB of address space on one bad number. |
 | [Filters and combined queries, 0.1.70](#filters-and-combined-queries-0170) | On 4,573,469 entries, `ext:`, `type:`, `audio:` and `doc:` fell from 141–197 ms to 2–3.2 ms, `size:`, `dm:`, `dc:`, `file:` and `folder:` from 39–58 ms to 4.6–8.9 ms, `!a` and `a\|b` from 46–51 ms to about 10 ms, and a folder search whose matching folders nest from 550–795 ms to 35–37 ms, with identical results. Filtering sizes and dates the indexer had not read yet took 1.4–1.5 s instead of 2.5–2.6 s for 420,683 entries. |
 | [Idle work and redraws, 0.1.67](#idle-work-and-redraws-0167) | A hidden window ran no searches in 30 s of file changes instead of 8–10, using 328–386 ms of CPU instead of 809–945 ms, and its results were current 92–105 ms after it was shown. Each Down Arrow in the results used 2.8–2.9 ms of main-thread time instead of 8.3–8.5 ms. |
 | [Rescans, folder walks, and other volumes, 0.1.66](#rescans-folder-walks-and-other-volumes-0166) | During a 14 s rescan of `/`, 188 searches were drawn in a median 60 ms (55 ms without a rescan) and far pages loaded in 4.5 ms, where 0.1.65 served neither until the rescan finished. Moving a 200,000-file folder into the index held the engine for at most 132–136 ms instead of 666–799 ms. Skipping other volumes removed 834,966 of 5,034,016 entries. |
@@ -30,6 +31,31 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Checking saved indexes (0.1.71)
+
+Measured on 2026-10-01 on the same Apple M4 Pro with the `query_timing` example on the
+read-only copy of the 4,573,469-entry snapshot, opening it three times with each build,
+alternating.
+
+| Measurement | 0.1.70 | 0.1.71 |
+| --- | ---: | ---: |
+| Opening the snapshot | 2,313–2,331 ms | 2,426–2,441 ms |
+| Copy cut short by 1 KB | — | rejected after 2.1 s |
+| Copy with one byte changed | — | rejected after 1.2 s |
+| Crafted slot number of 2^40 | still loading after 8 s at 11.5 GB resident | rejected at once |
+
+Opening now reads the file to its end, so zstd verifies the frame checksum, and then
+walks the items once from the root and the name index once. A copy cut short is
+rejected only at its end, after about one normal load. The crafted file's slot number
+made 0.1.70 extend and write a temporary file slot by slot; slot numbers are now bounded
+by the entries read so far. The temporary file is also unlinked when created, so a
+crash or forced quit no longer leaves it behind.
+
+**Full disk.** A 256 MB slab grown in a 64 MB disk image used as the temporary folder
+kept working: growth only extends a sparse file, and pages that could not be written
+stayed in memory. No preallocation was added; a failure to grow the slab is handled
+like any other failed update.
 
 ## Filters and combined queries (0.1.70)
 

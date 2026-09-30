@@ -116,7 +116,8 @@ Settings opens in its own window, so you can continue using search. It has three
 - **Privacy**: a link to Full Disk Access in System Settings.
 
 Normal launch loads EverythingMac's saved index when one exists. Otherwise it
-scans the configured monitor root. New installations start with empty include
+scans the configured monitor root. A saved index that cannot be read, for example
+because it was damaged or cut short, is rebuilt the same way. New installations start with empty include
 and ignore paths and an empty terminal application setting (F9 uses macOS Terminal).
 Preferences and indexes
 from older apps are not imported. If a loaded index's root/include/ignore/exclusion-pattern
@@ -154,6 +155,9 @@ the scan finishes. **File → Open Index…** opens another
 saved index read-only; **Index → Enable Live Updates** makes it live. A live index is
 saved before switching, and if the chosen file cannot be opened the current index stays loaded. Pausing live
 updates lasts until the next launch. Include paths override ignored ancestors.
+If the index cannot be updated, EverythingMac rescans automatically. When such a
+rescan fails or is cancelled, the status bar shows **Rescan needed** until you choose
+**Rescan**.
 
 The app processes filesystem events and writes checkpoints while idle, at most every
 10 minutes (within about a minute of a new scan), and before quitting. Folders that

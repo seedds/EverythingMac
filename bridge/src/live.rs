@@ -37,8 +37,8 @@ pub(super) fn cancellable_scan<T: Send + 'static>(
     std::thread::Builder::new()
         .name("everything-mac-native-scan".into())
         .spawn(move || {
-            let result =
-                catch_unwind(AssertUnwindSafe(work)).map_err(|_| "Index scan panicked".to_string());
+            let result = catch_unwind(AssertUnwindSafe(work))
+                .map_err(|payload| format!("Index scan failed: {}", panic_message(&*payload)));
             drop(slot);
             let _ = sender.send(result);
         })
@@ -314,69 +314,30 @@ pub unsafe extern "C" fn cn_poll(
 ) -> Buffer {
     guarded(|| {
         let engine = unsafe { engine.as_ref() }.ok_or("No index loaded")?;
-        let mut state = engine
-            .0
-            .lock()
-            .map_err(|_| "Engine faulted; reopen index")?;
+        let mut state = match engine.0.lock() {
+            Ok(state) => state,
+            Err(poisoned) => {
+                // A panic while the engine was locked, such as in a search, may have
+                // left the index inconsistent. Ask for a rescan, which builds a new
+                // engine, instead of failing every call until the app is relaunched.
+                engine.0.clear_poison();
+                let mut state = poisoned.into_inner();
+                stop_for_rescan(&mut state);
+                state
+            }
+        };
         // Metadata backfill never frees or reuses slab IDs, so the current results
         // and row generation stay valid; only structural changes invalidate them.
         let mut metadata_changed = std::mem::take(&mut state.metadata.changed);
         let mut changed = false;
         let mut watcher_stopped = false;
-        if std::mem::take(&mut state.prune_volumes) {
-            changed |= state.cache.remove_other_volumes();
-        }
-        // Walks started by earlier polls are not waited for.
-        let mut walking = !finish_walk(&mut state, Instant::now(), &mut changed);
-        let deadline = Instant::now() + WALK_WAIT;
-        for _ in 0..16 {
-            if walking || state.needs_rescan {
-                break;
-            }
-            let events = match state.watcher.as_ref().map(|w| w.try_recv()) {
-                Some(Ok(events)) => events,
-                Some(Err(TryRecvError::Disconnected)) => {
-                    // Earlier batches may already have changed the index; still
-                    // invalidate old row IDs below before reporting the failure.
-                    state.watcher = None;
-                    watcher_stopped = true;
-                    break;
-                }
-                _ => break,
-            };
-            let events: Vec<_> = events.into_iter().filter_map(|mut event| {
-                if let Some(parent) = state.checkpoint.as_ref().and_then(|p| p.parent())
-                    && event.path.starts_with(parent) { return None; }
-                if state.event_root != state.root
-                    && let Ok(suffix) = event.path.strip_prefix(&state.event_root) {
-                    event.path = state.root.join(suffix);
-                }
-                state.processed_events += 1;
-                // FSEvents paths are raw bytes; serializing a non-UTF-8 Path would panic.
-                state.events.push_front(json!({"id":event.id, "path":event.path.to_string_lossy(),
-                    "flags":format!("{:?}",event.flag),
-                    "time":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()}));
-                state.events.truncate(500);
-                Some(event)
-            }).collect();
-            match state.cache.plan_fs_events(events) {
-                // Without paths to read, applying only records the event position.
-                Ok(scan) if scan.is_empty() => {
-                    if let Some(scanned) = scan.scan(|| false) {
-                        apply_scanned(&mut state, scanned, &mut changed);
-                    }
-                }
-                Ok(scan) => {
-                    state.walk = Some(start_walk(scan));
-                    walking = !finish_walk(&mut state, deadline, &mut changed);
-                }
-                Err(HandleFSEError::Rescan) => {
-                    state.watcher = None;
-                    state.needs_rescan = true;
-                    changed = true;
-                }
-            }
-        }
+        let walking = contain(&mut state, |state| {
+            apply_events(state, &mut changed, &mut watcher_stopped)
+        })
+        .unwrap_or_else(|| {
+            changed = true;
+            false
+        });
         // Attribute-only events update sizes and dates in place, keeping row IDs.
         if state.cache.take_metadata_changed() {
             metadata_changed = true;
@@ -399,6 +360,86 @@ pub unsafe extern "C" fn cn_poll(
     })
 }
 
+/// Applies queued filesystem events to the index. Returns whether a folder walk is
+/// still running.
+fn apply_events(state: &mut State, changed: &mut bool, watcher_stopped: &mut bool) -> bool {
+    if std::mem::take(&mut state.prune_volumes) {
+        *changed |= state.cache.remove_other_volumes();
+    }
+    // Walks started by earlier polls are not waited for.
+    let mut walking = !finish_walk(state, Instant::now(), changed);
+    let deadline = Instant::now() + WALK_WAIT;
+    for _ in 0..16 {
+        if walking || state.needs_rescan {
+            break;
+        }
+        let events = match state.watcher.as_ref().map(|w| w.try_recv()) {
+            Some(Ok(events)) => events,
+            Some(Err(TryRecvError::Disconnected)) => {
+                // Earlier batches may already have changed the index; still
+                // invalidate old row IDs below before reporting the failure.
+                state.watcher = None;
+                *watcher_stopped = true;
+                break;
+            }
+            _ => break,
+        };
+        let events: Vec<_> = events.into_iter().filter_map(|mut event| {
+            if let Some(parent) = state.checkpoint.as_ref().and_then(|p| p.parent())
+                && event.path.starts_with(parent) { return None; }
+            if state.event_root != state.root
+                && let Ok(suffix) = event.path.strip_prefix(&state.event_root) {
+                event.path = state.root.join(suffix);
+            }
+            state.processed_events += 1;
+            // FSEvents paths are raw bytes; serializing a non-UTF-8 Path would panic.
+            state.events.push_front(json!({"id":event.id, "path":event.path.to_string_lossy(),
+                "flags":format!("{:?}",event.flag),
+                "time":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()}));
+            state.events.truncate(500);
+            Some(event)
+        }).collect();
+        match state.cache.plan_fs_events(events) {
+            // Without paths to read, applying only records the event position.
+            Ok(scan) if scan.is_empty() => {
+                if let Some(scanned) = scan.scan(|| false) {
+                    apply_scanned(state, scanned, changed);
+                }
+            }
+            Ok(scan) => {
+                state.walk = Some(start_walk(scan));
+                walking = !finish_walk(state, deadline, changed);
+            }
+            Err(HandleFSEError::Rescan) => {
+                state.watcher = None;
+                state.needs_rescan = true;
+                *changed = true;
+            }
+        }
+    }
+    walking
+}
+
+/// Runs a change to the index. A panic, such as a failure to grow the index's
+/// memory, becomes a request for a full rescan instead of unwinding through the
+/// engine lock, which would make every later call fail. Returns `None` after one.
+pub(super) fn contain<T>(state: &mut State, change: impl FnOnce(&mut State) -> T) -> Option<T> {
+    match catch_unwind(AssertUnwindSafe(|| change(&mut *state))) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            stop_for_rescan(state);
+            None
+        }
+    }
+}
+
+/// Stops applying changes to an index that needs a full rescan.
+fn stop_for_rescan(state: &mut State) {
+    state.watcher = None;
+    state.walk = None;
+    state.needs_rescan = true;
+}
+
 /// # Safety
 /// Valid serialized handle and a JSON array of absolute paths. Applies removals the
 /// app made itself, such as moving files to the Trash, without waiting for FSEvents,
@@ -417,7 +458,7 @@ pub unsafe extern "C" fn cn_remove_paths(engine: *mut Engine, paths: *const c_ch
         if state.walk.is_some() {
             state.removed_during_walk.extend(paths.iter().cloned());
         }
-        let changed = remove_paths(&mut state, paths);
+        let changed = contain(&mut state, |state| remove_paths(state, paths)).unwrap_or(true);
         if changed {
             state.results.clear();
             state.generation = 0;

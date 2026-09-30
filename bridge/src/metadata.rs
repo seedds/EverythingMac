@@ -4,8 +4,9 @@ use super::State;
 use search_cache::{SlabIndex, SlabNodeMetadataCompact};
 use std::{
     collections::VecDeque,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
-    sync::{Arc, LazyLock, Mutex, Weak},
+    sync::{Arc, LazyLock, Mutex, PoisonError, Weak},
 };
 
 #[derive(Default)]
@@ -45,15 +46,24 @@ pub(super) fn start(engine: &Arc<Mutex<State>>) {
     state.metadata.workers = 2;
     drop(state);
     for _ in 0..2 {
-        let worker = Worker(Arc::downgrade(engine));
-        POOL.spawn(move || {
-            worker.run(|path| {
-                std::fs::symlink_metadata(path)
-                    .map(|m| SlabNodeMetadataCompact::some(m.into()))
-                    .unwrap_or_else(|_| SlabNodeMetadataCompact::unaccessible())
-            })
+        spawn_worker(engine, |path| {
+            std::fs::symlink_metadata(path)
+                .map(|m| SlabNodeMetadataCompact::some(m.into()))
+                .unwrap_or_else(|_| SlabNodeMetadataCompact::unaccessible())
         });
     }
+}
+
+/// Runs a worker on the indexing pool. A panic stops only that worker: the pool
+/// would otherwise abort the app.
+fn spawn_worker(
+    engine: &Arc<Mutex<State>>,
+    read: impl Fn(&Path) -> SlabNodeMetadataCompact + Send + 'static,
+) {
+    let worker = Worker(Arc::downgrade(engine));
+    POOL.spawn(move || {
+        let _ = catch_unwind(AssertUnwindSafe(|| worker.run(read)));
+    });
 }
 
 struct Worker(Weak<Mutex<State>>);
@@ -61,15 +71,9 @@ struct Worker(Weak<Mutex<State>>);
 impl Worker {
     fn run(self, read: impl Fn(&Path) -> SlabNodeMetadataCompact) {
         loop {
-            let jobs = {
-                let Some(engine) = self.0.upgrade() else {
-                    return;
-                };
-                let Ok(mut state) = engine.lock() else {
-                    return;
-                };
+            let Some(Some(jobs)) = self.locked(|state| {
                 if state.metadata.pending.is_empty() {
-                    return;
+                    return None;
                 }
                 let mut jobs = Vec::new();
                 for _ in 0..64 {
@@ -80,7 +84,9 @@ impl Worker {
                         jobs.push((id, path));
                     }
                 }
-                jobs
+                Some(jobs)
+            }) else {
+                return;
             };
             for (id, path) in jobs {
                 if self.0.strong_count() == 0 {
@@ -88,27 +94,41 @@ impl Worker {
                 }
                 // No engine ownership or mutex is retained across this syscall.
                 let metadata = read(&path);
-                let Some(engine) = self.0.upgrade() else {
+                let stored = self.locked(|state| {
+                    if state.cache.store_indexed_metadata(id, &path, metadata) {
+                        state.dirty = true;
+                        state.metadata.changed = true;
+                    }
+                });
+                if stored.is_none() {
                     return;
-                };
-                let Ok(mut state) = engine.lock() else {
-                    return;
-                };
-                if state.cache.store_indexed_metadata(id, &path, metadata) {
-                    state.dirty = true;
-                    state.metadata.changed = true;
                 }
             }
             std::thread::yield_now();
+        }
+    }
+
+    /// Runs `f` with the engine locked, or returns `None` once the engine is closed
+    /// or faulted. A panic in `f` ends indexing without poisoning the engine.
+    fn locked<T>(&self, f: impl FnOnce(&mut State) -> T) -> Option<T> {
+        let engine = self.0.upgrade()?;
+        let mut state = engine.lock().ok()?;
+        match catch_unwind(AssertUnwindSafe(|| f(&mut state))) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                state.metadata.pending.clear();
+                None
+            }
         }
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        if let Some(engine) = self.0.upgrade()
-            && let Ok(mut state) = engine.lock()
-        {
+        // Count the worker as finished even if a panic left the engine poisoned,
+        // so the app does not report indexing forever.
+        if let Some(engine) = self.0.upgrade() {
+            let mut state = engine.lock().unwrap_or_else(PoisonError::into_inner);
             state.metadata.workers -= 1;
             if state.metadata.workers == 0 {
                 state.metadata.pending = VecDeque::new();
@@ -156,5 +176,58 @@ mod tests {
         );
         release.send(()).unwrap();
         task.join().unwrap();
+    }
+
+    fn pending_engine() -> (tempfile::TempDir, Arc<Mutex<State>>) {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("file.txt"), "contents").unwrap();
+        let cache = SearchCache::walk_fs(temp.path());
+        let mut state = State::new(cache, temp.path().into());
+        state.metadata.pending = state.cache.pending_metadata_ids().into();
+        state.metadata.workers = 1;
+        (temp, Arc::new(Mutex::new(state)))
+    }
+
+    #[test]
+    fn panicking_worker_stops_indexing_without_aborting_or_poisoning() {
+        let (_temp, engine) = pending_engine();
+        spawn_worker(&engine, |_| panic!("metadata read failed"));
+        let started = std::time::Instant::now();
+        while engine.lock().unwrap().metadata.active() {
+            assert!(started.elapsed() < Duration::from_secs(2));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let mut state = engine.lock().unwrap();
+        state.metadata.pending = state.cache.pending_metadata_ids().into();
+        assert!(!state.metadata.pending.is_empty());
+        state.metadata.workers = 1;
+        drop(state);
+        let worker = Worker(Arc::downgrade(&engine));
+        assert!(
+            worker
+                .locked(|_| -> () { panic!("storing metadata failed") })
+                .is_none()
+        );
+        assert!(!engine.is_poisoned());
+        assert!(engine.lock().unwrap().metadata.pending.is_empty());
+        drop(worker);
+        assert!(!engine.lock().unwrap().metadata.active());
+    }
+
+    #[test]
+    fn worker_is_counted_as_finished_after_the_engine_faulted() {
+        let (_temp, engine) = pending_engine();
+        let worker = Worker(Arc::downgrade(&engine));
+        let shared = engine.clone();
+        let _ = std::thread::spawn(move || {
+            let _state = shared.lock().unwrap();
+            panic!("fault the engine");
+        })
+        .join();
+        assert!(engine.is_poisoned());
+        drop(worker);
+        let state = engine.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(!state.metadata.active());
     }
 }

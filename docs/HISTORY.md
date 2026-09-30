@@ -370,6 +370,51 @@ uses a longer folder name. Recorded checks: 1,650 Rust tests passed (the system-
 cancellation test excluded), clippy passed, and the self, sort, selection, feature,
 live, tab, terminal, and trash checks passed.
 
+## Robustness — 0.1.71
+
+**Damaged indexes.** Opening a damaged saved index could fail late or never finish:
+- The slab's stated length and slot numbers sized its temporary file directly, so one
+  bad number could reserve terabytes and fill memory.
+- The zstd checksum was never verified, because decoding stopped before the frame's
+  end.
+- Missing items, inconsistent parent links, cycles, and a name index out of step with
+  the items panicked, overflowed the stack, or looped once searched or updated.
+
+Now:
+- Slot numbers must fit `u32` and stay within twice the entries read plus 16 million,
+  and the preallocated length is capped.
+- Opening reads to the frame's end so the checksum is verified.
+- An O(n) check walks the tree from the root and the name index, and rejects any of
+  these.
+
+A randomized test changes bytes of a small decoded index: without the check it panicked
+within 0.02 s; with it, 20,000 cases either failed to load or loaded into a cache that
+could be searched, walked, and updated. The app rebuilds its own index when it cannot
+be read, where it previously showed an error and started no scan; a read-only snapshot
+the user opens still only reports the error.
+
+**Panics while updating.** A panic while events were applied under the engine lock,
+such as a failure to grow the slab, poisoned the engine, so every later call failed until
+relaunch. Updates now run inside `catch_unwind` and request a rescan instead. A poll of an
+engine poisoned by any other panic clears the poison and requests a rescan, and an index
+waiting for one is never saved.
+
+**Metadata workers.** A panic in a metadata worker aborted the app, because the worker
+pool had no panic handler, and a poisoned lock left "Indexing file sizes and dates…"
+showing forever. Workers now contain panics and always count themselves finished.
+
+**Rescans.** After a failed or cancelled scan, the app no longer starts a rescan on every
+poll; the status bar shows "Rescan needed" until the user rescans. Panic reports now
+include the panic's message.
+
+**Temporary files.** The slab's temporary file is unlinked when created, so a crash or
+forced quit no longer leaves hundreds of megabytes in the temporary folder. A 256 MB slab
+in a 64 MB disk image kept working, so a full disk needed no other change.
+
+Recorded checks: 1,658 Rust tests passed (the system-wide cancellation test excluded),
+clippy passed, and the self, sort, selection, feature, live (now also rebuilding a
+damaged index), tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

@@ -1,10 +1,10 @@
-use crate::{SlabIndex, SlabNode, ThinSlab, name_index::SortedSlabIndices};
-use anyhow::{Context, Result};
+use crate::{SlabIndex, SlabNode, ThinSlab, name_index::SortedSlabIndices, node_set::NodeSet};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, File},
-    io::{BufReader, BufWriter, Write},
+    io::{self, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     thread::available_parallelism,
     time::Instant,
@@ -70,7 +70,10 @@ fn decode_storage<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let input = File::open(path).context("Failed to open cache file")?;
     let input = zstd::Decoder::new(input).context("Failed to create cache decoder")?;
     let mut input = BufReader::new(input);
-    Ok(postcard::from_io((&mut input, &mut bytes))?.0)
+    let storage = postcard::from_io((&mut input, &mut bytes))?.0;
+    // zstd checks the frame's checksum only at its end, after the last value.
+    io::copy(&mut input, &mut io::sink()).context("The index file is damaged or incomplete")?;
+    Ok(storage)
 }
 
 pub fn read_cache_from_file(path: &Path) -> Result<PersistentStorage> {
@@ -103,7 +106,79 @@ pub fn read_cache_with_format(path: &Path) -> Result<(PersistentStorage, bool)> 
     };
     fswalk::Exclusions::compile(&storage.path, &storage.exclusion_patterns)
         .map_err(anyhow::Error::msg)?;
+    storage
+        .check_structure()
+        .context("The index file is damaged")?;
     Ok((storage, legacy))
+}
+
+impl PersistentStorage {
+    /// Checks that the items form one tree under the root and that the name index
+    /// lists each item once under its own name. A damaged index is then rejected
+    /// here, instead of panicking or looping when it is searched or updated.
+    fn check_structure(&self) -> Result<()> {
+        let slab = &self.slab;
+        let root = slab.get(self.slab_root).context("the root is missing")?;
+        ensure!(root.parent().is_none(), "the root has a parent");
+        let mut listed = NodeSet::default();
+        listed.insert(self.slab_root);
+        let mut reached = 1;
+        let mut stack = vec![self.slab_root];
+        while let Some(index) = stack.pop() {
+            let node = &slab[index];
+            ensure!(
+                node.metadata.is_valid(),
+                "item {} has invalid metadata",
+                index.get()
+            );
+            for &child in &node.children {
+                let child_node = slab.get(child).with_context(|| {
+                    format!("item {} lists missing item {}", index.get(), child.get())
+                })?;
+                ensure!(
+                    child_node.parent() == Some(index),
+                    "item {} is listed by item {} but has another parent",
+                    child.get(),
+                    index.get()
+                );
+                ensure!(listed.insert(child), "item {} is listed twice", child.get());
+                reached += 1;
+                stack.push(child);
+            }
+        }
+        ensure!(
+            reached == slab.len(),
+            "{} of {} items are not under the root",
+            slab.len() - reached,
+            slab.len()
+        );
+        let mut indexed = NodeSet::default();
+        let mut postings = 0;
+        for (name, indices) in &self.name_index {
+            for &index in indices.iter() {
+                let node = slab.get(index).with_context(|| {
+                    format!("the name index lists missing item {}", index.get())
+                })?;
+                ensure!(
+                    node.name() == &**name,
+                    "item {} is indexed under another name",
+                    index.get()
+                );
+                ensure!(
+                    indexed.insert(index),
+                    "item {} is indexed twice",
+                    index.get()
+                );
+                postings += 1;
+            }
+        }
+        ensure!(
+            postings == slab.len(),
+            "the name index lists {postings} of {} items",
+            slab.len()
+        );
+        Ok(())
+    }
 }
 
 pub fn write_cache_to_file(path: &Path, storage: &impl Serialize) -> Result<()> {

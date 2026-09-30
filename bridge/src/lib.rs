@@ -107,10 +107,21 @@ fn guarded(f: impl FnOnce() -> Result<Value, String>) -> Buffer {
     buffer(match catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(value)) => value,
         Ok(Err(error)) => json!({"status":"error", "error":error}),
-        Err(_) => {
-            json!({"status":"error", "error":"Rust panicked; reopen the index to reset the engine."})
-        }
+        Err(payload) => json!({"status":"error", "error":format!(
+            "Rust panicked ({}); reopen the index to reset the engine.",
+            panic_message(&*payload)
+        )}),
     })
+}
+
+/// The message a panic was raised with, for reports that would otherwise only
+/// say that something panicked.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message")
 }
 
 unsafe fn text(pointer: *const c_char) -> Result<String, String> {
@@ -520,6 +531,60 @@ mod tests {
                 assert_eq!(state.dirty, loads, "search {generation}");
                 state.dirty = false;
             }
+            cn_engine_close(engine);
+        }
+    }
+
+    #[test]
+    fn panics_while_updating_ask_for_a_rescan_instead_of_faulting_the_engine() {
+        use super::live::*;
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("kept.txt"), b"x").unwrap();
+        let mut state = State::new(SearchCache::walk_fs(temp.path()), temp.path().into());
+        assert_eq!(contain(&mut state, |_| 7), Some(7));
+        assert_eq!(
+            contain(&mut state, |_| -> () { panic!("growing the index failed") }),
+            None
+        );
+        assert!(state.needs_rescan && state.watcher.is_none() && state.walk.is_none());
+
+        let engine = Box::into_raw(Box::new(Engine(Arc::new(Mutex::new(State::new(
+            SearchCache::walk_fs(temp.path()),
+            temp.path().into(),
+        ))))));
+        unsafe {
+            let shared = (*engine).0.clone();
+            let _ = std::thread::spawn(move || {
+                let _state = shared.lock().unwrap();
+                panic!("a search panicked");
+            })
+            .join();
+            assert!((*engine).0.is_poisoned());
+            let polled = reply(cn_poll(engine, 0, false));
+            assert_eq!(polled["status"], "ok");
+            assert_eq!(polled["needs_rescan"], true);
+            assert!(!(*engine).0.is_poisoned());
+            let query = CString::new("kept").unwrap();
+            let empty = CString::new("").unwrap();
+            let request = cn_request_new();
+            let searched = reply(cn_search(
+                engine,
+                request,
+                1,
+                query.as_ptr(),
+                empty.as_ptr(),
+                false,
+            ));
+            cn_request_free(request);
+            assert_eq!(searched["total"], 1);
+            let checkpoint = temp.path().join("state/index.db");
+            (*engine).0.lock().unwrap().checkpoint = Some(checkpoint.clone());
+            assert_eq!(reply(cn_checkpoint(engine, true))["status"], "error");
+            assert!(
+                !checkpoint.exists(),
+                "an index needing a rescan is not saved"
+            );
             cn_engine_close(engine);
         }
     }
@@ -1485,7 +1550,14 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), before);
         let panic = guarded(|| panic!("contained test panic"));
         unsafe {
-            assert_eq!(reply(panic)["status"], "error");
+            let panic = reply(panic);
+            assert_eq!(panic["status"], "error");
+            assert!(
+                panic["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("(contained test panic)")
+            );
         }
     }
     #[test]

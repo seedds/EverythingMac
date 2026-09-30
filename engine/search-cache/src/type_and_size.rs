@@ -29,6 +29,11 @@ impl StateTypeSize {
         State::n((self.0 >> 62) as u8).unwrap()
     }
 
+    /// Whether the state bits hold a known state; only a damaged index has others.
+    pub(crate) fn is_valid(&self) -> bool {
+        State::n((self.0 >> 62) as u8).is_some()
+    }
+
     pub fn r#type(&self) -> NodeFileType {
         NodeFileType::n((self.0 >> 60 & 0b11) as u8).unwrap()
     }

@@ -3,19 +3,21 @@ mod serde;
 
 use memmap2::{MmapMut, MmapOptions};
 use std::{
-    fmt, io,
+    fmt,
+    fs::File,
+    io,
     marker::PhantomData,
     mem::{self, MaybeUninit},
     num::NonZeroUsize,
     slice,
 };
-use tempfile::NamedTempFile;
 
 /// Disk-backed slab that keeps the node payloads in a temporary mmap file so the OS
 /// can page the largest structure in and out of memory.
 pub struct Slab<T> {
-    /// Anonymous temporary file that owns the on-disk backing storage.
-    file: NamedTempFile,
+    /// Temporary file that owns the on-disk backing storage. It is unlinked when
+    /// created, so the system frees it however the process ends.
+    file: File,
 
     /// Memory-mapped view of the file; stores the raw `Entry<T>` array.
     entries: MmapMut,
@@ -48,7 +50,7 @@ impl<T> Slab<T> {
     }
 
     fn with_capacity(capacity: NonZeroUsize) -> io::Result<Self> {
-        let mut file = NamedTempFile::new()?;
+        let mut file = tempfile::tempfile()?;
         let mmap = Self::map_file(&mut file, capacity)?;
         Ok(Self {
             file,
@@ -61,10 +63,10 @@ impl<T> Slab<T> {
         })
     }
 
-    fn map_file(file: &mut NamedTempFile, slots: NonZeroUsize) -> io::Result<MmapMut> {
+    fn map_file(file: &mut File, slots: NonZeroUsize) -> io::Result<MmapMut> {
         let bytes = (slots.get() as u64).saturating_mul(mem::size_of::<Entry<T>>() as u64);
-        file.as_file_mut().set_len(bytes)?;
-        unsafe { MmapOptions::new().map_mut(file.as_file()) }
+        file.set_len(bytes)?;
+        unsafe { MmapOptions::new().map_mut(&*file) }
     }
 
     /// Ensure the mmap can host at least `min_slots` entries.

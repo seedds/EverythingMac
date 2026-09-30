@@ -246,6 +246,10 @@ impl SlabNodeMetadataCompact {
     pub fn file_type_hint(&self) -> NodeFileType {
         self.state_type_and_size.r#type()
     }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        self.state_type_and_size.is_valid()
+    }
 }
 
 #[derive(Debug, Clone)]

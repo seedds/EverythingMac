@@ -311,6 +311,17 @@ final class LiveCheck {
       case 11:
         guard model.total == 1 else { return }
         next("Saved scope mismatch triggers index rebuild on load")
+        // The app's own index, cut short as by a crash while copying it.
+        let saved = try Data(contentsOf: URL(fileURLWithPath: model.checkpointPath))
+        let damaged = directory.appendingPathComponent("damaged.db")
+        try saved.prefix(saved.count / 2).write(to: damaged)
+        model.snapshot = damaged.path
+        model.load()
+        step = 43
+        since = ProcessInfo.processInfo.systemUptime
+      case 43:
+        guard model.snapshot == model.checkpointPath, model.total == 1 else { return }
+        checks.append("A damaged saved index is rebuilt instead of blocking the app")
         let trash = root.appendingPathComponent("trash-fixture-" + UUID().uuidString)
         try Data("recoverable".utf8).write(to: trash)
         var resulting: NSURL?
@@ -321,7 +332,9 @@ final class LiveCheck {
           return
         }
         try FileManager.default.moveItem(at: recovered, to: trash)
-        next("Native Trash moves fixture and supports recovery")
+        checks.append("Native Trash moves fixture and supports recovery")
+        step = 13
+        since = ProcessInfo.processInfo.systemUptime
         model.actions.preview.show([trash.path])
       case 13:
         guard QLPreviewPanel.shared()?.isVisible == true,

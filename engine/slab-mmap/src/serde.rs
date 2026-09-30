@@ -24,6 +24,10 @@ where
     }
 }
 
+/// The most slots reserved up front from a map's stated length, which a damaged
+/// file could set to anything. Larger slabs grow as their entries are read.
+const MAX_INITIAL_SLOTS: usize = 1 << 23;
+
 struct SlabVisitor<T>(PhantomData<T>);
 
 impl<'de, T> Visitor<'de> for SlabVisitor<T>
@@ -40,7 +44,7 @@ where
     where
         A: MapAccess<'de>,
     {
-        let size = map.size_hint().unwrap_or_default();
+        let size = map.size_hint().unwrap_or_default().min(MAX_INITIAL_SLOTS);
         let size = NonZeroUsize::new(size).unwrap_or(INITIAL_SLOTS);
         let mut builder = Builder::with_capacity(size).map_err(A::Error::custom)?;
 

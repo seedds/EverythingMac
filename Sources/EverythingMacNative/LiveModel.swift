@@ -93,9 +93,12 @@ extension Model {
         } else if !self.live {
           status += " · Live updates paused"
         }
+        if reply.needs_rescan == true && self.automaticRescanPaused {
+          status += " · Rescan needed"
+        }
         if self.indexStatus != status { self.indexStatus = status }
         if reply.needs_rescan == true {
-          self.scan(useCurrentConfig: true)
+          self.rescanAutomatically()
           return
         }
         if reply.changed == true { self.refreshPending = true }
@@ -181,7 +184,7 @@ extension Model {
         return
       }
       if reply.needs_rescan == true {
-        self.scan(useCurrentConfig: true)
+        self.rescanAutomatically()
         return
       }
       self.refreshPending = false
@@ -209,6 +212,12 @@ extension Model {
     }
   }
   /// The current index stays searchable until the scan replaces it.
+  /// Rebuilds an index the engine can no longer update, unless the last scan
+  /// failed or was cancelled; the user then chooses when to rescan.
+  func rescanAutomatically() {
+    guard !automaticRescanPaused else { return }
+    scan(useCurrentConfig: true)
+  }
   func scan(useCurrentConfig: Bool = false) {
     guard !scanning, !snapshotOnly, !closed else { return }
     let epoch = indexEpoch
@@ -239,8 +248,10 @@ extension Model {
           self.indexedCount = previousCount
           self.processedEventCount = previousEvents
           self.status = "Scan cancelled; previous index retained"
+          self.automaticRescanPaused = true
           return
         }
+        self.automaticRescanPaused = false
         // Replies about the replaced index no longer apply.
         self.indexEpoch &+= 1
         self.walking = false
@@ -278,6 +289,7 @@ extension Model {
         self.processedEventCount = previousEvents
         self.error = e.localizedDescription
         self.status = "Scan failed; previous index retained"
+        self.automaticRescanPaused = true
       }
     }
   }
