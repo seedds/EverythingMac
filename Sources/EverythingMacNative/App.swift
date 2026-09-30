@@ -397,6 +397,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func key(_ event: NSEvent) -> NSEvent? {
     guard let window = window, window.isKeyWindow else { return event }
+    // While an input method composes text (such as Pinyin candidates), Return,
+    // Escape, and the arrow keys choose or cancel candidates; this monitor runs first.
+    if let editor = window.firstResponder as? NSTextView, editor.hasMarkedText() { return event }
     if event.modifierFlags.contains(.command),
       event.charactersIgnoringModifiers?.lowercased() == "f"
     {

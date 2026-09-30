@@ -166,9 +166,81 @@ report, and this history. Removed obsolete older-app comparison scripts.
 Recorded checks: 1,252 Rust tests passed, two ignored; workspace checks, native
 release compilation, and all 10 release-safeguard tests passed.
 
+## SwiftUI lifecycle and native interface — 0.1.56–0.1.58
+
+- **0.1.56:** Moved the Search Library button beside the Aa button, left of the search
+  field. Releases began publishing their written notes directly, without changelog links.
+- **0.1.57:** Adopted SwiftUI's application lifecycle for the search window and standard
+  menus, with Settings in its own window that discards unsaved edits when closed. The
+  results table, engine, activation shortcut, menu bar item, Quick Look, and saving
+  before quit were kept. Recorded checks: 63 feature and lifecycle checks, 23 live
+  checks, 11 saved-index checks, and 2 startup-icon checks.
+- **0.1.58:** Required macOS 14. Row pages and file details update only changed rows;
+  each row's details come from one filesystem call, and icons are cached by path.
+  Polling sends the event list only to a visible, changed Events tab and slows while
+  the window is hidden. Settings gained General, Index, and Privacy tabs; the Index
+  menu took over Live Updates, Rescan, and Cancel Scan. Recorded checks: self, sort,
+  selection, feature, live, tab, and terminal checks and the bridge tests passed;
+  `--trash-check` timed out at step 23, as it already did on 0.1.57.
+
+## Code review follow-up — 0.1.59–0.1.62
+
+A review of the Swift app, Rust bridge, and engine on September 30, 2026 ranked
+performance problems and bugs. The most important were fixed over four releases,
+each validated with the workspace tests (the system-wide cancellation test excluded),
+clippy, and the self, sort, selection, feature, live, tab, and terminal checks, and
+published through the release workflow. `--trash-check` still times out at step 23,
+as before. Measurements are in [Performance](PERFORMANCE.md).
+
+- **0.1.59:** Background date and size indexing stopped invalidating the displayed
+  results about once a second: `cn_poll` reports `metadata_changed` separately from
+  structural changes, name order uses the file-type hint so it no longer shifts while
+  metadata loads, and size and date orders merge larger batches instead of rebuilding.
+  Snapshot writes now return flush and compression errors, sync before renaming, and
+  delete the temporary file on failure; an unchanged index is not rewritten. The
+  FSEvents stream is released only after it is stopped and invalidated, a stopped
+  watcher still invalidates stale row IDs, and an event path that is not valid UTF-8
+  no longer faults the engine. The temporary slab mapping no longer syncs to disk on
+  growth or release. In the app, a failed Open Index keeps the current index, every
+  file action waits for a pending selection, Trash confirms more than 50 items and
+  continues past failures, and icons follow the Name column after reordering. Fat LTO
+  with one codegen unit was measured and rejected: search was unchanged and index
+  loading about 10% slower. Recorded checks: 1,815 Rust tests passed.
+- **0.1.60:** FSEvents that only change an existing item's attributes update it in
+  place instead of removing it and walking its path (for a folder, its whole
+  subtree), so row IDs stay valid and the app does not repeat its search; visible rows
+  refresh their sizes and dates. Name-index inserts compare ancestor chains instead of
+  building paths, and removing a subtree updates each name's postings once. Case-only
+  renames resolve the stored name with `getattrlist` and no longer leave duplicates.
+  The selection check now also accepts a size updated in place, since file edits no
+  longer start a new search. The release workflow moved to `actions/checkout` v7.0.1
+  for Node 24. Recorded checks: 1,821 Rust tests passed.
+- **0.1.61:** Name queries match live names in the name index, scanning key ranges in
+  parallel, instead of running serially over every name ever interned. Fourteen
+  queries returned identical paths in identical order compared with 0.1.60, including
+  a complete 2.6-million-result list. Recorded checks: 1,824 Rust tests passed.
+- **0.1.62:** Selections are node identities (slab index, per-slot generation, and
+  cache instance) instead of hashed paths; selections of up to 4,096 items also keep
+  paths to survive folder re-scans, and a rescan transfers only files it still finds.
+  Quick Look shows at most 1,000 selected items, file actions build URLs without
+  checking the filesystem, and opening more than 50 items asks for confirmation. The
+  live and tab checks now expect Quick Look's 1,000-item limit. Recorded checks:
+  1,826 Rust tests passed.
+
+## Input methods — 0.1.63
+
+Typing Chinese with Pinyin could not reliably produce characters: every SwiftUI
+update of the search field read and reassigned its value, which ended the input
+method's composition and committed the typed letters. The field now leaves its value
+alone while marked text exists and searches only committed text, and the global key
+monitor passes Return, Escape, and the arrow keys to the input method while it is
+composing. A feature check drives the field editor through the same text-input calls
+an input method makes; it reproduced the reset before the fix. Recorded checks: 70
+feature checks and the self, sort, selection, live, tab, and terminal checks passed.
+
 ## Validation boundaries
 
-The deployment target is macOS 12; actual older-macOS and Intel execution remain
+The deployment target is macOS 14; actual macOS 14 and Intel execution remain
 unverified. Real cloud-provider behavior, sustained event storms, external terminal
 and Double Commander integrations, and drag/drop across all target apps need broader
 validation. Ad-hoc signing does not provide notarization or a stable Developer ID.

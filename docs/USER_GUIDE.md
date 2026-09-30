@@ -56,11 +56,20 @@ for Reveal in Finder and Copy Path.
 | Escape / Close Window | Hide the window; live monitoring continues. |
 | Command-Q | Save the native checkpoint and quit. |
 
+While an input method such as Pinyin is composing text in the search or folder field,
+Return, Escape, and the arrow keys go to the input method, and the search runs once
+you choose a character.
+
 Open, Reveal in Finder, Quick Look, and Copy Path are also in the File menu; they
 are enabled while the results table has focus and files are selected. The context
 menu also provides filename copying and Double Commander reveal. Right-click the
 column headers to reset column widths. Dragging results exports file URLs. Standard file icons load
 lazily into a bounded cache. Search results never generate content thumbnails; Quick Look opens only when explicitly requested.
+
+Selecting all results stays fast even across millions of files, and the selection
+stays in place through searches and live updates. When a live update scans a folder
+again, selections of up to 4,096 items keep their files selected. An action run right
+after clicking waits for that selection instead of reporting that it is loading.
 
 Scrolling loads filenames and paths directly from the index. Size and dates load
 from indexed metadata, with a separate visible-row fallback while indexing is incomplete;
@@ -75,8 +84,10 @@ allocation, not exclusive space reclaimable from APFS clones or snapshots.
 
 Modified and Created dates (plus logical and allocated sizes from the same metadata read) are indexed in
 the background and saved in the native checkpoint. Missing metadata in current-format
-indexes is filled in automatically without a full rescan. File-change events keep these values current.
-The index details popover shows **Indexing file sizes and dates…** while this work is running;
+indexes is filled in automatically without a full rescan. File-change events keep these values current:
+editing a file, or changing a folder's permissions, extended attributes, or Finder tags,
+updates that item in place without repeating the search or disturbing the selection.
+Hovering over the status shows **Indexing file sizes and dates…** while this work is running;
 unavailable dates remain unknown. Sorting uses indexed values only, so date ordering
 fills in as indexing progresses. While indexing runs, results sorted or filtered by size
 or date refresh at most every 10 seconds and once more when it finishes; other results
@@ -180,7 +191,7 @@ To search an index without monitoring the filesystem or writing an index:
 ./run.sh --snapshot --index /absolute/path/to/everything-mac.db
 ```
 
-**Choose index…** also enters snapshot mode. **Enable live updates** switches the
+**File → Open Index…** also enters snapshot mode. **Index → Enable Live Updates** switches the
 loaded index to live mode and saves subsequent checkpoints in the native store.
 Missing or incompatible snapshots produce an actionable error without starting a
 scan.

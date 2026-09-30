@@ -15,8 +15,9 @@ using familiar macOS actions.
 
 - Search filenames and paths with wildcards, regular expressions, Boolean queries,
   and filters. Reusable sort indexes support sorting all matching results.
-- Live filesystem updates, indexed dates and disk usage, and stable selection as
-  files change. Open, reveal, preview, rename, copy, drag, or trash selected files.
+- Live filesystem updates that refresh sizes and dates in place, indexed disk usage,
+  and selections that stay stable as files change, even across millions of results.
+  Open, reveal, preview, rename, copy, drag, or trash selected files.
 - Exclude names and glob patterns such as `node_modules`, `*.log`, and `**/build/**`.
   Content searches skip offline cloud placeholders rather than downloading them.
 - Saved searches, the latest 100 distinct recent searches, a configurable global
@@ -52,15 +53,15 @@ require approval in Privacy & Security and renewed permissions after an update.
 
 Launch the installed app and grant **Full Disk Access** in System Settings when
 needed to search protected locations. Normal startup opens the saved index or
-scans the configured root when no index exists. Configure scope and exclusions
-in Preferences; use **Index folder…** in Index details to choose a monitored root.
+scans the configured root when no index exists. Choose the monitored root and
+configure scope and exclusions in **Settings → Index** (Command-,).
 
 Type a filename or a query such as `report*.txt`. Use the Folder scope field to
 narrow the results and **Aa** for case sensitivity. Press Down to enter results,
 Space for Quick Look, or Command-R to reveal a selection in Finder.
 
 The default activation shortcut is **Command-Shift-Space** and can be changed in
-Preferences. **Command-/** opens Search & Shortcuts. The **Search Library** button
+**Settings → General**. **Command-/** opens Search & Shortcuts. The **Search Library** button
 beside the search field contains recent and saved searches.
 
 ## Documentation

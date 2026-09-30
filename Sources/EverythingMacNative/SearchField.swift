@@ -37,17 +37,32 @@ struct SearchField: NSViewRepresentable {
 
   func updateNSView(_ field: NSSearchField, context: Context) {
     context.coordinator.parent = self
-    if field.stringValue != text { field.stringValue = text }
-    field.placeholderString = placeholder
-    field.setAccessibilityLabel(accessibilityLabel)
-    field.isEnabled = context.environment.isEnabled
+    // Reading or assigning the value while an input method composes text (for
+    // example Pinyin before a candidate is chosen) commits the letters as typed.
+    if !field.isComposing && field.stringValue != text { field.stringValue = text }
+    if field.placeholderString != placeholder { field.placeholderString = placeholder }
+    if field.accessibilityLabel() != accessibilityLabel {
+      field.setAccessibilityLabel(accessibilityLabel)
+    }
+    if field.isEnabled != context.environment.isEnabled {
+      field.isEnabled = context.environment.isEnabled
+    }
   }
+}
 
+extension NSTextField {
+  /// An input method is composing uncommitted (marked) text in the field editor.
+  var isComposing: Bool { (currentEditor() as? NSTextView)?.hasMarkedText() == true }
+}
+
+extension SearchField {
   final class Coordinator: NSObject, NSSearchFieldDelegate {
     var parent: SearchField
     init(_ parent: SearchField) { self.parent = parent }
     func controlTextDidChange(_ notification: Notification) {
-      guard let field = notification.object as? NSSearchField else { return }
+      // Uncommitted input-method text is not searched; committing or cancelling
+      // the composition sends another change with the final text.
+      guard let field = notification.object as? NSSearchField, !field.isComposing else { return }
       parent.text = field.stringValue
     }
     @objc func submit(_ sender: NSSearchField) {

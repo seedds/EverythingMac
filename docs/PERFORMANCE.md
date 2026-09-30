@@ -4,16 +4,18 @@
 
 ## Reading these results
 
-These are workstation measurements. The matching studies cover the 0.1.55 matching
-changes and the parallel name matching that followed 0.1.60; the versioned sorting
-studies cover historical releases.
+These are workstation measurements. The 0.1.60–0.1.62 studies cover live updates,
+parallel name matching, and large selections; the other matching study covers the
+0.1.55 changes, and the versioned sorting studies cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
 An empty query can be faster than a filtered query because it avoids substring matching.
 
 | Study | What it establishes |
 | --- | --- |
-| [Parallel name matching, after 0.1.60](#parallel-name-matching-2026-09-30) | Unscoped case-insensitive name queries fell from 26–188 ms to 3–10.5 ms on 4,573,469 entries, with identical ordered results; folder-scoped queries gained less, and exact/prefix lookups, the all-files query, and index loading were unchanged. |
+| [Large selections, 0.1.62](#large-selections-0162) | Selecting all 4,573,469 results fell from about 2.8 s and 239 MiB to 37 ms and 70 MiB, and restoring that selection after a search from about 4 s to about 70 ms. |
+| [Parallel name matching, 0.1.61](#parallel-name-matching-0161) | Unscoped case-insensitive name queries fell from 26–188 ms to 3–10.5 ms on 4,573,469 entries, with identical ordered results; folder-scoped queries gained less, and exact/prefix lookups, the all-files query, and index loading were unchanged. |
+| [Live updates, 0.1.60](#live-updates-0160) | An attribute change on a 167,000-item app bundle fell from 1.24 s plus a 170 ms re-sort to under 1 ms with no re-sort; file edits no longer repeat the search. |
 | [Maintained orders, 0.1.41](#maintained-orders-0141) | Search, sort, and first-page retrieval over 4,621,437 entries took about 18–19 ms for the empty query; the 2.58-million-match filtered query took about 187–194 ms on first calls. Index opening and preparation took about 2.73 s. |
 | [Indexed metadata, 0.1.40](#indexed-metadata-0140) | Removing filesystem reads eliminated large waits, but full-index sorts still took roughly 2.8–3.3 s. |
 | [Original sorting, 0.1.39](#original-sorting-0139) | Broad uncapped sorts stalled on filesystem reads; some runs timed out before producing results. |
@@ -23,10 +25,37 @@ apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
 
-## Parallel name matching (2026-09-30)
+## Large selections (0.1.62)
 
-Measured on the same read-only copy of a **4,573,469-entry snapshot**, on the
-workstation described above, comparing the 0.1.60 bridge with the change that
+Measured on 2026-09-30 on a read-only copy of the **4,573,469-entry snapshot** used
+for the 0.1.61 study, on the workstation described above. A temporary Swift probe,
+not included in the repository, called the bridge's C interface directly: it
+searched all files, selected every result, repeated the search to force a selection
+remap, and requested selected paths. Each build ran two or three times in separate
+processes; the table shows the range.
+
+| Operation | 0.1.61 | 0.1.62 |
+| --- | ---: | ---: |
+| Select all results (`cn_select`) | 2,770–2,803 ms, +239–240 MiB RSS | 37 ms, +70–71 MiB RSS |
+| Restore the selection after a new search (`cn_selected`) | 3,966–4,071 ms | 68–74 ms |
+| Selected paths for Quick Look (`cn_selection_paths`) | 5,089–5,297 ms, all 4,573,469 paths | 0.7 ms, first 1,000 paths |
+| Restore a single selected row after a search | 18.9–19.4 ms | 1.4–1.7 ms |
+
+Version 0.1.61 built a path, two SipHash digests, and a hash-set entry for every
+selected row, and rebuilt the path of every selected node on each remap. Version
+0.1.62 stores a slab index and per-slot generation for each selected node and marks
+survivors in a bitset. Quick Look requests at most 1,000 paths; explicit file actions
+still request all of them.
+
+Search and index loading were unchanged. The all-files, name-sorted view ran at
+17–25 ms per process in both builds with the same number of instructions retired;
+individual processes settle into faster or slower modes, so single runs of that case
+are not comparable.
+
+## Parallel name matching (0.1.61)
+
+Measured on 2026-09-30 on the same read-only copy of a **4,573,469-entry snapshot**,
+on the workstation described above, comparing the 0.1.60 bridge with 0.1.61, which
 matches live names in the name index, scanning key ranges in parallel. Previously a
 case-insensitive query ran its regex serially over every name the process had
 interned, collected matches into a sorted set, and looked each one up again.
@@ -62,6 +91,35 @@ enumerating the folder scope rather than matching names.
 For fourteen queries, including the complete 2,637,710-result `a` lists with and
 without name sorting, wildcard, Unicode, case-sensitive, and folder-scoped cases,
 every result path and its position were identical between the two builds.
+
+## Live updates (0.1.60)
+
+Measured on 2026-09-30 with temporary Rust programs, not included in the
+repository, that link the engine directly and time `handle_fs_events`, comparing the
+0.1.59 engine with 0.1.60. The first two rows load the same **4,573,469-entry**
+snapshot and send synthetic events for files that exist but have not changed, so
+the filesystem is only read. "Next search" is a name-sorted search of every file
+immediately afterwards, which includes any sort-order rebuild caused by the events.
+
+| Events | 0.1.59 | 0.1.60 |
+| --- | ---: | ---: |
+| `ItemXattrMod` on `/Applications/Xcode.app` (about 167,000 items) | 1,197–1,243 ms, next search 165–171 ms, results invalidated | under 1 ms, next search 18.6 ms, results kept |
+| `ItemModified` for 10,000 files under `/usr/share` | 135–198 ms, next search 170–174 ms, results invalidated | 107 ms, next search 18.4 ms, results kept |
+
+The remaining rows use a synthetic tree in a temporary folder and report medians of
+five runs per build (ten for the last row), alternating builds.
+
+| Events | 0.1.59 | 0.1.60 |
+| --- | ---: | ---: |
+| `ItemModified` for 10,000 edited files in 100 folders | 68.8 ms | 18.7 ms |
+| `ItemInodeMetaMod` after `chmod` on a folder of 50,000 files | 131.9 ms | under 0.1 ms |
+| Removing a folder with 20,000 `index.js` files (40,000 indexed) | 71.1 ms | 8.7 ms |
+| Creating a folder with 5,000 more `index.js` files | 95.2 ms | 74.5 ms |
+
+Before 0.1.60, every event for an existing item removed it and walked the path
+again, including a folder's entire subtree, and the bridge reported a structural
+change that made the app repeat its search. Attribute-only events now update the
+item in place; creations, removals, and renames still walk the path.
 
 ## Exact, prefix, and scoped matching (2026-09-29)
 

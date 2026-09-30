@@ -35,6 +35,55 @@ final class FeatureCheck {
     model.submit()
     try await waitFor { !model.searching }
   }
+  /// Input methods such as Pinyin compose marked text before a candidate is chosen.
+  /// App updates must not reset it, and Escape and the arrow keys belong to the
+  /// input method until the text is committed. Drives the field editor through the
+  /// same text input calls an input method makes.
+  func checkInputMethodComposition() async throws {
+    NSApp.activate(ignoringOtherApps: true)
+    window.makeKeyAndOrderFront(nil)
+    model.focusSearch?()
+    try await waitFor { self.window.isKeyWindow && self.window.firstResponder is NSTextView }
+    guard let editor = window.firstResponder as? NSTextView else {
+      throw messageError("Search field editor is missing")
+    }
+    let committed = model.query
+    editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+    editor.setMarkedText(
+      "ni", selectedRange: NSRange(location: 2, length: 0),
+      replacementRange: NSRange(location: NSNotFound, length: 0))
+    try await Task.sleep(nanoseconds: 400_000_000)
+    try check(
+      editor.hasMarkedText() && model.query == committed && !model.searching,
+      "Text being composed by an input method is not searched")
+    model.submit(background: true)
+    try await waitFor { !self.model.searching }
+    model.status = "Composing"
+    try await Task.sleep(nanoseconds: 300_000_000)
+    let intact = editor.hasMarkedText() && editor.string == committed + "ni"
+    try check(
+      intact,
+      "App updates keep text being composed"
+        + (intact ? "" : " (marked: \(editor.hasMarkedText()), text: \(editor.string))"))
+    let keys: [(String, UInt16, String)] = [
+      ("Escape", 53, "\u{1b}"), ("Down Arrow", 125, "\u{f701}"), ("Up Arrow", 126, "\u{f700}"),
+    ]
+    for (name, keyCode, character) in keys {
+      guard
+        let event = NSEvent.keyEvent(
+          with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+          windowNumber: window.windowNumber, context: nil, characters: character,
+          charactersIgnoringModifiers: character, isARepeat: false, keyCode: keyCode)
+      else { throw messageError("Cannot create the \(name) key event") }
+      try check(delegate.key(event) === event, "\(name) goes to the input method while composing")
+    }
+    try check(
+      window.isVisible && editor.hasMarkedText(), "Escape while composing keeps the window and text")
+    editor.insertText("你", replacementRange: editor.markedRange())
+    try await waitFor { self.model.query == committed + "你" }
+    try check(!editor.hasMarkedText(), "Choosing a candidate commits the composed text for search")
+    try await search(committed)
+  }
   func start() {
     Task { @MainActor in
       do {
@@ -237,6 +286,7 @@ final class FeatureCheck {
       model.error != nil && model.library.recent.isEmpty, "Failed query is excluded from history")
     model.error = nil
     try await search("report")
+    try await checkInputMethodComposition()
     try model.library.save(name: "Report preset", state: state)
     window.setContentSize(NSSize(width: 800, height: 600))
     try render(window, suffix: "results")

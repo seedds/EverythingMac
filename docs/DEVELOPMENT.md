@@ -72,6 +72,10 @@ you launch when also using the Homebrew installation; their version and signatur
 | `Sources/EverythingMacNative/Preferences.swift` | Native preferences and empty installation defaults. |
 | `Sources/CNative/include/everything_mac_native.h` | C-compatible Rust/Swift interface and ownership contract. |
 | `bridge/src/` | Rust static library, saved-index loading, search, selection, and live indexing. |
+| `engine/search-cache/` | In-memory index: slab nodes, name index, query evaluation, sort orders, live event handling, and snapshot persistence. |
+| `engine/everything-mac-sdk/` | FSEvents stream ownership and event classification. |
+| `engine/fswalk/`, `engine/namepool/`, `engine/slab-mmap/` | Parallel filesystem walk with exclusions, interned names, and the memory-mapped node slab. |
+| `engine/everything-mac-syntax/`, `engine/query-segmentation/` | Query parsing, optimization, and path-segment splitting. |
 | `run.sh` | Release build, app assembly, signing, and launch. |
 | `scripts/package-native.sh` | Local DMG creation. |
 
@@ -82,9 +86,29 @@ The search window forwards delegate callbacks to SwiftUI while intercepting clos
 to hide it; a responder adapter preserves Quick Look without a custom window class.
 The deployment target is macOS 14.
 
-Rust owns the full result-ID vector and passive selection identities. Swift keeps
+Rust owns the full result-ID vector and the selection. A selection is a list of
+node identities: a slab index plus a per-slot generation that `remove_node` bumps, so
+a reused slot never matches an earlier identity, together with the cache instance
+they belong to. Selections of up to 4,096 items also keep their paths, so their
+files stay selected after a live update re-creates their folder's nodes. Swift keeps
 at most 1,024 row models around the viewport, plus bounded selection samples.
-Explicit actions and an open Quick Look panel resolve the complete selected paths.
+Explicit actions resolve every selected path; an open Quick Look panel resolves at
+most 1,000.
+
+Live updates distinguish two kinds of change. Events that only change an existing
+item's attributes (file edits; permission, extended-attribute, and Finder-info
+changes on a file or folder) update its metadata in place and keep its ID.
+Creations, removals, renames, and coalesced subtree changes remove and walk the
+path again. `cn_poll` reports the first kind as `metadata_changed`, which keeps row
+IDs valid: Swift refreshes the visible rows and re-sorts only when the view sorts or
+filters by size or date. It reports the second kind as `changed`, which invalidates
+row IDs and makes Swift repeat the search. Name matching scans live names in the
+name index in parallel key ranges; the process-wide name pool is only used to
+intern names.
+
+Checkpoints are written to a temporary file, synced to disk, and then renamed over
+the index, so a failed save leaves the previous index intact. An index that has not
+changed since it was opened or last saved is not rewritten.
 
 Access to the active engine is serialized on a background queue. Generation tags
 reject obsolete search/row responses. Cancellation does not require the engine
@@ -106,7 +130,7 @@ For future UI changes:
 2. Change that baseline only for a concrete usability, accessibility, or
    responsiveness improvement; explain the reason in the change description.
 3. Keep the results prominent. Put occasional index-management and performance
-   controls in Index details or Preferences rather than adding permanent toolbars.
+   controls in the Index menu or Settings rather than adding permanent toolbars.
 4. Preserve native keyboard behavior, clear focus, reusable table rows, and
    visible error states.
 5. Keep engine timing and implementation details out of the everyday search flow
@@ -156,6 +180,9 @@ This trashes only disposable fixture files, verifies that unselected files remai
 and restores each fixture from the recovery location returned by macOS Trash.
 The larger selection exceeds the UI's 128-path sample, checking that every
 selected file is resolved even when the displayed result generation is stale.
+Since 0.1.57 this check has timed out at step 23, the single-file case, on unchanged
+code as well; treat that timeout as a known issue rather than a new regression until
+it is fixed, and report it explicitly.
 
 To check that live file changes preserve the selected row without flickering:
 
@@ -165,10 +192,12 @@ python3 -c 'import json; r=json.load(open("/tmp/everything-mac-selection.json"))
 ```
 
 This uses disposable files and the real table. It checks continuous selection
-through live updates, a new click during refresh, selected-file deletion, and
-clearing selection when starting a new search. A private test clipboard also checks
+through live updates (including a file edit that updates its size in place without
+a new search), a new click during refresh, selected-file deletion, and clearing
+selection when starting a new search. A private test clipboard also checks
 immediate Copy, Copy during refresh, and cancellation when the selection or search
-changes. Copy Files, Paths, and Filenames wait for a pending selection automatically.
+changes. Every file action, including copying, waits for a pending selection
+automatically.
 
 To measure selection restoration after broad searches against a read-only snapshot:
 
@@ -203,7 +232,9 @@ cargo run -p everything-mac-native-prototype --example fixture -- "$FIXTURE_DIR"
 ```
 
 The feature suite checks exclusions, shortcuts, history persistence/restoration, help,
-index filename migration, the 800-point minimum layout, the independent Settings
+input-method composition in the search field (marked text survives app updates and
+keeps Return, Escape, and the arrow keys), index filename migration, the 800-point
+minimum layout, the independent Settings
 window and draft cancellation, standard menu shortcuts, search-window hiding,
 reopening and restoration from the Dock, and asynchronous shutdown on quit.
 Historical test totals
