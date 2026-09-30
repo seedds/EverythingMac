@@ -22,6 +22,12 @@ final class LiveCheck {
   var searchWindow: NSWindow? {
     NSApp.windows.first { $0.identifier?.rawValue == "EverythingMacSearch" }
   }
+  /// Rows AppKit had prepared outside the visible area when results were replaced.
+  var preparedOutsideView: Int?
+  func table(in view: NSView?) -> ResultsView? {
+    if let table = view as? ResultsView { return table }
+    return (view?.subviews ?? []).lazy.compactMap { self.table(in: $0) }.first
+  }
   let terminalValidationError = "Choose an installed terminal application in Preferences."
   var tabCheck: Bool { CommandLine.arguments.contains("--tab-check") }
   var trashCheck: Bool { CommandLine.arguments.contains("--trash-check") }
@@ -371,6 +377,25 @@ final class LiveCheck {
         // Quick Look previews at most its limit of the 1,200 selected files.
         guard model.actions.preview.urls.count == min(1200, PreviewController.limit) else { return }
         next("Quick Look retains the selected files, up to its limit, after sort")
+        if let table = table(in: searchWindow?.contentView) {
+          let visible = table.rows(in: table.visibleRect)
+          let name = table.column(withIdentifier: NSUserInterfaceItemIdentifier("Name"))
+          var outside = 0
+          var stale: [Int] = []
+          table.enumerateAvailableRowViews { rowView, row in
+            guard row < model.total, let item = model.rows[row],
+              let cell = rowView.view(atColumn: name) as? ResultCell
+            else { return }
+            if !NSLocationInRange(row, visible) { outside += 1 }
+            if cell.representedPath != item.path { stale.append(row) }
+          }
+          preparedOutsideView = outside
+          guard stale.isEmpty else {
+            finish("Rows outside the visible area kept earlier results: \(stale.prefix(5))")
+            return
+          }
+          checks.append("Rows prepared outside the visible area show the new results")
+        }
         model.activeTab = "events"
         // A live refresh can complete after the Files table has been hidden.
         if tabCheck { model.submit(background: true) }
@@ -503,7 +528,7 @@ final class LiveCheck {
     }
     let report: [String: Any] = [
       "checks": checks, "error": reportError as Any? ?? NSNull(), "fixture": directory.path,
-      "timings": timings,
+      "timings": timings, "preparedOutsideView": preparedOutsideView as Any? ?? NSNull(),
     ]
     do {
       try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])

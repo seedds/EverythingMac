@@ -871,3 +871,52 @@ fn content_filter_high_bytes() {
     ));
     assert_eq!(indices.len(), 1);
 }
+
+/// Case-insensitive search folds letters beyond ASCII, also across a buffer boundary.
+#[test]
+fn content_filter_unicode_case_insensitive() {
+    let temp_dir = TempDir::new("content_unicode_case").unwrap();
+    let dir = temp_dir.path();
+    fs::write(dir.join("upper.txt"), "CV: RÉSUMÉ".as_bytes()).unwrap();
+    let mut spanning = vec![b'a'; CONTENT_BUFFER_BYTES - 4];
+    spanning.extend_from_slice("ÉTÉ".as_bytes());
+    fs::write(dir.join("spanning.txt"), &spanning).unwrap();
+
+    let mut cache = SearchCache::walk_fs(dir);
+    let mut search = |query: &str, case_insensitive| {
+        guard_indices(cache.search_with_options(
+            query,
+            SearchOptions { case_insensitive },
+            CancellationToken::noop(),
+        ))
+    };
+    assert_eq!(search("content:résumé", true).len(), 1);
+    assert_eq!(search("content:été", true).len(), 1);
+    assert!(search("content:résumé", false).is_empty());
+    assert_eq!(search("content:RÉSUMÉ", false).len(), 1);
+}
+
+/// Matches keep the order of the searched nodes on every run.
+#[test]
+fn content_filter_keeps_result_order() {
+    let temp_dir = TempDir::new("content_order").unwrap();
+    let dir = temp_dir.path();
+    for i in 0..300 {
+        fs::write(dir.join(format!("f{i:03}.txt")), b"needle").unwrap();
+    }
+    let mut cache = SearchCache::walk_fs(dir);
+    let options = SearchOptions {
+        case_insensitive: false,
+    };
+    let expected =
+        guard_indices(cache.search_with_options("ext:txt", options, CancellationToken::noop()));
+    assert_eq!(expected.len(), 300);
+    for _ in 0..5 {
+        let found = guard_indices(cache.search_with_options(
+            "content:needle",
+            options,
+            CancellationToken::noop(),
+        ));
+        assert_eq!(found, expected);
+    }
+}

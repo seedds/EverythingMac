@@ -446,3 +446,35 @@ fn scope_filters_follow_case_insensitive_option() {
         "case-sensitive parent path should still require exact path casing"
     );
 }
+
+/// Folder names match case-insensitively beyond ASCII, and in either Unicode
+/// normalization form, as APFS does.
+#[test]
+fn test_parent_and_infolder_match_unicode_folder_names() {
+    let temp_dir = TempDir::new("parent_infolder_unicode").unwrap();
+    let root = temp_dir.path();
+    std::fs::create_dir_all(root.join("Été")).unwrap();
+    std::fs::File::create(root.join("Été/notes.txt")).unwrap();
+    // "Café" with a combining accent (decomposed).
+    std::fs::create_dir_all(root.join("Cafe\u{301}")).unwrap();
+    std::fs::File::create(root.join("Cafe\u{301}/menu.txt")).unwrap();
+
+    let mut cache = SearchCache::walk_fs(root);
+    let mut search = |filter: &str, folder: &str, case_insensitive| {
+        let query = format!("{filter}:{}", root.join(folder).display());
+        cache
+            .search_with_options(
+                &query,
+                SearchOptions { case_insensitive },
+                CancellationToken::noop(),
+            )
+            .map(|outcome| outcome.nodes.unwrap().len())
+    };
+    assert_eq!(search("parent", "été", true).unwrap(), 1);
+    assert!(search("parent", "ÉTÉ", true).unwrap() == 1);
+    assert!(search("parent", "été", false).is_err());
+    assert!(search("infolder", "ÉTÉ", true).unwrap() >= 1);
+    // The composed spelling finds the decomposed folder, with or without case.
+    assert_eq!(search("parent", "Café", false).unwrap(), 1);
+    assert_eq!(search("parent", "CAFÉ", true).unwrap(), 1);
+}

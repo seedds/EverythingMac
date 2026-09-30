@@ -1954,3 +1954,50 @@ fn tag_filter_list_with_100_items() {
     ));
     assert_eq!(indices.len(), 100);
 }
+
+#[test]
+fn tag_filter_keeps_result_order() {
+    let temp_dir = TempDir::new("tag_filter_order").unwrap();
+    let dir = temp_dir.path();
+    for i in 0..300 {
+        let file = dir.join(format!("f{i:03}.txt"));
+        fs::write(&file, b"dummy").unwrap();
+        write_tags(&file, &["Project"]);
+    }
+    let mut cache = SearchCache::walk_fs(dir);
+    let options = SearchOptions {
+        case_insensitive: true,
+    };
+    let expected =
+        guard_indices(cache.search_with_options("ext:txt", options, CancellationToken::noop()));
+    assert_eq!(expected.len(), 300);
+    for _ in 0..5 {
+        let found = guard_indices(cache.search_with_options(
+            "tag:project",
+            options,
+            CancellationToken::noop(),
+        ));
+        assert_eq!(found, expected);
+    }
+}
+
+#[test]
+fn tag_filter_folds_unicode_case() {
+    let temp_dir = TempDir::new("tag_filter_unicode").unwrap();
+    let dir = temp_dir.path();
+    let file = dir.join("summer.txt");
+    fs::write(&file, b"dummy").unwrap();
+    write_tags(&file, &["Été"]);
+
+    let mut cache = SearchCache::walk_fs(dir);
+    let mut search = |query: &str, case_insensitive| {
+        guard_indices(cache.search_with_options(
+            query,
+            SearchOptions { case_insensitive },
+            CancellationToken::noop(),
+        ))
+    };
+    assert_eq!(search("tag:été", true).len(), 1);
+    assert!(search("tag:été", false).is_empty());
+    assert_eq!(search("tag:Été", false).len(), 1);
+}

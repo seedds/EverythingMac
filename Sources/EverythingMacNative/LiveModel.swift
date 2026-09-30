@@ -417,7 +417,7 @@ extension Model {
     if navigationHistory.isEmpty { navigationHistory = library.recent.map(\.state) }
     guard !navigationHistory.isEmpty else { return }
     historyCursor = min(max(0, historyCursor + (delta < 0 ? 1 : -1)), navigationHistory.count - 1)
-    restoreSearch(navigationHistory[historyCursor])
+    restoreSearch(navigationHistory[historyCursor], record: false)
   }
   func enableLive() {
     guard ready else { return }

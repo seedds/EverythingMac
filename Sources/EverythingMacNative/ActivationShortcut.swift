@@ -123,6 +123,12 @@ struct ShortcutRecorder: View {
     recording = true
     error = nil
     monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      // Closing Settings ends recording, and keys typed in other windows are theirs.
+      guard recording else {
+        stop()
+        return event
+      }
+      guard event.window?.identifier?.rawValue == "EverythingMacSettings" else { return event }
       if event.keyCode == 53 {
         stop()
         return nil

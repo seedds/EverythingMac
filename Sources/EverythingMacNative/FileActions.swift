@@ -207,10 +207,15 @@ final class FileActions {
     alert.addButton(withTitle: "Rename")
     alert.addButton(withTitle: "Cancel")
     alert.window.initialFirstResponder = field
-    field.selectText(nil)
-    (field.currentEditor() as? NSTextView)?.setSelectedRange(
-      NSRange(
-        location: 0, length: (url.deletingPathExtension().lastPathComponent as NSString).length))
+    // The field has an editor only once the modal alert makes it first responder,
+    // which selects the whole name; then select the name without its extension.
+    // A run loop block runs inside the modal loop, even when this was called from
+    // the main queue, whose next block would wait for the alert to close.
+    let baseName = NSRange(
+      location: 0, length: (url.deletingPathExtension().lastPathComponent as NSString).length)
+    RunLoop.main.perform(inModes: [.modalPanel]) {
+      (field.currentEditor() as? NSTextView)?.setSelectedRange(baseName)
+    }
     guard alert.runModal() == .alertFirstButtonReturn else { return }
     let name = field.stringValue
     guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0") else {

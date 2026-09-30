@@ -42,24 +42,23 @@ final class ResultsView: NSTableView {
     let drawnGeneration = resultGeneration
     DispatchQueue.main.async { [weak self] in self?.firstDraw?(drawnGeneration) }
   }
+  /// The file action for a key press in the results. Command-Shift-C and the menu's
+  /// Option-Command-C both copy paths, even when that menu item is disabled.
+  static func fileCommand(for event: NSEvent) -> String? {
+    let flags = event.modifierFlags
+    if flags.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() {
+      let paths = flags.contains(.shift) || flags.contains(.option)
+      return ["o": "open", "r": "reveal", "c": paths ? "paths" : "copy"][key]
+    }
+    guard flags.intersection([.command, .option, .control]).isEmpty else { return nil }
+    return [UInt16(49): "preview", 120: "rename", 100: "trash", 101: "terminal"][event.keyCode]
+  }
   override func keyDown(with event: NSEvent) {
-    if event.modifierFlags.contains(.command),
-      let key = event.charactersIgnoringModifiers?.lowercased()
-    {
-      if let command = [
-        "o": "open", "r": "reveal", "c": event.modifierFlags.contains(.shift) ? "paths" : "copy",
-      ][key] {
-        fileAction?(command)
-        return
-      }
+    if let command = Self.fileCommand(for: event) {
+      fileAction?(command)
+      return
     }
     if event.modifierFlags.intersection([.command, .option, .control]).isEmpty {
-      if let command: String = [
-        UInt16(49): "preview", 120: "rename", 100: "trash", 101: "terminal",
-      ][event.keyCode] {
-        fileAction?(command)
-        return
-      }
       if event.keyCode == 126 && selectedRow == 0 && !event.modifierFlags.contains(.shift) {
         deselectAll(nil)
         focusSearch?()
@@ -230,14 +229,13 @@ struct ResultsTable: NSViewRepresentable {
       let visible = range.location..<min(NSMaxRange(range), model.total)
       model.loadVisibleMetadata(range)
       model.ensure(visible.upperBound + 24)
-      // A replaced result set invalidates every visible cell; otherwise only
-      // rows whose page or metadata arrived need new content.
-      let rows = replaced ? IndexSet(integersIn: visible) : dirty.intersection(IndexSet(integersIn: visible))
-      for row in rows {
+      // A replaced result set invalidates every cell AppKit holds, including rows it
+      // prepared outside the visible area; otherwise only rows whose page or
+      // metadata arrived need new content.
+      table.enumerateAvailableRowViews { rowView, row in
+        guard row < model.total, replaced || dirty.contains(row) else { return }
         for (column, descriptor) in table.tableColumns.enumerated() {
-          if let cell = table.view(atColumn: column, row: row, makeIfNecessary: false)
-            as? ResultCell
-          {
+          if let cell = rowView.view(atColumn: column) as? ResultCell {
             configure(cell, column: descriptor.identifier, row: row)
           }
         }

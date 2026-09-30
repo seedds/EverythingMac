@@ -457,7 +457,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool
   {
     showWindow()
-    return true
+    // The existing window is shown; SwiftUI must not open another one.
+    return window == nil
   }
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     guard started, !model.closeFinished else { return .terminateNow }

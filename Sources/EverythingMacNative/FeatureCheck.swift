@@ -84,6 +84,85 @@ final class FeatureCheck {
     try check(!editor.hasMarkedText(), "Choosing a candidate commits the composed text for search")
     try await search(committed)
   }
+  /// Browsing history with Option-Up/Down leaves its order alone; Return records.
+  func checkHistoryNavigation() async throws {
+    let states = ["history-a", "history-b", "history-c"].map {
+      SearchState(query: $0, directory: "", sensitive: false)
+    }
+    model.library.clearHistory()
+    states.forEach(model.library.record)
+    let order = model.library.recent.map(\.state)
+    for _ in 0..<2 {
+      model.navigateHistory(-1)
+      try await waitFor { !self.model.searching }
+    }
+    try await Task.sleep(nanoseconds: 300_000_000)
+    try check(
+      model.currentSearchState == states[1] && model.library.recent.map(\.state) == order,
+      "Browsing history with Option-Up does not reorder it")
+    model.rememberQuery()
+    try check(
+      model.library.recent.first?.state == states[1], "Return records the browsed search")
+    model.library.clearHistory()
+  }
+  /// F2 selects the name without its extension, so typing replaces only the name.
+  func checkRenameSelection(_ path: String) throws {
+    var selected: NSRange?
+    let opened = ProcessInfo.processInfo.systemUptime
+    let timer = Timer(timeInterval: 0.05, repeats: true) { timer in
+      guard let alert = NSApp.modalWindow else { return }
+      guard ProcessInfo.processInfo.systemUptime - opened > 0.3 else { return }
+      selected = (alert.firstResponder as? NSTextView)?.selectedRange()
+      timer.invalidate()
+      NSApp.stopModal(withCode: .alertSecondButtonReturn)
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    model.actions.rename([path])
+    timer.invalidate()
+    try check(
+      selected == NSRange(location: 0, length: 6)
+        && FileManager.default.fileExists(atPath: path),
+      "Rename selects the name without its extension"
+        + (selected == NSRange(location: 0, length: 6) ? "" : " (selected \(String(describing: selected)))"))
+  }
+  /// Closing Settings while recording a shortcut must not leave the recorder taking
+  /// keys typed in the search window.
+  func checkRecorderAfterClosingSettings(_ settings: NSWindow, appMenu: NSMenu, index: Int)
+    async throws
+  {
+    model.settingsTab = "general"
+    appMenu.performActionForItem(at: index)
+    try await Task.sleep(nanoseconds: 300_000_000)
+    // The recorder is the first button on the General tab; recordingShortcut
+    // confirms that pressing it started recording.
+    func firstButton(in view: NSView) -> NSView? {
+      if String(describing: type(of: view)) == "SwiftUIAppKitButton" { return view }
+      return view.subviews.lazy.compactMap { firstButton(in: $0) }.first
+    }
+    guard let content = settings.contentView, let record = firstButton(in: content) else {
+      throw messageError("Cannot find the shortcut recorder")
+    }
+    _ = record.accessibilityPerformPress()
+    try await waitFor { self.model.recordingShortcut }
+    settings.performClose(nil)
+    try await waitFor { !self.model.recordingShortcut }
+    let shortcut = model.prefs.shortcut
+    window.makeKeyAndOrderFront(nil)
+    model.focusSearch?()
+    try await waitFor { self.window.isKeyWindow }
+    guard
+      let event = NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [.command, .option], timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, characters: "k",
+        charactersIgnoringModifiers: "k", isARepeat: false, keyCode: UInt16(kVK_ANSI_K))
+    else { throw messageError("Cannot create a key event") }
+    NSApp.sendEvent(event)
+    try await Task.sleep(nanoseconds: 100_000_000)
+    try check(
+      model.prefs.shortcut == shortcut,
+      "Closing Settings while recording leaves keys in the search window alone")
+    model.settingsTab = "index"
+  }
   func start() {
     Task { @MainActor in
       do {
@@ -285,7 +364,9 @@ final class FeatureCheck {
     try check(
       model.error != nil && model.library.recent.isEmpty, "Failed query is excluded from history")
     model.error = nil
+    try await checkHistoryNavigation()
     try await search("report")
+    try checkRenameSelection(model.root + "/report.txt")
     try await checkInputMethodComposition()
     try model.library.save(name: "Report preset", state: state)
     window.setContentSize(NSSize(width: 800, height: 600))
@@ -330,6 +411,7 @@ final class FeatureCheck {
       "Reopening Settings discards unsaved edits and reads current preferences")
     settings.performClose(nil)
     model.prefs.root = savedRoot
+    try await checkRecorderAfterClosingSettings(settings, appMenu: appMenu, index: settingsIndex)
     try check(window.contentView?.bounds.width == 800, "Native layout renders at minimum width")
     delegate.showSearchHelp()
     try await Task.sleep(nanoseconds: 300_000_000)
@@ -357,11 +439,24 @@ final class FeatureCheck {
       returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
     _ = try reopen.sendEvent(options: .noReply, timeout: 2)
     try await waitFor { self.window.isVisible }
+    // A duplicate window may appear after the existing one is shown.
+    try await Task.sleep(nanoseconds: 500_000_000)
     try check(NSApp.windows.filter { $0.title == "EverythingMac" && $0.isVisible }.count == 1,
       "Dock reopen restores the existing search window without duplicates")
     func menuItems(_ menu: NSMenu) -> [NSMenuItem] {
       menu.items.flatMap { [$0] + ($0.submenu.map(menuItems) ?? []) }
     }
+    func copyKey(_ flags: NSEvent.ModifierFlags, _ character: String) -> String? {
+      NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, characters: character,
+        charactersIgnoringModifiers: character, isARepeat: false, keyCode: UInt16(kVK_ANSI_C)
+      ).flatMap(ResultsView.fileCommand)
+    }
+    try check(
+      copyKey(.command, "c") == "copy" && copyKey([.command, .shift], "C") == "paths"
+        && copyKey([.command, .option], "c") == "paths",
+      "Command-C copies files; Command-Shift-C and Option-Command-C copy paths")
     let commands = NSApp.mainMenu.map(menuItems) ?? []
     for (key, name) in [("w", "Close Window"), ("q", "Quit"), ("h", "Hide"), (",", "Settings")] {
       try check(commands.contains { $0.keyEquivalent == key && $0.keyEquivalentModifierMask == .command },

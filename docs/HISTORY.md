@@ -301,6 +301,31 @@ the search runs again only once the window is shown. Recorded checks: 1,837 Rust
 tests passed (the system-wide cancellation test excluded), and the self, sort,
 selection, feature, live, tab, terminal, and trash checks passed.
 
+## Small fixes from the review — 0.1.68
+
+`content:` and `tag:` checked files through rayon's `par_bridge`, which returns matches
+in completion order, so unsorted results changed order between runs and rows moved on
+live refreshes; both now keep the order of the searched nodes, as the Spotlight path
+for large tag searches also does. Case-insensitive `parent:`, `infolder:`, and
+`nosubfolders:` compared folder names with ASCII case folding, and `content:` and
+`tag:` lowercased ASCII only; folder names now compare with Unicode case and in either
+normalization form, non-ASCII `content:` needles use a Unicode case-insensitive byte
+regex, and tags use Unicode lowercase. In the app, browsing history with Option-Up/Down
+recorded each entry, reordering history and rewriting its file; F2 selected the
+extension because the selection was set before the alert gave the field an editor, and
+a main-queue block would wait for the alert to close, so it now runs as a run-loop block
+in the modal mode; the results table maps Option-Command-C to Copy Paths as the menu
+does; and closing Settings while recording a shortcut left its key monitor installed,
+so a modified key typed in the search window replaced the global shortcut. The feature
+check reproduced the history, F2, and recorder bugs before the fixes. Two review items
+did not reproduce and received defensive fixes: Dock reopen now returns `false` once
+the existing window is shown, and table updates reconfigure every row view AppKit holds
+rather than only the visible range (AppKit prepared no rows outside the visible area in
+the checks). A query typed during a rescan was already handled by 0.1.66. Recorded
+checks: 1,842 Rust tests passed (the system-wide cancellation test excluded), clippy
+passed, and the self, sort, selection, feature, live, tab, terminal, and trash checks
+passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

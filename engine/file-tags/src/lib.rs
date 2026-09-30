@@ -76,7 +76,7 @@ pub fn parse_tags(raw: &[u8], case_insensitive: bool) -> Vec<String> {
 pub fn strip_tag_suffix(value: &str, case_insensitive: bool) -> String {
     let name = value.split('\n').next().unwrap_or(value);
     if case_insensitive {
-        name.to_ascii_lowercase()
+        name.to_lowercase()
     } else {
         name.to_string()
     }

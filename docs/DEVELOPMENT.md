@@ -158,9 +158,11 @@ cargo clippy --locked --workspace --all-targets
 The live check creates disposable fixtures and its own checkpoint. It exercises
 FSEvents, filters, selection, a hidden window that searches again only once shown,
 rename, Trash/recovery, Quick Look, saved-scope restoration, English-only packaging,
-fresh preference defaults, saved settings, and tab switching. A successful JSON
-report contains `"error": null`; inspect the report rather than relying only on
-the process exit status.
+fresh preference defaults, saved settings, and tab switching. The feature check uses
+isolated preferences and disposable files to drive the real window, menus, Settings,
+search history browsing, the F2 rename dialog, the shortcut recorder, and key commands.
+A successful JSON report contains `"error": null`; inspect the report rather than
+relying only on the process exit status.
 
 To check selection clearing when a background refresh completes on the Events tab:
 

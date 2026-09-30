@@ -132,10 +132,12 @@ extension Model {
   var currentSearchState: SearchState {
     SearchState(query: query, directory: directory, sensitive: sensitive)
   }
-  func restoreSearch(_ state: SearchState) {
+  /// `record` is false while browsing history, so browsing does not reorder it;
+  /// Return or moving into the results records the search as usual.
+  func restoreSearch(_ state: SearchState, record: Bool = true) {
     historyRecordWork?.cancel()
-    suppressedHistoryState = nil
-    recordRequestedState = state
+    suppressedHistoryState = record ? nil : state
+    recordRequestedState = record ? state : nil
     query = state.query
     directory = state.directory
     sensitive = state.sensitive

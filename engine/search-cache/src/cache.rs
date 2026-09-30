@@ -1452,10 +1452,22 @@ fn in_place_kind(flag: EventFlag) -> Option<NodeFileType> {
 }
 
 fn path_segment_matches(name: &str, segment: &OsStr, case_insensitive: bool) -> bool {
+    let Some(segment) = segment.to_str() else {
+        return false;
+    };
+    if name == segment {
+        return true;
+    }
+    if name.is_ascii() && segment.is_ascii() {
+        return case_insensitive && segment.eq_ignore_ascii_case(name);
+    }
+    // APFS treats composed and decomposed spellings of a name as the same name.
     if case_insensitive {
-        segment.eq_ignore_ascii_case(name)
+        name.nfc()
+            .flat_map(char::to_lowercase)
+            .eq(segment.nfc().flat_map(char::to_lowercase))
     } else {
-        OsStr::new(name) == segment
+        name.nfc().eq(segment.nfc())
     }
 }
 

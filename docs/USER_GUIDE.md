@@ -14,7 +14,7 @@ results table, and a compact bottom status bar**.
 | Main search field | Search filenames, or filter recent events when Events is selected. |
 | Folder scope field | Always visible to the right of the search field. Filters file results by folder; clear it to remove the filter. Disabled on the Events tab. |
 | Search Library button | Left of the search field, beside Aa; browse saved searches and recent history. |
-| Aa button | Left of the search field; toggles case-sensitive matching. |
+| Aa button | Left of the search field; toggles case-sensitive matching. When off, names and the `parent:`, `infolder:`, `content:`, and `tag:` filters ignore case for all letters, including accented and non-Latin ones. |
 | Results table | Name, Path, Size on disk, Modified, and Created columns, with resizable widths and single-line middle truncation. |
 | Bottom status bar | Lifecycle state (Ready, Updating, Paused; hover for index details), Files/Events segmented control with counts, rescan, selection count, and search duration. Updating also appears while folders changed on disk are read in the background. |
 | Index menu | Live Updates on/off (Paused in the status bar while off), Rescan (Option-Command-R), and Cancel Scan. |
@@ -41,7 +41,7 @@ for Reveal in Finder and Copy Path.
 | Enter in search | Submit immediately. |
 | Down from search | Enter the results. |
 | Up from the first result | Return to search. |
-| Option-Up / Option-Down | Navigate query history. |
+| Option-Up / Option-Down | Browse query history without reordering it. |
 | Shift-arrow / Command-click | Extend or modify selection using AppKit behavior. |
 | Double-click / Command-O | Open selected files. More than 50 items ask for confirmation. |
 | Command-R | Reveal in Finder. |
@@ -49,7 +49,7 @@ for Reveal in Finder and Copy Path.
 | Up / Down in Quick Look | Navigate results. |
 | Command-C | Copy file URLs. |
 | Command-Shift-C / Option-Command-C | Copy paths. |
-| F2 | Rename without overwriting an existing file. |
+| F2 | Rename without overwriting an existing file. The name is selected without its extension. |
 | F8 | Move selected files to macOS Trash. More than 50 items ask for confirmation; items inside a selected folder go with it. |
 | F9 | Open the selected folder, or a file’s parent, in the configured terminal. |
 | Command-Shift-Space (default) | Toggle the app window. Record, disable, or reset the shortcut in Settings → General. |
@@ -191,7 +191,8 @@ update-from-current, and delete actions.
 
 The latest 100 distinct successful searches are stored locally in `search-library.json`
 beside preferences. Enter, entering results, or two seconds without editing records a
-search; errors and background refreshes do not. Individual history entries can be removed,
+search; errors and background refreshes do not. Browsing with Option-Up/Down leaves the
+history order unchanged until Enter or entering the results records the search. Individual history entries can be removed,
 and Clear History preserves saved searches. Unreadable library files are preserved and
 reported rather than overwritten.
 
