@@ -527,7 +527,9 @@ struct Sample: Codable {
     // New results are shown without waiting for the coalesced pass.
     tableUpdate?()
     if selection != nil, selectionCount > 0, actions.preview.isVisible {
-      resolveSelection { [weak self] in self?.actions.preview.update($0) }
+      resolveSelection(limit: PreviewController.limit) { [weak self] in
+        self?.actions.preview.update($0)
+      }
     }
   }
 

@@ -37,8 +37,11 @@ struct State {
     events: std::collections::VecDeque<Value>,
     processed_events: u64,
     sort: Option<sort::SortStatePayload>,
-    selection: std::collections::HashSet<[u64; 2]>,
-    selection_nodes: Vec<SlabIndex>,
+    /// Selected nodes, comparable only while `selection_instance` is the cache's.
+    selection: Vec<search_cache::NodeIdentity>,
+    selection_instance: u64,
+    /// Paths of small selections, or empty; see `live::PATH_FALLBACK_LIMIT`.
+    selection_paths: Vec<std::path::PathBuf>,
     selection_positions: Vec<usize>,
     selection_generation: Option<u64>,
     metadata: metadata::Indexing,
@@ -60,8 +63,9 @@ impl State {
             events: Default::default(),
             processed_events: 0,
             sort: None,
-            selection: Default::default(),
-            selection_nodes: vec![],
+            selection: vec![],
+            selection_instance: 0,
+            selection_paths: vec![],
             selection_positions: vec![],
             selection_generation: None,
             metadata: Default::default(),
@@ -848,6 +852,7 @@ mod tests {
 
     #[test]
     fn selection_remap_tracks_ids_but_rejects_reused_nodes() {
+        use everything_mac_sdk::{EventFlag, FsEvent};
         let _lock = TEST_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let a = tmp.path().join("a.txt");
@@ -881,19 +886,108 @@ mod tests {
             let restored = reply(live::cn_selected(&mut engine, 2, true));
             assert_eq!(restored["ranges"], json!([[1, 2]]));
             assert_eq!(restored["paths"], json!([a]));
+            // Delete the selected file; a new file then reuses its slab slot.
+            fs::remove_file(&a).unwrap();
+            let c = tmp.path().join("c.txt");
+            fs::write(&c, b"c").unwrap();
             {
                 let mut state = engine.0.lock().unwrap();
-                // Simulate a retained slot now referring to an unselected file.
-                state.selection_nodes = vec![b_id];
+                let id = state.cache.last_event_id() + 1;
+                let events = vec![
+                    FsEvent {
+                        path: a.clone(),
+                        id,
+                        flag: EventFlag::ItemRemoved | EventFlag::ItemIsFile,
+                    },
+                    FsEvent {
+                        path: c.clone(),
+                        id: id + 1,
+                        flag: EventFlag::ItemCreated | EventFlag::ItemIsFile,
+                    },
+                ];
+                state.cache.handle_fs_events(events).unwrap();
+                let c_id = state.cache.node_index_for_path(&c).unwrap();
+                assert_eq!(c_id, a_id, "the new file reuses the selected slot");
+                state.results = vec![c_id, b_id];
                 state.generation = 3;
             }
+            // Neither an action nor the remap targets the file in the reused slot.
+            assert_eq!(
+                reply(live::cn_selection_paths(&mut engine, 0))["status"],
+                "error"
+            );
             let restored = reply(live::cn_selected(&mut engine, 3, true));
             assert_eq!(restored["selection_count"], 0);
             assert_eq!(restored["ranges"], json!([]));
             assert_eq!(
-                reply(live::cn_selection_paths(&mut engine))["paths"],
+                reply(live::cn_selection_paths(&mut engine, 0))["paths"],
                 json!([])
             );
+        }
+    }
+
+    #[test]
+    fn small_selections_survive_folder_rescans_and_transfer_only_found_files() {
+        use everything_mac_sdk::{EventFlag, FsEvent};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("dir");
+        fs::create_dir(&dir).unwrap();
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        fs::write(&a, b"a").unwrap();
+        fs::write(&b, b"b").unwrap();
+        let cache = SearchCache::walk_fs(tmp.path());
+        let a_id = cache.node_index_for_path(&a).unwrap();
+        let mut state = State::new(cache, tmp.path().to_owned());
+        state.results = vec![a_id];
+        state.generation = 1;
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        let ranges = CString::new("[[0,1]]").unwrap();
+        let cached = CString::new("null").unwrap();
+        unsafe {
+            let selected = reply(live::cn_select(
+                &mut engine,
+                1,
+                ranges.as_ptr(),
+                cached.as_ptr(),
+            ));
+            assert_eq!(selected["selection_count"], 1);
+            // A structural event re-creates the folder's nodes in new slots.
+            {
+                let mut state = engine.0.lock().unwrap();
+                let id = state.cache.last_event_id() + 1;
+                let flag = EventFlag::ItemCreated | EventFlag::ItemIsDir;
+                let events = vec![FsEvent {
+                    path: dir.clone(),
+                    id,
+                    flag,
+                }];
+                state.cache.handle_fs_events(events).unwrap();
+                let a_now = state.cache.node_index_for_path(&a).unwrap();
+                let b_now = state.cache.node_index_for_path(&b).unwrap();
+                state.results = vec![b_now, a_now];
+                state.generation = 2;
+            }
+            let restored = reply(live::cn_selected(&mut engine, 2, true));
+            assert_eq!(restored["ranges"], json!([[1, 2]]));
+            assert_eq!(restored["paths"], json!([a]));
+            assert_eq!(
+                reply(live::cn_selection_paths(&mut engine, 0))["paths"],
+                json!([a])
+            );
+            // A rescan that no longer finds the file transfers an empty selection
+            // instead of one that fails every action.
+            fs::remove_file(&a).unwrap();
+            let replacement = State::new(SearchCache::walk_fs(tmp.path()), tmp.path().to_owned());
+            let mut replacement = Engine(Arc::new(Mutex::new(replacement)));
+            assert_eq!(
+                reply(live::cn_transfer_selection(&mut engine, &mut replacement))["status"],
+                "ok"
+            );
+            let transferred = reply(live::cn_selection_paths(&mut replacement, 0));
+            assert_eq!(transferred["status"], "ok");
+            assert_eq!(transferred["paths"], json!([]));
         }
     }
 
@@ -1048,17 +1142,32 @@ mod tests {
                 state.generation = 0;
                 state.results.clear();
             }
-            let action = reply(live::cn_selection_paths(engine));
+            let action = reply(live::cn_selection_paths(engine, 0));
             assert_eq!(action["status"], "ok");
             assert_eq!(action["paths"].as_array().unwrap().len(), 299);
-            // A stale/reused node slot must not turn an unselected path into
-            // an action target, even though the action ignores result generations.
+            assert_eq!(
+                reply(live::cn_selection_paths(engine, 5))["paths"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                5
+            );
+            // Identities that cannot be verified (from another cache, without a
+            // path to fall back on) never become action targets.
             let saved = {
                 let mut state = (*engine).0.lock().unwrap();
-                std::mem::replace(&mut state.selection_nodes[0], removed)
+                state.selection_instance = 0;
+                std::mem::take(&mut state.selection_paths)
             };
-            assert_eq!(reply(live::cn_selection_paths(engine))["status"], "error");
-            (*engine).0.lock().unwrap().selection_nodes[0] = saved;
+            assert_eq!(
+                reply(live::cn_selection_paths(engine, 0))["status"],
+                "error"
+            );
+            {
+                let mut state = (*engine).0.lock().unwrap();
+                state.selection_instance = state.cache.instance();
+                state.selection_paths = saved;
+            }
             let mut replacement = ptr::null_mut();
             assert_eq!(
                 reply(cn_engine_open(cpath.as_ptr(), &mut replacement))["status"],
@@ -1069,14 +1178,14 @@ mod tests {
                 "ok"
             );
             assert_eq!(
-                reply(live::cn_selection_paths(replacement))["paths"]
+                reply(live::cn_selection_paths(replacement, 0))["paths"]
                     .as_array()
                     .unwrap()
                     .len(),
                 299
             );
             assert!(
-                reply(live::cn_selection_paths(engine))["paths"]
+                reply(live::cn_selection_paths(engine, 0))["paths"]
                     .as_array()
                     .unwrap()
                     .is_empty()
@@ -1102,7 +1211,7 @@ mod tests {
                     .is_empty()
             );
             assert!(
-                reply(live::cn_selection_paths(engine))["paths"]
+                reply(live::cn_selection_paths(engine, 0))["paths"]
                     .as_array()
                     .unwrap()
                     .is_empty()

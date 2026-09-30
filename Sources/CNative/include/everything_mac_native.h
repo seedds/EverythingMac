@@ -41,6 +41,7 @@ CNBuffer cn_locate(CNEngine *engine, uint64_t generation, const char *paths);
 CNBuffer cn_select(CNEngine *engine, uint64_t generation, const char *ranges, const char *cached);
 CNBuffer cn_selected(CNEngine *engine, uint64_t generation, bool paths);
 // Explicit actions resolve retained selection identities across live row invalidation.
-CNBuffer cn_selection_paths(CNEngine *engine);
+// `limit` bounds the paths returned; 0 returns every selected path.
+CNBuffer cn_selection_paths(CNEngine *engine, size_t limit);
 CNBuffer cn_transfer_selection(CNEngine *from, CNEngine *to);
 #endif

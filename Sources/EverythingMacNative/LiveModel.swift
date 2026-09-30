@@ -297,7 +297,9 @@ extension Model {
           if self.selectionCount == 0 {
             self.actions.preview.update([])
           } else {
-            self.resolveSelection { [weak self] in self?.actions.preview.update($0) }
+            self.resolveSelection(limit: PreviewController.limit) { [weak self] in
+            self?.actions.preview.update($0)
+          }
           }
         }
         if self.displayedGeneration != ticket { self.restoreSelection() }
@@ -320,7 +322,9 @@ extension Model {
         self.applyRestoredSelection(reply)
         self.revision &+= 1
         if self.selectionCount > 0 && self.actions.preview.isVisible {
-          self.resolveSelection { [weak self] in self?.actions.preview.update($0) }
+          self.resolveSelection(limit: PreviewController.limit) { [weak self] in
+            self?.actions.preview.update($0)
+          }
         }
       }
     }
@@ -335,11 +339,12 @@ extension Model {
     selectionCount = reply.selection_count ?? indices.count
     if selectionCount == 0 && actions.preview.isVisible { actions.preview.update([]) }
   }
-  func resolveSelection(_ completion: @escaping ([String]) -> Void) {
+  /// Resolves selected paths for an action; `limit` bounds them (0 for all).
+  func resolveSelection(limit: Int = 0, _ completion: @escaping ([String]) -> Void) {
     guard !selectionLoading, selectionCount > 0 else { return }
     let epoch = selectionEpoch
     let index = indexEpoch
-    engine.perform({ try decode(cn_selection_paths($0)) }) { [weak self] result in
+    engine.perform({ try decode(cn_selection_paths($0, limit)) }) { [weak self] result in
       guard let self = self, !self.closed, self.selectionEpoch == epoch,
         self.indexEpoch == index
       else { return }

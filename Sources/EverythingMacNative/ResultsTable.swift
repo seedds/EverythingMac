@@ -446,7 +446,7 @@ struct ResultsTable: NSViewRepresentable {
           !paths.isEmpty
         else { return }
         let items = paths.map { path -> NSDraggingItem in
-          let item = NSDraggingItem(pasteboardWriter: URL(fileURLWithPath: path) as NSURL)
+          let item = NSDraggingItem(pasteboardWriter: fileURL(path) as NSURL)
           item.setDraggingFrame(
             NSRect(origin: mouseDownPoint, size: NSSize(width: 24, height: 24)),
             contents: NSImage(systemSymbolName: "doc", accessibilityDescription: nil))
@@ -463,7 +463,7 @@ struct ResultsTable: NSViewRepresentable {
       -> NSPasteboardWriting?
     {
       guard let row = model.rows[row] else { return nil }
-      return URL(fileURLWithPath: row.path) as NSURL
+      return fileURL(row.path) as NSURL
     }
     @objc func menuAction(_ sender: NSMenuItem) {
       guard let action = sender.representedObject as? String else { return }

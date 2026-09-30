@@ -62,7 +62,7 @@ final class LiveCheck {
             throw messageError("Trash did not return a recovery location")
           }
           self.trashReceipts.append((url, destination))
-        }, confirmTrash: { _ in true })
+        }, confirmLarge: { _, _ in true })
       }
       if CommandLine.arguments.contains("--scan-progress-check") {
         for i in 0..<20_000 {
@@ -311,8 +311,9 @@ final class LiveCheck {
         }
       case 18:
         guard model.displayedGeneration > selectionBeforeSort, !model.selectionLoading else { return }
-        guard model.actions.preview.urls.count == 1200 else { return }
-        next("Quick Look retains all selected files after sort")
+        // Quick Look previews at most its limit of the 1,200 selected files.
+        guard model.actions.preview.urls.count == min(1200, PreviewController.limit) else { return }
+        next("Quick Look retains the selected files, up to its limit, after sort")
         model.activeTab = "events"
         // A live refresh can complete after the Files table has been hidden.
         if tabCheck { model.submit(background: true) }

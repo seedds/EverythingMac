@@ -2,11 +2,17 @@ import AppKit
 import Darwin
 import Quartz
 
+/// A file URL built from the string alone. `URL(fileURLWithPath:)` stats the path to
+/// learn whether it is a folder, which stalls the main thread for large selections.
+func fileURL(_ path: String) -> URL { URL(filePath: path, directoryHint: .inferFromPath) }
+
 final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+  /// Quick Look shows at most this many selected items.
+  static let limit = 1_000
   var urls: [URL] = []
   var navigate: ((String) -> Void)?
   func show(_ paths: [String]) {
-    urls = paths.map { URL(fileURLWithPath: $0) }
+    urls = paths.prefix(Self.limit).map(fileURL)
     guard !urls.isEmpty, let panel = QLPreviewPanel.shared() else { return }
     panel.dataSource = self
     panel.delegate = self
@@ -23,7 +29,7 @@ final class PreviewController: NSObject, QLPreviewPanelDataSource, QLPreviewPane
     guard QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared(),
       panel.isVisible
     else { return }
-    urls = paths.map { URL(fileURLWithPath: $0) }
+    urls = paths.prefix(Self.limit).map(fileURL)
     panel.reloadData()
   }
   func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { urls.count }
@@ -62,9 +68,9 @@ final class FileActions {
   let preview = PreviewController()
   let queue = DispatchQueue(label: "everything.mac.file-actions", qos: .userInitiated)
   let trashItem: (URL) throws -> Void
-  /// Asked before trashing more than `trashConfirmationThreshold` items.
-  let confirmTrash: (Int) -> Bool
-  static let trashConfirmationThreshold = 50
+  /// Asked before opening or trashing more than `confirmationThreshold` items.
+  let confirmLarge: (_ action: String, _ count: Int) -> Bool
+  static let confirmationThreshold = 50
   let pasteboard: NSPasteboard
   /// An action requested while the selection was loading; replaced by a newer request.
   private var pendingAction: DispatchWorkItem? {
@@ -72,11 +78,11 @@ final class FileActions {
   }
   init(_ model: Model, trashItem: @escaping (URL) throws -> Void = {
     try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
-  }, confirmTrash: @escaping (Int) -> Bool = FileActions.askToTrash,
+  }, confirmLarge: @escaping (String, Int) -> Bool = FileActions.askToConfirm,
     pasteboard: NSPasteboard = .general) {
     self.model = model
     self.trashItem = trashItem
-    self.confirmTrash = confirmTrash
+    self.confirmLarge = confirmLarge
     self.pasteboard = pasteboard
     preview.navigate = { [weak model] in model?.tableAction?($0) }
   }
@@ -114,17 +120,22 @@ final class FileActions {
         perform(action, paths: [path])
         return
       }
-      model.resolveSelection { [weak self] paths in self?.perform(action, paths: paths) }
+      let limit = action == "preview" ? PreviewController.limit : 0
+      model.resolveSelection(limit: limit) { [weak self] paths in
+        self?.perform(action, paths: paths)
+      }
       return
     }
     guard !paths.isEmpty else { return }
-    let urls = paths.map { URL(fileURLWithPath: $0) }
+    // URLs are built only for actions that need them.
     switch action {
     case "open":
-      for url in urls where !NSWorkspace.shared.open(url) {
+      guard paths.count <= Self.confirmationThreshold || confirmLarge(action, paths.count)
+      else { return }
+      for url in paths.map(fileURL) where !NSWorkspace.shared.open(url) {
         model.error = "Could not open \(url.path). It may have moved."
       }
-    case "reveal": NSWorkspace.shared.activateFileViewerSelecting(urls)
+    case "reveal": NSWorkspace.shared.activateFileViewerSelecting(paths.map(fileURL))
     case "preview":
       if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared()?.isVisible == true {
         QLPreviewPanel.shared()?.orderOut(nil)
@@ -133,24 +144,25 @@ final class FileActions {
       }
     case "copy":
       pasteboard.clearContents()
-      pasteboard.writeObjects(urls as [NSURL])
+      pasteboard.writeObjects(paths.map { fileURL($0) as NSURL })
     case "paths", "names":
       pasteboard.clearContents()
       pasteboard.setString(
         action == "paths"
-          ? paths.joined(separator: "\n") : urls.map(\.lastPathComponent).joined(separator: " "),
+          ? paths.joined(separator: "\n")
+          : paths.map { ($0 as NSString).lastPathComponent }.joined(separator: " "),
         forType: .string)
     case "rename": rename(paths)
     case "trash":
       let targets = Self.trashTargets(paths)
-      guard targets.count <= Self.trashConfirmationThreshold || confirmTrash(targets.count)
+      guard targets.count <= Self.confirmationThreshold || confirmLarge(action, targets.count)
       else { return }
       let trashItem = self.trashItem
       run {
         // One failure must not leave the rest of the selection behind.
         var failures: [Error] = []
         for path in targets {
-          do { try trashItem(URL(fileURLWithPath: path)) } catch { failures.append(error) }
+          do { try trashItem(fileURL(path)) } catch { failures.append(error) }
         }
         if let first = failures.first {
           throw messageError(
@@ -161,7 +173,7 @@ final class FileActions {
     case "terminal":
       let app = model.prefs.terminalApplication
       run {
-        let url = urls[0]
+        let url = fileURL(paths[0])
         let directory =
           (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory == true
           ? url : url.deletingLastPathComponent()
@@ -178,7 +190,7 @@ final class FileActions {
   }
   func rename(_ paths: [String]) {
     guard paths.count == 1, let model = model else { return }
-    let url = URL(fileURLWithPath: paths[0])
+    let url = fileURL(paths[0])
     let alert = NSAlert()
     alert.messageText = "Rename"
     alert.informativeText = url.path
@@ -230,11 +242,17 @@ final class FileActions {
       return seen.insert(path).inserted
     }
   }
-  static func askToTrash(_ count: Int) -> Bool {
+  static func askToConfirm(_ action: String, _ count: Int) -> Bool {
     let alert = NSAlert()
-    alert.messageText = "Move \(count) items to the Trash?"
-    alert.informativeText = "You can restore them from the Trash in Finder."
-    alert.addButton(withTitle: "Move to Trash")
+    if action == "trash" {
+      alert.messageText = "Move \(count) items to the Trash?"
+      alert.informativeText = "You can restore them from the Trash in Finder."
+      alert.addButton(withTitle: "Move to Trash")
+    } else {
+      alert.messageText = "Open \(count) items?"
+      alert.informativeText = "Each item opens in its default application."
+      alert.addButton(withTitle: "Open")
+    }
     alert.addButton(withTitle: "Cancel")
     return alert.runModal() == .alertFirstButtonReturn
   }

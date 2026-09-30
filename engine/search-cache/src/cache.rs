@@ -33,6 +33,24 @@ use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick, is
 /// A flag that is never set
 static NEVER_STOPPED: AtomicBool = AtomicBool::new(false);
 
+/// Distinguishes caches so identities from a replaced cache never match.
+static NEXT_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Identifies a node for as long as it exists: a removed node's slot can be reused
+/// by another node, which then has a different generation. Compare only with
+/// identities from the same cache instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeIdentity {
+    index: SlabIndex,
+    generation: u32,
+}
+
+impl NodeIdentity {
+    pub fn index(&self) -> SlabIndex {
+        self.index
+    }
+}
+
 pub struct SearchCache {
     pub(crate) file_nodes: FileNodes,
     pub(crate) sort_indexes: crate::sort_index::SortIndexes,
@@ -42,6 +60,9 @@ pub struct SearchCache {
     stop: &'static AtomicBool,
     /// Set when events updated an item's metadata in place; see `take_metadata_changed`.
     metadata_changed: bool,
+    /// Per-slot counters bumped when a node is removed; in memory only.
+    slot_generations: Vec<u32>,
+    instance: u64,
     pub(crate) skipped_cloud_files: std::sync::Mutex<HashSet<SlabIndex>>,
     #[cfg(test)]
     pub(crate) content_metadata_flags: std::collections::HashMap<PathBuf, u32>,
@@ -327,6 +348,8 @@ impl SearchCache {
             name_index,
             stop: cancel,
             metadata_changed: false,
+            slot_generations: Vec::new(),
+            instance: NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed),
             skipped_cloud_files: Default::default(),
             sort_indexes: Default::default(),
             #[cfg(test)]
@@ -357,6 +380,8 @@ impl SearchCache {
             name_index: NameIndex::default(),
             stop: cancel,
             metadata_changed: false,
+            slot_generations: Vec::new(),
+            instance: NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed),
             skipped_cloud_files: Default::default(),
             sort_indexes: Default::default(),
             #[cfg(test)]
@@ -917,7 +942,30 @@ impl SearchCache {
         for id in removed {
             self.file_nodes.try_remove(id);
             self.sort_indexes.changed(id);
+            // A later node in this slot must not match identities of this one.
+            let slot = id.get();
+            if slot >= self.slot_generations.len() {
+                self.slot_generations.resize(slot + 1, 0);
+            }
+            self.slot_generations[slot] = self.slot_generations[slot].wrapping_add(1);
         }
+    }
+
+    /// The identity of an existing node; `None` if the slot is empty.
+    pub fn node_identity(&self, index: SlabIndex) -> Option<NodeIdentity> {
+        self.file_nodes.get(index)?;
+        let generation = self.slot_generations.get(index.get()).copied().unwrap_or(0);
+        Some(NodeIdentity { index, generation })
+    }
+
+    /// Whether the node `identity` was taken from still exists, unmoved.
+    pub fn is_current(&self, identity: NodeIdentity) -> bool {
+        self.node_identity(identity.index) == Some(identity)
+    }
+
+    /// Unique per cache; identities are only comparable within one instance.
+    pub fn instance(&self) -> u64 {
+        self.instance
     }
 
     pub fn flush_snapshot_to_file(&mut self, cache_path: &Path) -> Result<()> {
@@ -5121,5 +5169,52 @@ mod tests {
         assert_eq!(names, ["Probe", "folder", "report.txt"]);
         assert_eq!(cache.search("file.txt").unwrap().len(), 1);
         assert!(cache.name_index.get("Folder").is_none());
+    }
+
+    #[test]
+    fn node_identities_survive_updates_but_not_slot_reuse() {
+        let temp = TempDir::new("node_identity").unwrap();
+        let root = temp.path();
+        let file = root.join("a.txt");
+        fs::write(&file, b"a").unwrap();
+        let mut cache = SearchCache::walk_fs(root);
+        let id = cache.node_index_for_path(&file).unwrap();
+        let identity = cache.node_identity(id).unwrap();
+        assert_eq!(identity.index(), id);
+        // An in-place update keeps the node and its identity.
+        fs::write(&file, b"longer").unwrap();
+        let modified = event(
+            &mut cache,
+            file.clone(),
+            EventFlag::ItemModified | EventFlag::ItemIsFile,
+        );
+        cache.handle_fs_events(vec![modified]).unwrap();
+        assert!(cache.is_current(identity));
+        // Another file created after the deletion reuses the slot, but not the identity.
+        fs::remove_file(&file).unwrap();
+        let removed = event(
+            &mut cache,
+            file.clone(),
+            EventFlag::ItemRemoved | EventFlag::ItemIsFile,
+        );
+        cache.handle_fs_events(vec![removed]).unwrap();
+        assert!(!cache.is_current(identity));
+        assert!(cache.node_identity(id).is_none());
+        let other = root.join("b.txt");
+        fs::write(&other, b"b").unwrap();
+        let created = event(
+            &mut cache,
+            other.clone(),
+            EventFlag::ItemCreated | EventFlag::ItemIsFile,
+        );
+        cache.handle_fs_events(vec![created]).unwrap();
+        let reused = cache.node_index_for_path(&other).unwrap();
+        assert_eq!(reused, id, "the slab reuses the freed slot");
+        assert!(!cache.is_current(identity));
+        assert!(cache.is_current(cache.node_identity(reused).unwrap()));
+        // A rebuilt cache is a new instance, so earlier identities are never compared.
+        let instance = cache.instance();
+        cache.rescan();
+        assert_ne!(cache.instance(), instance);
     }
 }

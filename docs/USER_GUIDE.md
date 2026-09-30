@@ -43,9 +43,9 @@ for Reveal in Finder and Copy Path.
 | Up from the first result | Return to search. |
 | Option-Up / Option-Down | Navigate query history. |
 | Shift-arrow / Command-click | Extend or modify selection using AppKit behavior. |
-| Double-click / Command-O | Open selected files. |
+| Double-click / Command-O | Open selected files. More than 50 items ask for confirmation. |
 | Command-R | Reveal in Finder. |
-| Space / Command-Y | Toggle Quick Look. |
+| Space / Command-Y | Toggle Quick Look for up to 1,000 selected items. |
 | Up / Down in Quick Look | Navigate results. |
 | Command-C | Copy file URLs. |
 | Command-Shift-C / Option-Command-C | Copy paths. |

@@ -2,7 +2,7 @@
 use super::*;
 use crossbeam_channel::TryRecvError;
 use everything_mac_sdk::EventWatcher;
-use search_cache::{HandleFSEError, WalkData};
+use search_cache::{HandleFSEError, NodeIdentity, WalkData};
 use std::{collections::HashSet, fs, os::fd::AsRawFd, path::PathBuf};
 
 // A filesystem syscall can wait on a disconnected volume or an OS permission
@@ -469,20 +469,26 @@ pub unsafe extern "C" fn cn_locate(
     })
 }
 
-fn path_identity(path: &Path) -> [u64; 2] {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    path.hash(&mut hasher);
-    let first = hasher.finish();
-    let mut second = std::collections::hash_map::DefaultHasher::new();
-    0x43415244494e414c_u64.hash(&mut second);
-    path.hash(&mut second);
-    [first, second.finish()]
+/// Small selections also keep their paths, so their files stay selected when a
+/// folder re-scan replaces the nodes. Larger selections keep only identities.
+const PATH_FALLBACK_LIMIT: usize = 4096;
+
+/// The node a retained selection entry refers to now: the same node while it
+/// exists unchanged, otherwise whatever node is at its remembered path.
+fn resolve_selected(state: &State, entry: usize) -> Option<NodeIdentity> {
+    let identity = state.selection[entry];
+    if state.selection_instance == state.cache.instance() && state.cache.is_current(identity) {
+        return Some(identity);
+    }
+    let path = state.selection_paths.get(entry)?;
+    state
+        .cache
+        .node_identity(state.cache.node_index_for_path(path)?)
 }
 
 /// # Safety
 /// Valid serialized handle and JSON half-open ranges, plus complete cached paths
-/// or null. Large passive selections stay in Rust as fixed-size identities.
+/// or null. Selections stay in Rust as fixed-size node identities, without paths.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cn_select(
     engine: *mut Engine,
@@ -502,23 +508,32 @@ pub unsafe extern "C" fn cn_select(
             .map_err(|_| "Engine faulted; reopen index")?;
         // An unsuccessful replacement must never leave the previous file actionable.
         state.selection.clear();
-        state.selection_nodes.clear();
+        state.selection_paths.clear();
         state.selection_positions.clear();
         state.selection_generation = None;
+        state.selection_instance = state.cache.instance();
         let mut sample = Vec::new();
         if generation != state.generation {
             let Some(paths) = cached else {
                 return Ok(json!({"status":"stale"}));
             };
+            let mut seen = HashSet::new();
             for path in paths {
-                if let Some(id) = state.cache.node_index_for_path(&path)
-                    && state.selection.insert(path_identity(&path))
+                if let Some(identity) = state
+                    .cache
+                    .node_index_for_path(&path)
+                    .and_then(|id| state.cache.node_identity(id))
+                    && seen.insert(identity)
                 {
-                    state.selection_nodes.push(id);
+                    state.selection.push(identity);
                     if sample.len() < 128 {
-                        sample.push(path);
+                        sample.push(path.clone());
                     }
+                    state.selection_paths.push(path);
                 }
+            }
+            if state.selection.len() > PATH_FALLBACK_LIMIT {
+                state.selection_paths.clear();
             }
         } else {
             if ranges
@@ -527,24 +542,34 @@ pub unsafe extern "C" fn cn_select(
             {
                 return Err("Invalid selection range".into());
             }
-            for [start, end] in ranges {
-                for i in start..end {
-                    if let Some(path) = state.cache.node_path(state.results[i]) {
-                        if state.selection.insert(path_identity(&path)) {
-                            let id = state.results[i];
-                            state.selection_nodes.push(id);
-                        }
-                        state.selection_positions.push(i);
-                        if sample.len() < 128 {
-                            sample.push(path);
-                        }
+            let mut positions: Vec<usize> = ranges
+                .iter()
+                .flat_map(|[start, end]| *start..*end)
+                .collect();
+            positions.sort_unstable();
+            positions.dedup();
+            let keep_paths = positions.len() <= PATH_FALLBACK_LIMIT;
+            state.selection.reserve(positions.len());
+            state.selection_positions.reserve(positions.len());
+            for i in positions {
+                let id = state.results[i];
+                let Some(identity) = state.cache.node_identity(id) else {
+                    continue;
+                };
+                if keep_paths || sample.len() < 128 {
+                    let Some(path) = state.cache.node_path(id) else {
+                        continue;
+                    };
+                    if sample.len() < 128 {
+                        sample.push(path.clone());
+                    }
+                    if keep_paths {
+                        state.selection_paths.push(path);
                     }
                 }
+                state.selection.push(identity);
+                state.selection_positions.push(i);
             }
-        }
-        if generation == state.generation {
-            state.selection_positions.sort_unstable();
-            state.selection_positions.dedup();
             state.selection_generation = Some(generation);
         }
         Ok(json!({"status":"ok","paths":sample,"selection_count":state.selection.len()}))
@@ -567,41 +592,46 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
         // Remap only after a new search or filesystem update. Repeated actions on
         // unchanged rows read only the selected positions, even in a broad query.
         if state.selection_generation != Some(generation) {
-            // Validate only retained selections. Rebuilding and hashing the path
-            // of every result made one selected row stall broad live searches.
-            // IDs alone are insufficient: deleted slots can be reused.
-            let selected: std::collections::HashMap<_, _> = state
-                .selection_nodes
-                .iter()
-                .filter_map(|id| {
-                    let identity = path_identity(&state.cache.node_path(*id)?);
-                    state
-                        .selection
-                        .contains(&identity)
-                        .then_some((*id, identity))
+            // Mark surviving nodes in a bitset, then keep the result rows that hold
+            // them. Identities need no paths; reused slots have new generations.
+            let alive: Vec<SlabIndex> = (0..state.selection.len())
+                .filter_map(|entry| {
+                    resolve_selected(&state, entry).map(|identity| identity.index())
                 })
                 .collect();
-            let mut surviving = std::collections::HashSet::new();
-            state.selection_positions = if selected.is_empty() {
-                vec![]
-            } else {
-                state
-                    .results
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, id)| {
-                        let identity = selected.get(id)?;
-                        surviving.insert(*identity);
-                        Some(i)
-                    })
-                    .collect()
+            let words = alive.iter().map(|id| id.get() / 64 + 1).max().unwrap_or(0);
+            let mut selected = vec![0u64; words];
+            for id in &alive {
+                selected[id.get() / 64] |= 1 << (id.get() % 64);
+            }
+            let is_selected = |id: &SlabIndex| {
+                selected
+                    .get(id.get() / 64)
+                    .is_some_and(|word| word & (1 << (id.get() % 64)) != 0)
             };
-            state.selection = surviving;
-            state.selection_nodes = state
-                .selection_positions
-                .iter()
-                .map(|&i| state.results[i])
-                .collect();
+            let mut selection = Vec::with_capacity(alive.len());
+            let mut positions = Vec::with_capacity(alive.len());
+            for (i, id) in state.results.iter().enumerate() {
+                if is_selected(id)
+                    && let Some(identity) = state.cache.node_identity(*id)
+                {
+                    selection.push(identity);
+                    positions.push(i);
+                }
+            }
+            let selection_paths = if positions.len() <= PATH_FALLBACK_LIMIT {
+                positions
+                    .iter()
+                    .map(|&i| state.cache.node_path(state.results[i]))
+                    .collect::<Option<Vec<_>>>()
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            state.selection = selection;
+            state.selection_positions = positions;
+            state.selection_paths = selection_paths;
+            state.selection_instance = state.cache.instance();
             state.selection_generation = Some(generation);
         }
         let mut ranges: Vec<[usize; 2]> = Vec::new();
@@ -626,36 +656,35 @@ pub unsafe extern "C" fn cn_selected(engine: *mut Engine, generation: u64, paths
 }
 
 /// Resolve an explicit action from retained selection identities, not result rows.
+/// `limit` bounds the paths returned (0 for all), such as for a Quick Look preview.
 /// # Safety
 /// Engine must be live and calls serialized. Reused slab slots must never target
 /// a different path after filesystem events invalidate the displayed generation.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn cn_selection_paths(engine: *mut Engine) -> Buffer {
+pub unsafe extern "C" fn cn_selection_paths(engine: *mut Engine, limit: usize) -> Buffer {
     guarded(|| {
         let engine = unsafe { engine.as_ref() }.ok_or("No index loaded")?;
         let state = engine
             .0
             .lock()
             .map_err(|_| "Engine faulted; reopen index")?;
-        let paths: Vec<_> = state
-            .selection_nodes
-            .iter()
-            .filter_map(|&id| {
-                state
-                    .cache
-                    .node_path(id)
-                    .filter(|path| state.selection.contains(&path_identity(path)))
+        let count = match limit {
+            0 => state.selection.len(),
+            limit => limit.min(state.selection.len()),
+        };
+        let paths = (0..count)
+            .map(|entry| {
+                resolve_selected(&state, entry)
+                    .and_then(|identity| state.cache.node_path(identity.index()))
             })
-            .collect();
-        if paths.len() != state.selection.len() {
-            return Err("One or more selected files moved or disappeared. Select the remaining files again.".into());
-        }
+            .collect::<Option<Vec<_>>>()
+            .ok_or("One or more selected files moved or disappeared. Select the remaining files again.")?;
         Ok(json!({"status":"ok", "paths":paths}))
     })
 }
 
 /// # Safety
-/// Distinct valid serialized handles; move only stable path identities across a rescan.
+/// Distinct valid serialized handles; move only stable paths across a rescan.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cn_transfer_selection(from: *mut Engine, to: *mut Engine) -> Buffer {
     guarded(|| {
@@ -666,20 +695,33 @@ pub unsafe extern "C" fn cn_transfer_selection(from: *mut Engine, to: *mut Engin
             let new = unsafe { to.as_ref() }.ok_or("No destination engine")?;
             let mut old = old.0.lock().map_err(|_| "Old engine faulted")?;
             let mut new = new.0.lock().map_err(|_| "New engine faulted")?;
-            new.selection_nodes = old
-                .selection_nodes
-                .iter()
-                .filter_map(|&id| {
-                    old.cache
-                        .node_path(id)
-                        .filter(|path| old.selection.contains(&path_identity(path)))
-                        .and_then(|path| new.cache.node_index_for_path(&path))
+            let paths: Vec<PathBuf> = (0..old.selection.len())
+                .filter_map(|entry| {
+                    resolve_selected(&old, entry)
+                        .and_then(|identity| old.cache.node_path(identity.index()))
                 })
                 .collect();
-            new.selection = std::mem::take(&mut old.selection);
+            new.selection.clear();
+            new.selection_paths.clear();
+            // Only files found in the new index stay selected.
+            for path in paths {
+                if let Some(identity) = new
+                    .cache
+                    .node_index_for_path(&path)
+                    .and_then(|id| new.cache.node_identity(id))
+                {
+                    new.selection.push(identity);
+                    new.selection_paths.push(path);
+                }
+            }
+            if new.selection.len() > PATH_FALLBACK_LIMIT {
+                new.selection_paths.clear();
+            }
+            new.selection_instance = new.cache.instance();
             new.selection_positions.clear();
             new.selection_generation = None;
-            old.selection_nodes.clear();
+            old.selection.clear();
+            old.selection_paths.clear();
             old.selection_positions.clear();
             old.selection_generation = None;
         }
