@@ -54,3 +54,86 @@ fn rules_are_root_relative_and_directory_rules_respect_file_kind() {
             .contains("line 2")
     );
 }
+
+fn walked_paths(node: &fswalk::Node, path: &Path, into: &mut Vec<std::path::PathBuf>) {
+    for child in &node.children {
+        let child_path = path.join(&*child.name);
+        into.push(child_path.clone());
+        walked_paths(child, &child_path, into);
+    }
+}
+
+fn listed_paths(path: &Path, rules: &Exclusions, into: &mut Vec<std::path::PathBuf>) {
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        let is_dir = entry.file_type().unwrap().is_dir();
+        let path = entry.path();
+        // The full check of every parent, as for events.
+        if rules.is_excluded(&path, is_dir) {
+            continue;
+        }
+        into.push(path.clone());
+        if is_dir {
+            listed_paths(&path, rules, into);
+        }
+    }
+}
+
+#[test]
+fn walks_check_each_entry_like_the_full_parent_check() {
+    let temp = tempdir::TempDir::new("exclusions_entries").unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    for dir in [
+        "proj/src/deep/build/out",
+        "proj/cache/inner",
+        "proj/node_modules/pkg/lib",
+        "proj/a/b/deep",
+        "top/nested/src",
+        "other/src/cache",
+        "other/build",
+    ] {
+        fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    for file in [
+        "proj/src/main.rs",
+        "proj/src/a.tmp",
+        "proj/src/deep/b.tmp",
+        "proj/src/deep/build/out/x.o",
+        "proj/cache/inner/c.txt",
+        "proj/cache.txt",
+        "proj/node_modules/pkg/lib/index.js",
+        "proj/a/b/deep/d.txt",
+        "proj/error.log",
+        "top/nested/src/e.tmp",
+        "other/src/cache/f.txt",
+        "other/cache",
+        "other/build/g.txt",
+    ] {
+        fs::write(root.join(file), "x").unwrap();
+    }
+    let rules = Exclusions::compile(
+        &root,
+        &[
+            "*.log".into(),
+            "cache/".into(),
+            "src/*.tmp".into(),
+            "**/build/**".into(),
+            "a/**/deep".into(),
+            "node_modules".into(),
+            "top/**".into(),
+        ],
+    )
+    .unwrap();
+    for start in [root.clone(), root.join("proj"), root.join("other/src")] {
+        assert!(!rules.is_excluded(&start, true));
+        let walk = WalkData::new(&start, &[], &[], false, || false).with_exclusions(rules.clone());
+        let tree = fswalk::walk_it_without_root_chain(&walk).unwrap();
+        let mut walked = Vec::new();
+        walked_paths(&tree, &start, &mut walked);
+        let mut listed = Vec::new();
+        listed_paths(&start, &rules, &mut listed);
+        walked.sort();
+        listed.sort();
+        assert_eq!(walked, listed, "walk from {start:?}");
+    }
+}

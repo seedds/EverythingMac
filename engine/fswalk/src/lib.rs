@@ -311,7 +311,7 @@ fn walk<F: Fn() -> bool + Send + Sync>(path: &Path, walk_data: &WalkData<'_, F>)
                                 }
                                 // doesn't traverse symlink
                                 if let Ok(data) = entry.file_type() {
-                                    if walk_data.exclusions.is_excluded(&path, data.is_dir()) {
+                                    if walk_data.exclusions.excludes_entry(&path, data.is_dir()) {
                                         return None;
                                     }
                                     if data.is_dir() {

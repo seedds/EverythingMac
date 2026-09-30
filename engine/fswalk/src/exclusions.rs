@@ -80,17 +80,36 @@ impl Exclusions {
             if candidate.as_os_str().is_empty() {
                 break;
             }
-            if self.rules.iter().any(|r| {
-                (!r.directory || i > 0 || is_directory)
-                    && r.matcher.is_match(if r.basename {
-                        Path::new(candidate.file_name().unwrap())
-                    } else {
-                        candidate
-                    })
-            }) {
+            if self.matches(candidate, i > 0 || is_directory) {
                 return true;
             }
         }
         false
+    }
+
+    /// `is_excluded` for an entry found by a walk, which checks only the entry: the
+    /// walk entered each parent folder after checking it, and its first folder was
+    /// either the root or checked with `is_excluded`.
+    pub(crate) fn excludes_entry(&self, path: &Path, is_directory: bool) -> bool {
+        if self.rules.is_empty() {
+            return false;
+        }
+        match path.strip_prefix(&self.root) {
+            Ok(relative) if !relative.as_os_str().is_empty() => {
+                self.matches(relative, is_directory)
+            }
+            _ => false,
+        }
+    }
+
+    fn matches(&self, candidate: &Path, is_directory: bool) -> bool {
+        self.rules.iter().any(|r| {
+            (!r.directory || is_directory)
+                && r.matcher.is_match(if r.basename {
+                    Path::new(candidate.file_name().unwrap())
+                } else {
+                    candidate
+                })
+        })
     }
 }

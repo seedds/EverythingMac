@@ -151,6 +151,52 @@ fn background_metadata_jobs_build_paths_and_skip_replaced_nodes() {
 }
 
 #[test]
+fn scanned_name_index_matches_one_built_entry_by_entry() {
+    let tmp = TempDir::new("bulk_name_index").unwrap();
+    for dir in ["b/same", "a/same/same", "c", "a/x"] {
+        fs::create_dir_all(tmp.path().join(dir)).unwrap();
+    }
+    for file in [
+        "same",
+        "a/same/same/same",
+        "b/same/z",
+        "c/z",
+        "a/x/same",
+        "a/z",
+        "é",
+        "e\u{301}",
+    ] {
+        fs::write(tmp.path().join(file), b"x").unwrap();
+    }
+    let cache = SearchCache::walk_fs(tmp.path());
+    let mut expected = crate::NameIndex::default();
+    let mut stack = vec![cache.file_nodes.root()];
+    while let Some(id) = stack.pop() {
+        // Preorder with children in stored order visits nodes in path order.
+        unsafe { expected.add_index_ordered(cache.file_nodes[id].name(), id) };
+        stack.extend(cache.file_nodes[id].children.iter().rev());
+    }
+    assert_eq!(cache.name_index.len(), expected.len());
+    for (_, node) in cache.file_nodes.iter() {
+        let name = node.name();
+        let built: Vec<_> = cache
+            .name_index
+            .get(name)
+            .unwrap()
+            .iter()
+            .copied()
+            .collect();
+        let reference: Vec<_> = expected.get(name).unwrap().iter().copied().collect();
+        assert_eq!(built, reference, "{name}");
+    }
+    assert_eq!(
+        cache.name_index.get("same").unwrap().len(),
+        6,
+        "a name in many folders keeps every node"
+    );
+}
+
+#[test]
 fn test_persistent_roundtrip() {
     let tmp = TempDir::new("persist_round").unwrap();
     fs::write(tmp.path().join("a.bin"), b"data").unwrap();

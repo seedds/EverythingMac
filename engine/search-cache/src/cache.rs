@@ -301,8 +301,13 @@ impl SearchCache {
             // Then create the slab.
             let slab_time = Instant::now();
             let mut slab = ThinSlab::new();
-            let mut name_index = NameIndex::default();
-            let slab_root = construct_node_slab_name_index(None, &node, &mut slab, &mut name_index);
+            // Every walked item, and the few folders above the root.
+            let walked = walk_data.num_files.load(Ordering::Relaxed)
+                + walk_data.num_dirs.load(Ordering::Relaxed);
+            let mut postings = Vec::with_capacity(walked + 64);
+            let slab_root = construct_node_slab(None, &node, &mut slab, &mut postings);
+            drop(node);
+            let name_index = NameIndex::from_path_order(postings, &slab);
             info!(
                 "Slab & NameIndex construction time: {:?}, slab root: {:?}, slab len: {:?}",
                 slab_time.elapsed(),
@@ -1609,11 +1614,13 @@ pub enum HandleFSEError {
 }
 
 /// Note: This function is expected to be called with WalkData which metadata is not fetched.
-fn construct_node_slab_name_index(
+/// Adds `node` and its descendants to the slab, and the address of each one's
+/// interned name to `postings`.
+fn construct_node_slab(
     parent: Option<SlabIndex>,
     node: &Node,
     slab: &mut ThinSlab<SlabNode>,
-    name_index: &mut NameIndex,
+    postings: &mut Vec<(usize, SlabIndex)>,
 ) -> SlabIndex {
     let metadata = match node.metadata {
         Some(metadata) => SlabNodeMetadataCompact::some(metadata),
@@ -1622,15 +1629,13 @@ fn construct_node_slab_name_index(
     let name = NAME_POOL.push(&node.name);
     let slab_node = SlabNode::new(parent, name, metadata);
     let index = slab.insert(slab_node);
-    unsafe {
-        // SAFETY: fswalk sorts each directory's children by name before we recurse,
-        // so this preorder traversal visits nodes in lexicographic path order.
-        name_index.add_index_ordered(name, index);
-    }
+    // fswalk sorts each directory's children by name before we recurse, so this
+    // preorder traversal visits nodes in lexicographic path order.
+    postings.push((name.as_ptr() as usize, index));
     slab[index].children = node
         .children
         .iter()
-        .map(|node| construct_node_slab_name_index(Some(index), node, slab, name_index))
+        .map(|node| construct_node_slab(Some(index), node, slab, postings))
         .collect();
     index
 }
@@ -2658,7 +2663,7 @@ mod tests {
     }
 
     #[test]
-    fn test_construct_node_slab_name_index_preserves_path_order() {
+    fn test_construct_node_slab_preserves_path_order() {
         let tree = make_node(
             "root",
             vec![
@@ -2668,8 +2673,9 @@ mod tests {
             ],
         );
         let mut slab = ThinSlab::new();
-        let mut name_index = NameIndex::default();
-        let root = construct_node_slab_name_index(None, &tree, &mut slab, &mut name_index);
+        let mut postings = Vec::new();
+        let root = construct_node_slab(None, &tree, &mut slab, &mut postings);
+        let name_index = NameIndex::from_path_order(postings, &slab);
         let file_nodes = FileNodes::new(
             PathBuf::from("/virtual/root"),
             Vec::new(),

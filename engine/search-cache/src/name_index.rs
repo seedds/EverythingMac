@@ -1,4 +1,4 @@
-use crate::{FileNodes, NAME_POOL, SlabIndex};
+use crate::{FileNodes, NAME_POOL, SlabIndex, SlabNode, ThinSlab};
 use hashbrown::HashSet;
 use rayon::prelude::*;
 use search_cancel::CancellationToken;
@@ -211,6 +211,34 @@ impl NameIndex {
 
     pub fn get_mut(&mut self, name: &str) -> Option<&mut SortedSlabIndices> {
         self.map.get_mut(name)
+    }
+
+    /// Builds the index from the address of every node's name, interned in
+    /// `NAME_POOL`, with the nodes in path order and numbered in that order, as a
+    /// new slab numbers them. Sorting and loading the map in bulk avoids a map
+    /// lookup for each node.
+    pub(crate) fn from_path_order(
+        mut postings: Vec<(usize, SlabIndex)>,
+        slab: &ThinSlab<SlabNode>,
+    ) -> Self {
+        debug_assert!(postings.is_sorted_by_key(|&(_, index)| index));
+        // Interned names are equal exactly when they share an address; only the empty
+        // name has no allocation, and it is interned once too. Sorting each name's
+        // nodes by number keeps them in path order, and sorting in place needs no
+        // second buffer of every node.
+        postings.par_sort_unstable();
+        let groups = postings.chunk_by(|a, b| a.0 == b.0);
+        let mut names = Vec::with_capacity(groups.clone().count());
+        names.extend(groups.map(|group| {
+            let indices = group.iter().map(|&(_, index)| index).collect();
+            (slab[group[0].1].name(), SortedSlabIndices { indices })
+        }));
+        drop(postings);
+        names.par_sort_unstable_by(|a, b| a.0.cmp(b.0));
+        Self {
+            map: names.into_iter().collect(),
+            ..Self::default()
+        }
     }
 
     /// # Safety

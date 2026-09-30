@@ -1,4 +1,4 @@
-#![feature(str_from_raw_parts)]
+#![feature(str_from_raw_parts, btree_set_entry)]
 use core::str;
 use parking_lot::Mutex;
 use regex::Regex;
@@ -51,10 +51,7 @@ impl NamePool {
     /// and won't be overwritten.
     pub fn push<'c>(&'c self, name: &str) -> &'c str {
         let mut inner = self.inner.lock();
-        if !inner.contains(name) {
-            inner.insert(name.into());
-        }
-        let existing = inner.get(name).unwrap();
+        let existing = inner.get_or_insert_with(name, |name| Box::from(name));
         unsafe { str::from_raw_parts(existing.as_ptr(), existing.len()) }
     }
 

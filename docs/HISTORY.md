@@ -432,6 +432,24 @@ times the pass on a copy of an index. Recorded checks: 1,660 Rust tests passed (
 system-wide cancellation test excluded), clippy passed, and the self, sort, selection,
 feature, live, tab, terminal, and trash checks passed.
 
+## Faster full scans — 0.1.73
+
+A full scan of `/` took 15–16 s: a walk of the folders on four threads, then a
+single-threaded build of the index. The walk is limited by the kernel's vnode cache,
+which is much smaller than the number of folders; more threads helped up to six and
+then made walks slower, so scans and live walks use up to six. With exclusion patterns,
+every entry was checked with each parent folder; walks now check only the entry, since
+they enter only folders that passed. Building the index looked each name up in two
+B-trees; interning now searches once and the name index is sorted and loaded in bulk.
+
+A scan took 10.6–10.8 s instead of 15.1–16.1 s, and 10.5 s instead of 16.2–16.3 s with
+four exclusion patterns; its peak memory and the memory the index holds both fell; see
+[Performance](PERFORMANCE.md#full-scans-0173). Reading each folder's dates from its
+open handle and grouping names in a hash map were measured and not adopted. The
+`scan_timing` example times scans as the app runs them. Recorded checks: 1,662 Rust
+tests passed (the system-wide cancellation test excluded), clippy passed, and the self,
+sort, selection, feature, live, tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

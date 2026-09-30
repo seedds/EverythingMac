@@ -264,6 +264,19 @@ reports `backfill_s` and the pass's CPU time. Without `--idle` it also searches 
 20 ms and reports `search_ms_during`. `same`, `different`, and `unaccessible` compare
 what was read with the values saved in the copy, so two builds can be compared.
 
+To time full scans as the app runs them, with its default scope of `/`:
+
+```bash
+cargo run --release -p everything-mac-native-prototype --example scan_timing -- / 2
+cargo run --release -p everything-mac-native-prototype --example scan_timing -- \
+  / 1 'node_modules/' '*.log'
+```
+
+The first scan warms the filesystem caches; each line gives `scan_s`, the CPU time,
+`peak_footprint_mib` (the process's peak memory as Activity Monitor counts it), and
+`index_heap_mib`, the heap memory the scanned index held. Arguments after the repeat
+count are exclusion patterns.
+
 To measure what the app costs while nobody types, and per arrow key:
 
 ```bash

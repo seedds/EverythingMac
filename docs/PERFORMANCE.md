@@ -4,17 +4,18 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.72 studies cover live updates,
+These are workstation measurements. The 0.1.60–0.1.73 studies cover live updates,
 parallel name matching, large selections, saving and startup memory, F8, rescans and
-folder walks, idle work, filters, index checks, and reading sizes and dates; the other
-matching study covers the 0.1.55 changes, and the versioned sorting studies cover
-historical releases.
+folder walks, idle work, filters, index checks, reading sizes and dates, and full scans;
+the other matching study covers the 0.1.55 changes, and the versioned sorting studies
+cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
 An empty query can be faster than a filtered query because it avoids substring matching.
 
 | Study | What it establishes |
 | --- | --- |
+| [Full scans, 0.1.73](#full-scans-0173) | A full scan of `/` with 5.08 million entries took 10.6–10.8 s instead of 15.1–16.1 s, and 10.5 s instead of 16.2–16.3 s with four exclusion patterns. Its peak memory fell from 981–983 MiB to 930–932 MiB, and the scanned index holds 133 MiB of heap instead of 163 MiB. |
 | [Reading sizes and dates, 0.1.72](#reading-sizes-and-dates-0172) | After a scan, reading the sizes and dates of 3,710,341 files took 18.1–20.7 s instead of 39.6–43.3 s, with identical values. Searches during the pass took a median 3.3 ms, against 3.1 ms before. |
 | [Checking saved indexes, 0.1.71](#checking-saved-indexes-0171) | Checking a saved index's checksum and structure adds 103–113 ms (4.4–4.8%) to opening 4,573,469 entries. A damaged copy fails in 0–2.1 s, where 0.1.70 could use more than 11 GB of memory and 100 TB of address space on one bad number. |
 | [Filters and combined queries, 0.1.70](#filters-and-combined-queries-0170) | On 4,573,469 entries, `ext:`, `type:`, `audio:` and `doc:` fell from 141–197 ms to 2–3.2 ms, `size:`, `dm:`, `dc:`, `file:` and `folder:` from 39–58 ms to 4.6–8.9 ms, `!a` and `a\|b` from 46–51 ms to about 10 ms, and a folder search whose matching folders nest from 550–795 ms to 35–37 ms, with identical results. Filtering sizes and dates the indexer had not read yet took 1.4–1.5 s instead of 2.5–2.6 s for 420,683 entries. |
@@ -33,6 +34,57 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Full scans (0.1.73)
+
+Measured on 2026-10-01 on the same Apple M4 Pro with the `scan_timing` example, which
+calls `cn_scan` as the app does, on `/` with nothing ignored: 5,078,437–5,078,654
+entries. Builds alternated; each process scanned twice, the first time after the other
+build had warmed the filesystem caches.
+
+| Measurement | 0.1.72 | 0.1.73 |
+| --- | ---: | ---: |
+| Full scan | 15.1–16.1 s | 10.6–10.8 s |
+| Full scan with four exclusion patterns | 16.2–16.3 s | 10.5 s |
+| CPU time, user / system | 4.9–5.3 s / 24.5–26.4 s | 4.0–4.2 s / 30.8–31.6 s |
+| CPU time with the patterns, user / system | 10.8 s / 23.7–23.8 s | 4.5–4.6 s / 30.4–30.5 s |
+| Peak memory (physical footprint) | 981–983 MiB | 930–932 MiB |
+| Heap memory the scanned index holds | 163 MiB | 133 MiB |
+| Indexing a 200,000-file folder moved in (`live_walk`) | 454–546 ms | 339–344 ms |
+
+A scan walks the folders, then builds the index from the walked tree.
+
+**Walking.** The walk ran on four threads. Timings of the walk alone:
+
+| Threads | Walk | System CPU |
+| ---: | ---: | ---: |
+| 4 | 13.2–14.1 s | 25–28 s |
+| 6 | 9.5–9.7 s | 30–31 s |
+| 8 | 9.2 s | 45 s |
+| 12 | 11.9 s | 106 s |
+| 16 | 17.7 s | 199 s |
+
+The kernel keeps 263,168 vnodes here, far fewer than the folders a scan of `/` opens, so
+each folder's first `lstat` or `open` recycles a vnode under a shared lock; past six
+threads the walk mostly waits for it. Scans and live folder walks now use as many
+threads as there are cores, from two to six. Opening each folder once and reading its
+dates with `fstat` instead of `lstat` did not help: the `open` then took the time
+`lstat` had, and walks took 9.3–9.9 s against 9.5–9.6 s.
+
+With exclusion patterns, every walked entry was checked with each of its parent
+folders, which doubled the scan's user CPU. The walk only enters folders it has checked,
+so it now checks each entry alone; a test compares its results with the full check.
+
+**Building the index.** Each item's name was interned with up to three searches of the
+name pool's B-tree and then looked up in the name index's B-tree, which took 2.2–2.4 s
+on one thread. Interning now searches once, and the name index is built afterwards:
+the items, numbered in path order, are sorted in parallel by the address of their
+interned name, and the names are sorted and loaded into the map in bulk. Building took
+0.91–0.96 s. Each name's list is allocated at its exact size and the map's nodes are
+full, so the index holds less memory. Grouping the items in a hash map while building
+took 1.08–1.15 s and held 137 MiB. The process's resident size briefly rose by
+100–200 MiB instead of falling, but that was freed memory the system can reclaim; the
+physical footprint, which Activity Monitor shows, fell.
 
 ## Reading sizes and dates (0.1.72)
 

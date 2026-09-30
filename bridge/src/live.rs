@@ -119,10 +119,17 @@ impl Drop for PendingWalk {
     }
 }
 
+/// Threads for walking folders. A scan of `/` opens more folders than the kernel
+/// keeps vnodes for, so each open recycles one under a shared lock: past about
+/// six threads, walks spend more time waiting than they gain.
+fn walk_threads() -> usize {
+    std::thread::available_parallelism().map_or(4, |cores| cores.get().clamp(2, 6))
+}
+
 // Like full scans, walks must not occupy the search pool while a syscall blocks.
 static WALK_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
-        .num_threads(4)
+        .num_threads(walk_threads())
         .thread_name(|i| format!("everything-mac-native-live-walk-{i}"))
         .build()
         .expect("create live walk pool")
@@ -520,7 +527,7 @@ pub unsafe extern "C" fn cn_scan(
             }
             // Do not let blocked traversal occupy the search engine's Rayon pool.
             let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(4)
+                .num_threads(walk_threads())
                 .thread_name(|i| format!("everything-mac-native-walk-{i}"))
                 .build()
                 .map_err(|e| e.to_string())?;
