@@ -1095,30 +1095,60 @@ impl SearchCache {
             .collect()
     }
 
-    /// Resolve an outstanding job immediately before dispatching its filesystem read.
-    pub fn pending_metadata_path(&self, id: SlabIndex) -> Option<PathBuf> {
-        if self.file_nodes.get(id)?.metadata.is_none() {
-            self.node_path(id)
-        } else {
-            None
+    /// Resolve outstanding jobs immediately before dispatching their filesystem reads.
+    /// Skips nodes that were removed or already have metadata. Files in one folder
+    /// share its path, which is built once for each run of siblings.
+    pub fn pending_metadata_jobs(&self, ids: &[SlabIndex]) -> Vec<(NodeIdentity, PathBuf)> {
+        let mut jobs = Vec::with_capacity(ids.len());
+        let mut folder: Option<(SlabIndex, PathBuf)> = None;
+        for &id in ids {
+            let Some(node) = self.file_nodes.get(id) else {
+                continue;
+            };
+            if !node.metadata.is_none() {
+                continue;
+            }
+            let path = match node.parent() {
+                Some(parent) => {
+                    if folder.as_ref().is_none_or(|(known, _)| *known != parent) {
+                        folder = self.node_path(parent).map(|path| (parent, path));
+                    }
+                    let Some((_, path)) = &folder else {
+                        continue;
+                    };
+                    path.join(node.name())
+                }
+                None => match self.node_path(id) {
+                    Some(path) => path,
+                    None => continue,
+                },
+            };
+            if let Some(identity) = self.node_identity(id) {
+                jobs.push((identity, path));
+            }
         }
+        jobs
     }
 
-    /// Ignore late reads if a filesystem event removed, replaced, or refreshed the node.
+    /// Stores metadata read for `pending_metadata_jobs`, ignoring late reads for nodes
+    /// that a filesystem event removed, replaced, or refreshed in the meantime.
     /// The existing snapshot format already persists size, creation and modification dates.
     pub fn store_indexed_metadata(
         &mut self,
-        id: SlabIndex,
-        path: &Path,
-        metadata: SlabNodeMetadataCompact,
+        read: &[(NodeIdentity, SlabNodeMetadataCompact)],
     ) -> bool {
-        if self.pending_metadata_path(id).as_deref() != Some(path) {
-            return false;
+        let mut stored = false;
+        for &(identity, metadata) in read {
+            let id = identity.index;
+            if !self.is_current(identity) || !self.file_nodes[id].metadata.is_none() {
+                continue;
+            }
+            let type_changed = self.file_nodes[id].file_type_hint() != metadata.file_type_hint();
+            self.file_nodes[id].metadata = metadata;
+            self.sort_indexes.metadata_changed(id, type_changed);
+            stored = true;
         }
-        let type_changed = self.file_nodes[id].file_type_hint() != metadata.file_type_hint();
-        self.file_nodes[id].metadata = metadata;
-        self.sort_indexes.metadata_changed(id, type_changed);
-        true
+        stored
     }
 
     fn expand_file_nodes_inner<const FETCH_META: bool>(

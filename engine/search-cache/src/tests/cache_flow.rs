@@ -1,4 +1,5 @@
 use super::prelude::*;
+use crate::SlabNodeMetadataCompact;
 use everything_mac_sdk::{EventFlag, FsEvent};
 use std::sync::atomic::AtomicBool;
 
@@ -81,6 +82,72 @@ fn test_expand_file_nodes_fetch_metadata() {
     // A second expand should still have metadata (cached)
     let nodes2 = cache.expand_file_nodes(&idxs);
     assert!(nodes2[0].metadata.is_some());
+}
+
+#[test]
+fn background_metadata_jobs_build_paths_and_skip_replaced_nodes() {
+    let tmp = TempDir::new("metadata_jobs").unwrap();
+    for dir in ["a/b", "c"] {
+        fs::create_dir_all(tmp.path().join(dir)).unwrap();
+    }
+    for file in ["a/one", "a/two", "a/b/three", "c/four", "five"] {
+        fs::write(tmp.path().join(file), b"x").unwrap();
+    }
+    let mut cache = SearchCache::walk_fs(tmp.path());
+    let pending = cache.pending_metadata_ids();
+    let jobs = cache.pending_metadata_jobs(&pending);
+    assert_eq!(jobs.len(), pending.len());
+    for (identity, path) in &jobs {
+        assert_eq!(cache.node_path(identity.index()).as_ref(), Some(path));
+    }
+    let mut names: Vec<_> = jobs
+        .iter()
+        .filter_map(|(_, path)| path.strip_prefix(tmp.path()).ok())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a/b/three", "a/one", "a/two", "c/four", "five"]);
+
+    // A file removed after its path was taken frees its slot for a new file.
+    let removed = tmp.path().join("a/one");
+    let (old, _) = jobs.iter().find(|(_, path)| *path == removed).unwrap();
+    fs::remove_file(&removed).unwrap();
+    fs::write(tmp.path().join("c/new"), b"new contents").unwrap();
+    let id = cache.last_event_id() + 1;
+    cache
+        .handle_fs_events(vec![
+            FsEvent {
+                path: removed.clone(),
+                id,
+                flag: EventFlag::ItemRemoved,
+            },
+            FsEvent {
+                path: tmp.path().join("c/new"),
+                id: id + 1,
+                flag: EventFlag::ItemCreated,
+            },
+        ])
+        .unwrap();
+    let new = cache
+        .node_index_for_path(&tmp.path().join("c/new"))
+        .unwrap();
+    assert_eq!(new, old.index(), "the new file reuses the slot");
+    let new_metadata = cache.file_nodes[new].metadata;
+
+    let read: Vec<_> = jobs
+        .iter()
+        .map(|(identity, _)| (*identity, SlabNodeMetadataCompact::unaccessible()))
+        .collect();
+    assert!(cache.store_indexed_metadata(&read));
+    assert_eq!(
+        cache.file_nodes[new].metadata, new_metadata,
+        "a late read for the removed file must not reach the new one"
+    );
+    assert!(cache.pending_metadata_ids().is_empty());
+    assert!(
+        !cache.store_indexed_metadata(&read),
+        "stored metadata is not replaced"
+    );
 }
 
 #[test]

@@ -220,7 +220,7 @@ mod reference {
             cache.prepare_sort_indexes();
             verify_orders(&mut cache); // Unknown dates/size and root paths.
             for (i, id) in cache.pending_metadata_ids().into_iter().enumerate() {
-                let path = cache.pending_metadata_path(id).unwrap();
+                let identity = cache.node_identity(id).unwrap();
                 let metadata = if i % 19 == 0 {
                     SlabNodeMetadataCompact::unaccessible()
                 } else {
@@ -236,7 +236,7 @@ mod reference {
                         ctime: std::num::NonZeroU64::new((i % 7) as u64),
                     })
                 };
-                assert!(cache.store_indexed_metadata(id, &path, metadata));
+                assert!(cache.store_indexed_metadata(&[(identity, metadata)]));
                 if i == 63 {
                     verify_orders(&mut cache);
                 }

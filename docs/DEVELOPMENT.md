@@ -251,6 +251,19 @@ cargo run --release -p search-cache --example query_timing -- \
 Each line gives the median time and checksums of the result order and set, so two
 builds can be compared. A `FOLDER=` prefix fills the folder field.
 
+To time the background pass that reads sizes and dates after a scan, against a copy
+of an index whose files still exist on this Mac:
+
+```bash
+cargo run --release -p everything-mac-native-prototype --example metadata_backfill -- \
+  /tmp/index-copy.db --idle
+```
+
+It removes the sizes and dates of everything but folders, as a scan leaves them, and
+reports `backfill_s` and the pass's CPU time. Without `--idle` it also searches every
+20 ms and reports `search_ms_during`. `same`, `different`, and `unaccessible` compare
+what was read with the values saved in the copy, so two builds can be compared.
+
 To measure what the app costs while nobody types, and per arrow key:
 
 ```bash

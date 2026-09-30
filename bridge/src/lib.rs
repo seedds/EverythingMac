@@ -1038,10 +1038,13 @@ mod tests {
             let row = search(10);
             assert_eq!(row["modified"], 1_600_000_000_u64);
             assert_eq!(row["created"], created);
-            let (id, stale_metadata) = {
+            let (identity, stale_metadata) = {
                 let mut state = (*engine).0.lock().unwrap();
                 let id = state.cache.node_index_for_path(&file).unwrap();
-                (id, state.cache.expand_cached_file_nodes(&[id])[0].metadata)
+                (
+                    state.cache.node_identity(id).unwrap(),
+                    state.cache.expand_cached_file_nodes(&[id])[0].metadata,
+                )
             };
             fs::write(&file, "modified contents").unwrap();
             fs::File::options()
@@ -1067,7 +1070,7 @@ mod tests {
                 assert!(
                     !state
                         .cache
-                        .store_indexed_metadata(id, &file, stale_metadata),
+                        .store_indexed_metadata(&[(identity, stale_metadata)]),
                     "A late background read must not overwrite a newer event"
                 );
                 state.dirty = true;

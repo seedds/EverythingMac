@@ -23,11 +23,21 @@ impl Indexing {
     }
 }
 
+/// Files read per batch. Each batch locks the engine twice: once to take the
+/// paths and once to store what was read.
+const BATCH: usize = 256;
+
+/// Reads scale with threads up to about four, after which the kernel spends more
+/// time per file; half the cores leaves the rest for searches.
+static WORKERS: LazyLock<usize> = LazyLock::new(|| {
+    std::thread::available_parallelism().map_or(2, |cores| (cores.get() / 2).clamp(2, 4))
+});
+
 // Globally bounded, even if an engine is closed while a volume is unresponsive.
 // This pool is independent of the search and directory-walking pools.
 static POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
     rayon::ThreadPoolBuilder::new()
-        .num_threads(2)
+        .num_threads(*WORKERS)
         .thread_name(|i| format!("everything-mac-date-index-{i}"))
         .build()
         .expect("create metadata indexing pool")
@@ -43,9 +53,9 @@ pub(super) fn start(engine: &Arc<Mutex<State>>) {
     if state.metadata.pending.is_empty() {
         return;
     }
-    state.metadata.workers = 2;
+    state.metadata.workers = *WORKERS;
     drop(state);
-    for _ in 0..2 {
+    for _ in 0..*WORKERS {
         spawn_worker(engine, |path| {
             std::fs::symlink_metadata(path)
                 .map(|m| SlabNodeMetadataCompact::some(m.into()))
@@ -72,39 +82,32 @@ impl Worker {
     fn run(self, read: impl Fn(&Path) -> SlabNodeMetadataCompact) {
         loop {
             let Some(Some(jobs)) = self.locked(|state| {
-                if state.metadata.pending.is_empty() {
+                let pending = &mut state.metadata.pending;
+                if pending.is_empty() {
                     return None;
                 }
-                let mut jobs = Vec::new();
-                for _ in 0..64 {
-                    let Some(id) = state.metadata.pending.pop_front() else {
-                        break;
-                    };
-                    if let Some(path) = state.cache.pending_metadata_path(id) {
-                        jobs.push((id, path));
-                    }
-                }
-                Some(jobs)
+                let ids: Vec<_> = pending.drain(..pending.len().min(BATCH)).collect();
+                Some(state.cache.pending_metadata_jobs(&ids))
             }) else {
                 return;
             };
-            for (id, path) in jobs {
+            let mut read_back = Vec::with_capacity(jobs.len());
+            for (identity, path) in jobs {
                 if self.0.strong_count() == 0 {
                     return;
                 }
                 // No engine ownership or mutex is retained across this syscall.
-                let metadata = read(&path);
-                let stored = self.locked(|state| {
-                    if state.cache.store_indexed_metadata(id, &path, metadata) {
-                        state.dirty = true;
-                        state.metadata.changed = true;
-                    }
-                });
-                if stored.is_none() {
-                    return;
-                }
+                read_back.push((identity, read(&path)));
             }
-            std::thread::yield_now();
+            let stored = self.locked(|state| {
+                if state.cache.store_indexed_metadata(&read_back) {
+                    state.dirty = true;
+                    state.metadata.changed = true;
+                }
+            });
+            if stored.is_none() {
+                return;
+            }
         }
     }
 
@@ -186,6 +189,39 @@ mod tests {
         state.metadata.pending = state.cache.pending_metadata_ids().into();
         state.metadata.workers = 1;
         (temp, Arc::new(Mutex::new(state)))
+    }
+
+    #[test]
+    fn worker_reads_every_pending_file_once_across_batches() {
+        let temp = tempfile::tempdir().unwrap();
+        for folder in ["a", "b", "c"] {
+            fs::create_dir(temp.path().join(folder)).unwrap();
+            for i in 0..BATCH / 2 + 1 {
+                fs::write(temp.path().join(folder).join(format!("{i}")), "x").unwrap();
+            }
+        }
+        let cache = SearchCache::walk_fs(temp.path());
+        let mut state = State::new(cache, temp.path().into());
+        state.metadata.pending = state.cache.pending_metadata_ids().into();
+        let pending = state.metadata.pending.len();
+        assert!(pending > BATCH);
+        state.metadata.workers = 1;
+        let engine = Arc::new(Mutex::new(state));
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        Worker(Arc::downgrade(&engine)).run(|path| {
+            reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            SlabNodeMetadataCompact::some(fs::symlink_metadata(path).unwrap().into())
+        });
+        assert_eq!(reads.into_inner(), pending);
+        let mut state = engine.lock().unwrap();
+        assert!(state.cache.pending_metadata_ids().is_empty());
+        assert!(!state.metadata.active());
+        assert!(state.dirty && state.metadata.changed);
+        let file = temp.path().join("b/1");
+        let id = state.cache.node_index_for_path(&file).unwrap();
+        let stored = state.cache.expand_cached_file_nodes(&[id])[0].metadata;
+        let read = SlabNodeMetadataCompact::some(fs::symlink_metadata(&file).unwrap().into());
+        assert_eq!(stored, read);
     }
 
     #[test]

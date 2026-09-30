@@ -415,6 +415,23 @@ Recorded checks: 1,658 Rust tests passed (the system-wide cancellation test excl
 clippy passed, and the self, sort, selection, feature, live (now also rebuilding a
 damaged index), tab, terminal, and trash checks passed.
 
+## Reading sizes and dates — 0.1.72
+
+After a scan, which reads only names and types, background workers read each file's
+size and dates. For each file, a worker locked the engine to take its path and again to
+store the result, and built the path both times; two workers ran. Now each worker takes
+256 paths under one lock, reads them unlocked, and stores them under one lock. Files of
+one folder share its path, and a late read is recognized by the node's slot generation.
+Half the cores work, from two to four.
+
+On 3,710,341 files the pass took 18.1–20.7 s instead of 39.6–43.3 s, reading identical
+values, and searches during it were no slower; see
+[Performance](PERFORMANCE.md#reading-sizes-and-dates-0172). `getattrlistbulk`, eight
+threads, and utility QoS were measured and not adopted. The `metadata_backfill` example
+times the pass on a copy of an index. Recorded checks: 1,660 Rust tests passed (the
+system-wide cancellation test excluded), clippy passed, and the self, sort, selection,
+feature, live, tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

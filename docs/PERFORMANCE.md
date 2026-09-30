@@ -4,16 +4,18 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.71 studies cover live updates,
+These are workstation measurements. The 0.1.60–0.1.72 studies cover live updates,
 parallel name matching, large selections, saving and startup memory, F8, rescans and
-folder walks, idle work, filters, and index checks; the other matching study covers the
-0.1.55 changes, and the versioned sorting studies cover historical releases.
+folder walks, idle work, filters, index checks, and reading sizes and dates; the other
+matching study covers the 0.1.55 changes, and the versioned sorting studies cover
+historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
 An empty query can be faster than a filtered query because it avoids substring matching.
 
 | Study | What it establishes |
 | --- | --- |
+| [Reading sizes and dates, 0.1.72](#reading-sizes-and-dates-0172) | After a scan, reading the sizes and dates of 3,710,341 files took 18.1–20.7 s instead of 39.6–43.3 s, with identical values. Searches during the pass took a median 3.3 ms, against 3.1 ms before. |
 | [Checking saved indexes, 0.1.71](#checking-saved-indexes-0171) | Checking a saved index's checksum and structure adds 103–113 ms (4.4–4.8%) to opening 4,573,469 entries. A damaged copy fails in 0–2.1 s, where 0.1.70 could use more than 11 GB of memory and 100 TB of address space on one bad number. |
 | [Filters and combined queries, 0.1.70](#filters-and-combined-queries-0170) | On 4,573,469 entries, `ext:`, `type:`, `audio:` and `doc:` fell from 141–197 ms to 2–3.2 ms, `size:`, `dm:`, `dc:`, `file:` and `folder:` from 39–58 ms to 4.6–8.9 ms, `!a` and `a\|b` from 46–51 ms to about 10 ms, and a folder search whose matching folders nest from 550–795 ms to 35–37 ms, with identical results. Filtering sizes and dates the indexer had not read yet took 1.4–1.5 s instead of 2.5–2.6 s for 420,683 entries. |
 | [Idle work and redraws, 0.1.67](#idle-work-and-redraws-0167) | A hidden window ran no searches in 30 s of file changes instead of 8–10, using 328–386 ms of CPU instead of 809–945 ms, and its results were current 92–105 ms after it was shown. Each Down Arrow in the results used 2.8–2.9 ms of main-thread time instead of 8.3–8.5 ms. |
@@ -31,6 +33,41 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Reading sizes and dates (0.1.72)
+
+Measured on 2026-10-01 on the same Apple M4 Pro with the `metadata_backfill` example on
+the read-only copy of the 4,573,469-entry snapshot, with the sizes and dates of its
+3,710,341 files and other non-folders removed, as a scan leaves them. Builds alternated.
+
+| Measurement | 0.1.71 | 0.1.72 |
+| --- | ---: | ---: |
+| Reading every file's size and dates | 39.6–39.9 s | 18.1–20.7 s |
+| CPU time in the process, user / system | 3.3 s / 33.8–34.2 s | 1.1–1.3 s / 33.7–40.5 s |
+| Same pass while searching every 20 ms | 43.3 s | 20.0 s |
+| Searches during that pass, median / p95 / max | 3.1 / 3.8 / 12.7 ms | 3.3 / 4.0 / 4.7 ms |
+
+Each pair of runs read identical values: 3,653,524–3,653,539 files matched the snapshot,
+21,246–21,262 had changed since it was saved, and 35,555–35,556 no longer existed or could
+not be read. Most of the time is the kernel's `lstat`, about 9 µs per file.
+
+Each worker now takes 256 paths under one lock, reads them with the lock released, and
+stores them under one lock, where 0.1.71 locked the engine and built each path again for
+every file. Files of one folder share its path. A read is discarded if its node was
+removed or updated meanwhile, using the node's slot generation instead of its path. The
+workers are half the cores, from two to four: four instead of two here.
+
+**Alternatives measured.**
+- Reading each folder with `getattrlistbulk` instead of one `lstat` per file took the
+  same kernel time: 34.5–37.9 s with two threads against 36.0 s. Its values matched
+  `lstat` for all but 37 of 3,674,782 files, which were protected folders that `lstat`
+  could not read.
+- Eight threads read everything in 12.7–13.2 s but used 57–61 s of system CPU, against
+  37–39 s for four.
+- Running the workers at utility QoS made the pass about 10% slower and a search wait
+  up to 23 ms, so they keep the default QoS.
+- The workers never ran at the engine queue's user-initiated QoS: new threads start at
+  the default class.
 
 ## Checking saved indexes (0.1.71)
 

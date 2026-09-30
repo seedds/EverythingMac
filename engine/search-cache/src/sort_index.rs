@@ -401,9 +401,10 @@ mod tests {
         );
 
         // Loading one file's metadata previously moved it ahead of unloaded files.
-        let path = cache.pending_metadata_path(later).unwrap();
+        let path = cache.node_path(later).unwrap();
         let metadata = SlabNodeMetadataCompact::some(fs::symlink_metadata(&path).unwrap().into());
-        assert!(cache.store_indexed_metadata(later, &path, metadata));
+        let identity = cache.node_identity(later).unwrap();
+        assert!(cache.store_indexed_metadata(&[(identity, metadata)]));
         assert!(is_clean(&cache, SortColumn::Filename));
         assert!(is_clean(&cache, SortColumn::FullPath));
         assert!(!is_clean(&cache, SortColumn::Mtime));
@@ -426,7 +427,7 @@ mod tests {
             .node_index_for_path(&temp.path().join("b/same"))
             .unwrap();
         // A node first indexed without metadata can turn out to be a directory.
-        let path = cache.pending_metadata_path(id).unwrap();
+        let identity = cache.node_identity(id).unwrap();
         let directory = SlabNodeMetadataCompact::some(NodeMetadata {
             r#type: NodeFileType::Dir,
             size: 0,
@@ -434,7 +435,7 @@ mod tests {
             ctime: None,
             mtime: None,
         });
-        assert!(cache.store_indexed_metadata(id, &path, directory));
+        assert!(cache.store_indexed_metadata(&[(identity, directory)]));
         assert!(!is_clean(&cache, SortColumn::Filename));
         assert!(is_clean(&cache, SortColumn::FullPath));
         let maintained = order_ids(&mut cache, SortColumn::Filename);
