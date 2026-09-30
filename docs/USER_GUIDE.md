@@ -50,7 +50,7 @@ for Reveal in Finder and Copy Path.
 | Command-C | Copy file URLs. |
 | Command-Shift-C / Option-Command-C | Copy paths. |
 | F2 | Rename without overwriting an existing file. |
-| F8 | Move selected files to macOS Trash. |
+| F8 | Move selected files to macOS Trash. More than 50 items ask for confirmation; items inside a selected folder go with it. |
 | F9 | Open the selected folder, or a file’s parent, in the configured terminal. |
 | Command-Shift-Space (default) | Toggle the app window. Record, disable, or reset the shortcut in Settings → General. |
 | Escape / Close Window | Hide the window; live monitoring continues. |
@@ -78,7 +78,9 @@ the background and saved in the native checkpoint. Missing metadata in current-f
 indexes is filled in automatically without a full rescan. File-change events keep these values current.
 The index details popover shows **Indexing file sizes and dates…** while this work is running;
 unavailable dates remain unknown. Sorting uses indexed values only, so date ordering
-fills in as indexing progresses. There is no sorting limit.
+fills in as indexing progresses. While indexing runs, results sorted or filtered by size
+or date refresh at most every 10 seconds and once more when it finishes; other results
+stay in place. There is no sorting limit.
 Read-only snapshot mode does not start background indexing.
 
 Snapshot format v8 stores exclusion patterns and indexed metadata. Version 7 indexes
@@ -122,7 +124,8 @@ takes precedence; migration failures preserve the old file and stop startup scan
 
 Choose a monitored root in **Settings → Index**, and use the bottom rescan button or
 **Index → Rescan** to rebuild the current scope. **File → Open Index…** opens another
-saved index read-only; **Index → Enable Live Updates** makes it live. Pausing live
+saved index read-only; **Index → Enable Live Updates** makes it live. A live index is
+saved before switching, and if the chosen file cannot be opened the current index stays loaded. Pausing live
 updates lasts until the next launch. Include paths override ignored ancestors.
 
 The app processes filesystem events and writes checkpoints during idle intervals

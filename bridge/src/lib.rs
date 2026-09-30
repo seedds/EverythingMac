@@ -3,7 +3,7 @@ mod live;
 mod metadata;
 mod sort;
 
-use search_cache::{SearchCache, SearchOptions, SearchQuery, SlabIndex, read_cache_from_file};
+use search_cache::{SearchCache, SearchOptions, SearchQuery, SlabIndex, read_cache_with_format};
 use search_cancel::CancellationToken;
 use serde_json::{Value, json};
 use std::{
@@ -31,6 +31,8 @@ struct State {
     event_root: std::path::PathBuf,
     needs_rescan: bool,
     checkpoint: Option<std::path::PathBuf>,
+    /// The saved index this state was opened from, unchanged until `dirty` is set.
+    loaded_from: Option<std::path::PathBuf>,
     dirty: bool,
     events: std::collections::VecDeque<Value>,
     processed_events: u64,
@@ -53,6 +55,7 @@ impl State {
             watcher: None,
             needs_rescan: false,
             checkpoint: None,
+            loaded_from: None,
             dirty: true,
             events: Default::default(),
             processed_events: 0,
@@ -116,17 +119,20 @@ pub unsafe extern "C" fn cn_engine_open(path: *const c_char, out: *mut *mut Engi
         }
         let path = unsafe { text(path)? };
         let started = Instant::now();
-        let storage = read_cache_from_file(Path::new(&path)).map_err(|e| format!("{e:#}"))?;
+        let (storage, legacy) =
+            read_cache_with_format(Path::new(&path)).map_err(|e| format!("{e:#}"))?;
         let root = storage.path.clone();
         let ignores = storage.ignore_paths.clone();
         let includes = storage.include_paths.clone();
         let patterns = storage.exclusion_patterns.clone();
         let cache = SearchCache::from_persistent_storage(storage, &STOP);
         let total = cache.get_total_files();
-        let engine = Box::new(Engine(Arc::new(Mutex::new(State::new(
-            cache,
-            root.clone(),
-        )))));
+        let mut state = State::new(cache, root.clone());
+        // Checkpointing an unchanged index would rewrite the same file; legacy
+        // formats are still upgraded by the next checkpoint.
+        state.dirty = legacy;
+        state.loaded_from = Some(path.into());
+        let engine = Box::new(Engine(Arc::new(Mutex::new(state))));
         unsafe {
             *out = Box::into_raw(engine);
         }
@@ -529,6 +535,52 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_rewrites_only_changed_or_relocated_indexes() {
+        use std::os::unix::fs::MetadataExt;
+        use std::time::Duration;
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        // An empty root has no pending file metadata, so nothing backfills.
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        let index = temp.path().join("index.db");
+        SearchCache::walk_fs(&root).flush_to_file(&index).unwrap();
+        let relocated = temp.path().join("relocated.db");
+        fs::copy(&index, &relocated).unwrap();
+        let inode = |path: &Path| fs::metadata(path).unwrap().ino();
+        let (index_inode, relocated_inode) = (inode(&index), inode(&relocated));
+        let index_c = CString::new(index.to_str().unwrap()).unwrap();
+        let relocated_c = CString::new(relocated.to_str().unwrap()).unwrap();
+        unsafe {
+            let mut engine = ptr::null_mut();
+            assert_eq!(
+                reply(cn_engine_open(index_c.as_ptr(), &mut engine))["status"],
+                "ok"
+            );
+            assert_eq!(
+                reply(live::cn_watch(engine, false, index_c.as_ptr()))["status"],
+                "ok"
+            );
+            let started = Instant::now();
+            while reply(live::cn_poll(engine, 0, false))["metadata_indexing"] != false {
+                assert!(started.elapsed() < Duration::from_secs(3));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(reply(live::cn_checkpoint(engine))["status"], "ok");
+            assert_eq!(inode(&index), index_inode, "unchanged index was rewritten");
+            // A different checkpoint must receive the loaded index.
+            assert_eq!(
+                reply(live::cn_watch(engine, false, relocated_c.as_ptr()))["status"],
+                "ok"
+            );
+            assert_eq!(reply(live::cn_checkpoint(engine))["status"], "ok");
+            assert_ne!(inode(&relocated), relocated_inode);
+            assert_eq!(inode(&index), index_inode);
+            cn_engine_close(engine);
+        }
+    }
+
+    #[test]
     fn date_index_backfills_legacy_snapshots_persists_and_tracks_events() {
         use everything_mac_sdk::{EventFlag, FsEvent};
         use std::time::{Duration, UNIX_EPOCH};
@@ -597,14 +649,22 @@ mod tests {
                 "ok"
             );
             let started = Instant::now();
+            let mut metadata_changed = false;
             loop {
                 let polled = reply(live::cn_poll(engine, 0, false));
+                // Backfilled dates must not invalidate the displayed results.
+                assert_eq!(polled["changed"], false);
+                metadata_changed |= polled["metadata_changed"] == true;
                 if polled["metadata_indexing"] == false {
                     break;
                 }
                 assert!(started.elapsed() < Duration::from_secs(3));
                 std::thread::sleep(Duration::from_millis(5));
             }
+            assert!(metadata_changed);
+            let rows = reply(cn_rows(engine, 5, 0, 128));
+            assert_eq!(rows["status"], "ok");
+            assert_eq!(rows["rows"][0]["modified"], 1_600_000_000_u64);
             let row = search(10);
             assert_eq!(row["modified"], 1_600_000_000_u64);
             assert_eq!(row["created"], created);

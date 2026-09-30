@@ -62,7 +62,7 @@ final class LiveCheck {
             throw messageError("Trash did not return a recovery location")
           }
           self.trashReceipts.append((url, destination))
-        })
+        }, confirmTrash: { _ in true })
       }
       if CommandLine.arguments.contains("--scan-progress-check") {
         for i in 0..<20_000 {

@@ -80,6 +80,10 @@ final class ResultsView: NSTableView {
 }
 
 struct ResultsTable: NSViewRepresentable {
+  /// Column identifiers and default widths, in their initial display order.
+  static let columns: [(name: String, width: CGFloat)] = [
+    ("Name", 260), ("Path", 450), ("Size", 100), ("Modified", 155), ("Created", 155),
+  ]
   let model: Model
   func makeCoordinator() -> Coordinator { Coordinator(model) }
   func makeNSView(context: Context) -> NSScrollView {
@@ -89,9 +93,7 @@ struct ResultsTable: NSViewRepresentable {
     table.usesAlternatingRowBackgroundColors = true
     table.allowsMultipleSelection = true
     table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
-    for (name, width) in [
-      ("Name", 260.0), ("Path", 450.0), ("Size", 100.0), ("Modified", 155.0), ("Created", 155.0),
-    ] {
+    for (name, width) in Self.columns {
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(name))
       column.title = name == "Name" ? "Filename" : name == "Size" ? "Size on disk" : name
       column.width = model.prefs.tableColumns[name] ?? width
@@ -373,17 +375,27 @@ struct ResultsTable: NSViewRepresentable {
     }
     private func icon(_ row: Row, cell: ResultCell) {
       cell.imageView?.image = icons.image(row) { [weak self] key, image in
-        guard let self = self, let table = self.table else { return }
-        let range = table.rows(in: table.visibleRect)
-        guard range.location != NSNotFound else { return }
-        for index in range.location..<NSMaxRange(range) {
-          guard
-            let visible = table.view(atColumn: 0, row: index, makeIfNecessary: false)
-              as? ResultCell,
-            let current = self.model.rows[index], visible.representedPath == current.path,
-            FileIcons.key(current) == key
-          else { continue }
+        self?.iconLoaded(key, image)
+      }
+    }
+    /// Shows a finished icon in matching visible cells. Visible rows whose request
+    /// was skipped while the loader was saturated are requested again.
+    private func iconLoaded(_ key: String, _ image: NSImage) {
+      guard let table = table else { return }
+      // Columns can be reordered, so the Name column is not necessarily first.
+      let column = table.column(withIdentifier: NSUserInterfaceItemIdentifier("Name"))
+      let range = table.rows(in: table.visibleRect)
+      guard column >= 0, range.location != NSNotFound else { return }
+      for index in range.location..<NSMaxRange(range) {
+        guard
+          let visible = table.view(atColumn: column, row: index, makeIfNecessary: false)
+            as? ResultCell,
+          let current = model.rows[index], visible.representedPath == current.path
+        else { continue }
+        if FileIcons.key(current) == key {
           visible.imageView?.image = image
+        } else if visible.imageView?.image == nil {
+          icon(current, cell: visible)
         }
       }
     }
@@ -456,8 +468,9 @@ struct ResultsTable: NSViewRepresentable {
     @objc func menuAction(_ sender: NSMenuItem) {
       guard let action = sender.representedObject as? String else { return }
       if action == "columns" {
-        for (column, width) in zip(table?.tableColumns ?? [], [260.0, 450, 100, 155, 155]) {
-          column.width = width
+        // Match by identifier: the display order changes when columns are dragged.
+        for (name, width) in ResultsTable.columns {
+          table?.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier(name))?.width = width
         }
       } else {
         actions.perform(action)

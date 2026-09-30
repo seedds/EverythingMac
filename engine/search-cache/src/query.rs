@@ -1160,8 +1160,9 @@ impl SearchCache {
             Ok(data) => SlabNodeMetadataCompact::some(data.into()),
             Err(_) => SlabNodeMetadataCompact::unaccessible(),
         };
+        let type_changed = current.file_type_hint() != metadata.file_type_hint();
         self.file_nodes[index].metadata = metadata;
-        self.sort_indexes.changed(index, false);
+        self.sort_indexes.metadata_changed(index, type_changed);
         metadata
     }
 }

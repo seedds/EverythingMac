@@ -101,12 +101,10 @@ mod reference {
         }
     }
 
+    // Directories precede files; a file's position never depends on whether
+    // its metadata has been indexed yet.
     fn type_order(node: &SearchResultNode) -> u8 {
-        match node.metadata.as_ref().map(|m| m.r#type()) {
-            Some(NodeFileType::Dir) => 0,
-            None => 2,
-            _ => 1,
-        }
+        u8::from(node.metadata.file_type_hint() != NodeFileType::Dir)
     }
 
     fn compare_entries(a: &SortEntry, b: &SortEntry, sort: &SortStatePayload) -> StdOrdering {

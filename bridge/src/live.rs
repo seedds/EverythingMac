@@ -162,6 +162,11 @@ pub unsafe extern "C" fn cn_watch(
             .0
             .lock()
             .map_err(|_| "Engine faulted; reopen index")?;
+        // A checkpoint elsewhere (such as a migrated filename) must be written
+        // even though the loaded index itself is unchanged.
+        if state.loaded_from.as_deref() != Some(path.as_path()) {
+            state.dirty = true;
+        }
         state.checkpoint = Some(path);
         state.watcher = None;
         if enabled {
@@ -189,13 +194,20 @@ pub unsafe extern "C" fn cn_poll(
             .0
             .lock()
             .map_err(|_| "Engine faulted; reopen index")?;
-        let mut changed = std::mem::take(&mut state.metadata.changed);
+        // Metadata backfill never frees or reuses slab IDs, so the current results
+        // and row generation stay valid; only structural changes invalidate them.
+        let metadata_changed = std::mem::take(&mut state.metadata.changed);
+        let mut changed = false;
+        let mut watcher_stopped = false;
         for _ in 0..16 {
             let events = match state.watcher.as_ref().map(|w| w.try_recv()) {
                 Some(Ok(events)) => events,
                 Some(Err(TryRecvError::Disconnected)) => {
+                    // Earlier batches may already have changed the index; still
+                    // invalidate old row IDs below before reporting the failure.
                     state.watcher = None;
-                    return Err("Filesystem watcher stopped. Resume Live updates or rescan.".into());
+                    watcher_stopped = true;
+                    break;
                 }
                 _ => break,
             };
@@ -207,7 +219,8 @@ pub unsafe extern "C" fn cn_poll(
                     event.path = state.root.join(suffix);
                 }
                 state.processed_events += 1;
-                state.events.push_front(json!({"id":event.id, "path":event.path,
+                // FSEvents paths are raw bytes; serializing a non-UTF-8 Path would panic.
+                state.events.push_front(json!({"id":event.id, "path":event.path.to_string_lossy(),
                     "flags":format!("{:?}",event.flag),
                     "time":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()}));
                 state.events.truncate(500);
@@ -233,6 +246,7 @@ pub unsafe extern "C" fn cn_poll(
             state.dirty = true;
         }
         let mut reply = json!({"status":"ok", "changed":changed, "needs_rescan":state.needs_rescan,
+            "metadata_changed":metadata_changed, "watcher_stopped":watcher_stopped,
             "total":state.cache.get_total_files(), "processed_events":state.processed_events,
             "metadata_indexing":state.metadata.active()});
         // The event list is only for the visible Events tab, and only when it changed.

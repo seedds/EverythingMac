@@ -71,8 +71,8 @@ impl<T> Slab<T> {
     ///
     /// We intentionally copy the classic “double until large enough” strategy from
     /// `Vec` to keep amortized O(1) `insert`s.  Growing the mmap is expensive
-    /// (flush + set_len + remap), so avoiding incremental bumps keeps the number
-    /// of system calls low.
+    /// (set_len + remap), so avoiding incremental bumps keeps the number of system
+    /// calls low.
     #[inline]
     fn ensure_capacity(&mut self, min_capacity: NonZeroUsize) -> io::Result<()> {
         if min_capacity <= self.entries_capacity {
@@ -85,16 +85,18 @@ impl<T> Slab<T> {
         self.remap(new_capacity)
     }
 
-    /// Flush dirty pages and remap the file with the new capacity.
+    /// Remap the file with the new capacity.
     ///
-    /// We now bubble up any flushing or mapping failure to the caller so the
-    /// application can decide whether to retry, fall back, or abort.  After
-    /// remapping we simply update the capacity counters; all the occupied/vacant
-    /// metadata is still valid because indices remain stable.
+    /// Both mappings are shared views of the same file pages, so writes made
+    /// through the old mapping are visible through the new one without an
+    /// `msync`; the temporary file is never read back after the slab is dropped.
+    /// Mapping failures bubble up so the application can decide whether to retry,
+    /// fall back, or abort.  After remapping we simply update the capacity
+    /// counters; all the occupied/vacant metadata is still valid because indices
+    /// remain stable.
     #[inline]
     fn remap(&mut self, new_capacity: NonZeroUsize) -> io::Result<()> {
         assert!(new_capacity.get() >= self.entries_len);
-        self.entries.flush()?;
         self.entries = Self::map_file(&mut self.file, new_capacity)?;
         self.entries_capacity = new_capacity;
         Ok(())
@@ -258,7 +260,7 @@ impl<T> Drop for Slab<T> {
                 self.entries_mut().get_unchecked_mut(i).assume_init_drop();
             }
         }
-        let _ = self.entries.flush();
+        // No flush: the backing temporary file is deleted with the slab.
     }
 }
 

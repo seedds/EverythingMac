@@ -30,6 +30,8 @@ struct Reply: Decodable {
   let exclusion_patterns: [String]?
   let changed: Bool?
   let needs_rescan: Bool?
+  let metadata_changed: Bool?
+  let watcher_stopped: Bool?
   let metadata_indexing: Bool?
   let processed_events: UInt64?
   let events: [FileEvent]?
@@ -105,13 +107,31 @@ final class Engine {
     }
   }
 
-  func open(_ path: String, completion: @escaping (Result<Reply, Error>) -> Void) {
+  /// With `keepCurrent`, the loaded index is replaced only after `path` opens,
+  /// so a failed open leaves it usable; `saveCurrent` checkpoints it first.
+  func open(
+    _ path: String, keepCurrent: Bool = false, saveCurrent: Bool = false,
+    completion: @escaping (Result<Reply, Error>) -> Void
+  ) {
     cn_cancel()
     cn_cancel_scan()
     queue.async {
-      cn_engine_close(self.handle)
-      self.handle = nil
-      let result = Result { try path.withCString { try decode(cn_engine_open($0, &self.handle)) } }
+      if saveCurrent && self.handle != nil {
+        // Best effort: unsaved live changes are otherwise replayed from FSEvents.
+        _ = try? decode(cn_checkpoint(self.handle))
+      }
+      if !keepCurrent {
+        cn_engine_close(self.handle)
+        self.handle = nil
+      }
+      var replacement: OpaquePointer?
+      let result = Result { try path.withCString { try decode(cn_engine_open($0, &replacement)) } }
+      if case .success = result {
+        cn_engine_close(self.handle)
+        self.handle = replacement
+      } else {
+        cn_engine_close(replacement)
+      }
       DispatchQueue.main.async { completion(result) }
     }
   }
@@ -248,6 +268,9 @@ struct Sample: Codable {
   @ObservationIgnored var eventsFetchedAt: UInt64?
   @ObservationIgnored var saving = false
   @ObservationIgnored var refreshPending = false
+  /// Backfilled sizes/dates may reorder or refilter the displayed results.
+  @ObservationIgnored var metadataRefreshPending = false
+  @ObservationIgnored var metadataIndexing = false
   @ObservationIgnored var lastRefresh = 0.0
   @ObservationIgnored var lastSave = ProcessInfo.processInfo.systemUptime
   @ObservationIgnored var indexEpoch: UInt64 = 0
@@ -314,7 +337,15 @@ struct Sample: Codable {
     }
   }
 
-  func load() {
+  /// The index shown before "Open Index…", restored if the chosen file cannot be opened.
+  struct LoadedIndex {
+    let snapshot: String
+    let snapshotDate: String
+    let snapshotOnly: Bool
+    let live: Bool
+  }
+
+  func load(restoringOnFailure previous: LoadedIndex? = nil) {
     debounceWork?.cancel()
     debounceWork = nil
     indexEpoch &+= 1
@@ -336,7 +367,9 @@ struct Sample: Codable {
     let path = snapshot
     let attributes = try? FileManager.default.attributesOfItem(atPath: path)
     snapshotDate = (attributes?[.modificationDate] as? Date)?.formatted() ?? "Unavailable"
-    engine.open(path) { [weak self] result in
+    engine.open(
+      path, keepCurrent: previous != nil, saveCurrent: previous.map { !$0.snapshotOnly } ?? false
+    ) { [weak self] result in
       guard let self = self, !self.closed, self.indexEpoch == epoch else { return }
       switch result {
       case .success(let reply):
@@ -361,6 +394,19 @@ struct Sample: Codable {
         self.inputAt = ProcessInfo.processInfo.systemUptime
         self.submit()
       case .failure(let error):
+        if let previous {
+          self.snapshot = previous.snapshot
+          self.snapshotDate = previous.snapshotDate
+          self.snapshotOnly = previous.snapshotOnly
+          self.live = previous.live
+          self.ready = true
+          if !self.snapshotOnly { self.startTimer() }
+          self.inputAt = ProcessInfo.processInfo.systemUptime
+          self.submit()
+          self.error =
+            "Cannot open \((path as NSString).lastPathComponent): \(error.localizedDescription). The current index is still loaded."
+          return
+        }
         self.error =
           "Cannot load this snapshot: \(error.localizedDescription). Choose a compatible EverythingMac index; no scan will be started."
         self.status = "Index unavailable"
@@ -525,11 +571,16 @@ struct Sample: Codable {
     panel.canChooseDirectories = false
     panel.allowsMultipleSelection = false
     if panel.runModal() == .OK, let url = panel.url {
+      let previous =
+        ready
+        ? LoadedIndex(
+          snapshot: snapshot, snapshotDate: snapshotDate, snapshotOnly: snapshotOnly, live: live)
+        : nil
       snapshotOnly = true
       live = false
       timer?.invalidate()
       snapshot = url.path
-      load()
+      load(restoringOnFailure: previous)
     }
   }
 

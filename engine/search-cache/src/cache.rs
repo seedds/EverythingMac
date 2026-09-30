@@ -679,7 +679,7 @@ impl SearchCache {
         let name = node.name();
         let index = self.file_nodes.insert(node);
         self.name_index.add_index(name, index, &self.file_nodes);
-        self.sort_indexes.changed(index, true);
+        self.sort_indexes.changed(index);
         index
     }
 
@@ -861,7 +861,7 @@ impl SearchCache {
     fn remove_node(&mut self, index: SlabIndex) {
         fn remove_single_node(cache: &mut SearchCache, index: SlabIndex) {
             if let Some(node) = cache.file_nodes.try_remove(index) {
-                cache.sort_indexes.changed(index, true);
+                cache.sort_indexes.changed(index);
                 let removed = cache.name_index.remove_index(node.name(), index);
                 assert!(removed, "inconsistent name index and node");
             }
@@ -1006,8 +1006,9 @@ impl SearchCache {
         if self.pending_metadata_path(id).as_deref() != Some(path) {
             return false;
         }
+        let type_changed = self.file_nodes[id].file_type_hint() != metadata.file_type_hint();
         self.file_nodes[id].metadata = metadata;
-        self.sort_indexes.changed(id, false);
+        self.sort_indexes.metadata_changed(id, type_changed);
         true
     }
 
@@ -1031,8 +1032,10 @@ impl SearchCache {
                                     Ok(metadata) => SlabNodeMetadataCompact::some(metadata.into()),
                                     Err(_) => SlabNodeMetadataCompact::unaccessible(),
                                 };
+                                let type_changed =
+                                    node.file_type_hint() != metadata.file_type_hint();
                                 node.metadata = metadata;
-                                self.sort_indexes.changed(node_index, false);
+                                self.sort_indexes.metadata_changed(node_index, type_changed);
                                 metadata
                             }
                             _ => node.metadata,

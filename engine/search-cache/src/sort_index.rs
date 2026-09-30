@@ -56,9 +56,25 @@ impl Order {
     }
 }
 impl SortIndexes {
-    pub(crate) fn changed(&mut self, id: SlabIndex, structural: bool) {
+    /// A node was inserted or removed (including a reused slab ID).
+    pub(crate) fn changed(&mut self, id: SlabIndex) {
+        self.mark(id, |_| true);
+    }
+
+    /// A node's metadata was stored or replaced. Path order never depends on
+    /// metadata, and name order only through the directory/file type hint, so a
+    /// date/size backfill leaves both intact.
+    pub(crate) fn metadata_changed(&mut self, id: SlabIndex, type_changed: bool) {
+        self.mark(id, |column| match column {
+            SortColumn::FullPath => false,
+            SortColumn::Filename => type_changed,
+            _ => true,
+        });
+    }
+
+    fn mark(&mut self, id: SlabIndex, affects: impl Fn(SortColumn) -> bool) {
         for (column, order) in COLUMNS.into_iter().zip(&mut self.orders) {
-            if !structural && column == SortColumn::FullPath {
+            if !affects(column) {
                 continue;
             }
             if let Some(order) = order
@@ -66,7 +82,13 @@ impl SortIndexes {
             {
                 order.dirty.insert(id);
                 // A rescan/backfill must not accumulate millions of hash entries.
-                if order.dirty.len() > 8192 {
+                // Merging path-keyed orders compares full paths, so they rebuild
+                // early; metadata orders merge up to an eighth of all entries.
+                let limit = match column {
+                    SortColumn::Filename | SortColumn::FullPath => 8192,
+                    _ => (order.ids.len() / 8).max(8192),
+                };
+                if order.dirty.len() > limit {
                     order.dirty.clear();
                     order.rebuild = true;
                 }
@@ -223,12 +245,10 @@ fn name(node: &SlabNode) -> &str {
         node.name()
     }
 }
+/// Directories precede files with the same name. Scans index directories with
+/// metadata, so loading a file's metadata later never changes its position.
 fn type_order(node: &SlabNode) -> u8 {
-    match node.metadata.as_ref().map(|m| m.r#type()) {
-        Some(NodeFileType::Dir) => 0,
-        None => 2,
-        _ => 1,
-    }
+    u8::from(node.file_type_hint() != NodeFileType::Dir)
 }
 fn numeric(node: &SlabNode, column: SortColumn) -> i64 {
     if matches!(column, SortColumn::Filename | SortColumn::FullPath) {
@@ -294,4 +314,107 @@ fn path_order(nodes: &FileNodes) -> Vec<SlabIndex> {
         });
     }
     ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SlabNodeMetadataCompact;
+    use fswalk::NodeMetadata;
+    use std::fs;
+
+    fn order_ids(cache: &mut SearchCache, column: SortColumn) -> Vec<SlabIndex> {
+        cache.ensure_sort_index(column);
+        cache.sort_indexes.orders[column as usize]
+            .as_ref()
+            .unwrap()
+            .ids
+            .clone()
+    }
+
+    fn is_clean(cache: &SearchCache, column: SortColumn) -> bool {
+        let order = cache.sort_indexes.orders[column as usize].as_ref().unwrap();
+        !order.rebuild && order.dirty.is_empty()
+    }
+
+    fn rebuilt_ids(cache: &mut SearchCache, column: SortColumn) -> Vec<SlabIndex> {
+        cache.sort_indexes.orders[column as usize] = None;
+        order_ids(cache, column)
+    }
+
+    #[test]
+    fn metadata_backfill_keeps_name_and_path_orders() {
+        let temp = tempdir::TempDir::new("sort-backfill").unwrap();
+        for dir in ["a", "b", "c"] {
+            fs::create_dir(temp.path().join(dir)).unwrap();
+        }
+        fs::write(temp.path().join("a/same.txt"), "a").unwrap();
+        fs::write(temp.path().join("b/same.txt"), "b").unwrap();
+        fs::create_dir(temp.path().join("c/same.txt")).unwrap();
+        let mut cache = SearchCache::walk_fs(temp.path());
+        let names = order_ids(&mut cache, SortColumn::Filename);
+        let paths = order_ids(&mut cache, SortColumn::FullPath);
+        let _ = order_ids(&mut cache, SortColumn::Mtime);
+        let directory = cache
+            .node_index_for_path(&temp.path().join("c/same.txt"))
+            .unwrap();
+        let later = cache
+            .node_index_for_path(&temp.path().join("b/same.txt"))
+            .unwrap();
+        let same: Vec<_> = names
+            .iter()
+            .copied()
+            .filter(|id| cache.file_nodes[*id].name() == "same.txt")
+            .collect();
+        assert_eq!(
+            same[0], directory,
+            "directories precede files of the same name"
+        );
+
+        // Loading one file's metadata previously moved it ahead of unloaded files.
+        let path = cache.pending_metadata_path(later).unwrap();
+        let metadata = SlabNodeMetadataCompact::some(fs::symlink_metadata(&path).unwrap().into());
+        assert!(cache.store_indexed_metadata(later, &path, metadata));
+        assert!(is_clean(&cache, SortColumn::Filename));
+        assert!(is_clean(&cache, SortColumn::FullPath));
+        assert!(!is_clean(&cache, SortColumn::Mtime));
+        assert_eq!(order_ids(&mut cache, SortColumn::Filename), names);
+        assert_eq!(rebuilt_ids(&mut cache, SortColumn::Filename), names);
+        assert_eq!(order_ids(&mut cache, SortColumn::FullPath), paths);
+    }
+
+    #[test]
+    fn a_changed_type_hint_reorders_names_incrementally() {
+        let temp = tempdir::TempDir::new("sort-type-change").unwrap();
+        for dir in ["a", "b"] {
+            fs::create_dir(temp.path().join(dir)).unwrap();
+            fs::write(temp.path().join(dir).join("same"), dir).unwrap();
+        }
+        let mut cache = SearchCache::walk_fs(temp.path());
+        let _ = order_ids(&mut cache, SortColumn::Filename);
+        let _ = order_ids(&mut cache, SortColumn::FullPath);
+        let id = cache
+            .node_index_for_path(&temp.path().join("b/same"))
+            .unwrap();
+        // A node first indexed without metadata can turn out to be a directory.
+        let path = cache.pending_metadata_path(id).unwrap();
+        let directory = SlabNodeMetadataCompact::some(NodeMetadata {
+            r#type: NodeFileType::Dir,
+            size: 0,
+            allocated_size: 0,
+            ctime: None,
+            mtime: None,
+        });
+        assert!(cache.store_indexed_metadata(id, &path, directory));
+        assert!(!is_clean(&cache, SortColumn::Filename));
+        assert!(is_clean(&cache, SortColumn::FullPath));
+        let maintained = order_ids(&mut cache, SortColumn::Filename);
+        let same: Vec<_> = maintained
+            .iter()
+            .copied()
+            .filter(|node| cache.file_nodes[*node].name() == "same")
+            .collect();
+        assert_eq!(same[0], id);
+        assert_eq!(maintained, rebuilt_ids(&mut cache, SortColumn::Filename));
+    }
 }

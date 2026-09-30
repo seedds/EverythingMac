@@ -29,8 +29,10 @@ unsafe impl Send for EventStream {}
 
 impl Drop for EventStream {
     fn drop(&mut self) {
-        unsafe {
-            FSEventStreamRelease(self.stream);
+        if !self.stream.is_null() {
+            unsafe {
+                FSEventStreamRelease(self.stream);
+            }
         }
     }
 }
@@ -72,9 +74,10 @@ impl EventStream {
 
         let paths: Vec<_> = paths.iter().map(|&x| CFString::from_str(x)).collect();
         let paths = CFArray::from_retained_objects(&paths);
+        let info: *mut EventsCallback = Box::leak(Box::new(callback));
         let mut context = FSEventStreamContext {
             version: 0,
-            info: Box::leak(Box::new(callback)) as *mut _ as *mut _,
+            info: info as *mut _,
             retain: None,
             release: Some(drop_callback),
             copyDescription: None,
@@ -93,32 +96,49 @@ impl EventStream {
                     | kFSEventStreamCreateFlagWatchRoot,
             )
         };
+        if stream.is_null() {
+            // No stream owns the context, so its release callback will never run.
+            // Dropping the callback closes the event channel for the receiver.
+            unsafe { drop_callback(info as *const c_void) };
+        }
         Self { stream }
     }
 
     // Start the FSEventStream with a dispatch queue.
     pub fn spawn(self) -> Option<EventStreamWithQueue> {
+        if self.stream.is_null() {
+            return None;
+        }
         let queue = DispatchQueue::new("everything-mac-sdk-queue", DispatchQueueAttr::SERIAL);
         unsafe { FSEventStreamSetDispatchQueue(self.stream, Some(&queue)) };
         let result = unsafe { FSEventStreamStart(self.stream) };
         if !result {
-            unsafe { FSEventStreamStop(self.stream) };
+            // Dropping `self` releases the stream after it is invalidated.
             unsafe { FSEventStreamInvalidate(self.stream) };
             return None;
         }
-        let stream = self.stream;
-        Some(EventStreamWithQueue { stream, queue })
+        // Ownership of the stream reference moves to the running stream, which
+        // releases it only after stopping and invalidating it.
+        let this = std::mem::ManuallyDrop::new(self);
+        Some(EventStreamWithQueue {
+            stream: this.stream,
+            queue,
+        })
     }
 
     // Get device id being watched by this event stream.
     pub fn dev(&self) -> dev_t {
+        if self.stream.is_null() {
+            return 0;
+        }
         unsafe { FSEventStreamGetDeviceBeingWatched(self.stream.cast_const()) }
     }
 }
 
 /// FSEventStream with dispatch queue.
 ///
-/// Dropping this struct will stop the FSEventStream and release the dispatch queue.
+/// Dropping this struct will stop, invalidate, and release the FSEventStream, then
+/// release the dispatch queue.
 pub struct EventStreamWithQueue {
     stream: FSEventStreamRef,
     #[allow(dead_code)]
@@ -130,6 +150,7 @@ impl Drop for EventStreamWithQueue {
         unsafe {
             FSEventStreamStop(self.stream);
             FSEventStreamInvalidate(self.stream);
+            FSEventStreamRelease(self.stream);
         }
     }
 }
@@ -466,6 +487,34 @@ mod tests {
                 .map(|event| event.id)
                 .collect::<Vec<_>>();
             assert_eq!(actual_ids, expected_ids, "{name}");
+        }
+    }
+
+    #[test]
+    fn dropping_a_running_stream_releases_its_callback() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_str().unwrap().to_owned();
+        for _ in 0..10 {
+            let (sender, receiver) = unbounded::<()>();
+            let stream = EventStream::new(
+                &[&path],
+                current_event_id(),
+                0.05,
+                Box::new(move |_| {
+                    let _ = sender.send(());
+                }),
+            );
+            let running = stream.spawn().expect("stream starts");
+            drop(running);
+            // Releasing the stream drops the callback, and with it the sender.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match receiver.recv_deadline(deadline) {
+                    Ok(()) => continue,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => panic!("stream callback was never released"),
+                }
+            }
         }
     }
 }

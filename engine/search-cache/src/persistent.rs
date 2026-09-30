@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, File},
-    io::{BufReader, BufWriter},
+    io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     thread::available_parallelism,
     time::Instant,
@@ -57,13 +57,19 @@ fn decode_storage<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 }
 
 pub fn read_cache_from_file(path: &Path) -> Result<PersistentStorage> {
-    let storage: PersistentStorage = match decode_storage(path) {
-        Ok(storage) => storage,
+    read_cache_with_format(path).map(|(storage, _)| storage)
+}
+
+/// Also reports whether the file uses the legacy v7 layout, which the next
+/// checkpoint should rewrite even when the index is otherwise unchanged.
+pub fn read_cache_with_format(path: &Path) -> Result<(PersistentStorage, bool)> {
+    let (storage, legacy): (PersistentStorage, bool) = match decode_storage(path) {
+        Ok(storage) => (storage, false),
         Err(current_error) => {
             let old: LegacyStorage = decode_storage(path)
                 .map_err(|_| current_error)
                 .context("Failed to decode index (supported formats: v7 and v8)")?;
-            PersistentStorage {
+            let storage = PersistentStorage {
                 version: Num,
                 exclusion_patterns: vec![],
                 last_event_id: old.last_event_id,
@@ -74,29 +80,36 @@ pub fn read_cache_from_file(path: &Path) -> Result<PersistentStorage> {
                 slab: old.slab,
                 name_index: old.name_index,
                 rescan_count: old.rescan_count,
-            }
+            };
+            (storage, true)
         }
     };
     fswalk::Exclusions::compile(&storage.path, &storage.exclusion_patterns)
         .map_err(anyhow::Error::msg)?;
-    Ok(storage)
+    Ok((storage, legacy))
 }
 
 pub fn write_cache_to_file(path: &Path, storage: &PersistentStorage) -> Result<()> {
     let cache_encode_time = Instant::now();
-    let _ = fs::create_dir_all(path.parent().unwrap());
-    let tmp_path = &path.with_extension(".sctmp");
-    {
-        let output = File::create(tmp_path).context("Failed to create cache file")?;
-        let mut output = zstd::Encoder::new(output, 6).context("Failed to create zstd encoder")?;
-        output
-            .multithread(available_parallelism().map(|x| x.get() as u32).unwrap_or(4))
-            .context("Failed to create parallel zstd encoder")?;
-        let output = output.auto_finish();
-        let mut output = BufWriter::new(output);
-        postcard::to_io(storage, &mut output).context("Failed to encode cache")?;
+    let parent = path
+        .parent()
+        .context("Cache path has no parent directory")?;
+    let _ = fs::create_dir_all(parent);
+    let tmp_path = path.with_extension("sctmp");
+    // Replace the previous snapshot only after every byte is encoded and durable.
+    let written = File::create(&tmp_path)
+        .context("Failed to create cache file")
+        .and_then(|file| encode_storage(file, storage))
+        .and_then(|file| file.sync_all().context("Failed to sync cache file"))
+        .and_then(|()| fs::rename(&tmp_path, path).context("Failed to rename cache file"));
+    if let Err(error) = written {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error);
     }
-    fs::rename(tmp_path, path).context("Failed to rename cache file")?;
+    // Best effort: persist the directory entry created by the rename.
+    if let Ok(directory) = File::open(parent) {
+        let _ = directory.sync_all();
+    }
     info!("Cache encode time: {:?}", cache_encode_time.elapsed());
     info!(
         "Cache size: {} MB",
@@ -107,6 +120,27 @@ pub fn write_cache_to_file(path: &Path, storage: &PersistentStorage) -> Result<(
             / 1024.
     );
     Ok(())
+}
+
+/// Encodes a complete zstd frame, returning buffered flush and frame-finish errors
+/// that dropping the writers would silently discard.
+fn encode_storage<W: Write>(output: W, storage: &PersistentStorage) -> Result<W> {
+    let mut encoder = zstd::Encoder::new(output, 6).context("Failed to create zstd encoder")?;
+    encoder
+        .multithread(available_parallelism().map(|x| x.get() as u32).unwrap_or(4))
+        .context("Failed to create parallel zstd encoder")?;
+    encoder
+        .include_checksum(true)
+        .context("Failed to enable cache checksum")?;
+    let mut output = BufWriter::new(encoder);
+    postcard::to_io(storage, &mut output).context("Failed to encode cache")?;
+    let encoder = output
+        .into_inner()
+        .map_err(|error| error.into_error())
+        .context("Failed to flush cache")?;
+    encoder
+        .finish()
+        .context("Failed to finish cache compression")
 }
 
 #[cfg(test)]
@@ -138,11 +172,82 @@ mod tests {
         let encoded = postcard::to_stdvec(&old).unwrap();
         fs::write(&path, zstd::encode_all(encoded.as_slice(), 1).unwrap()).unwrap();
         let before = fs::read(&path).unwrap();
-        let current = read_cache_from_file(&path).unwrap();
+        let (current, legacy) = read_cache_with_format(&path).unwrap();
+        assert!(legacy);
         assert!(current.exclusion_patterns.is_empty());
         assert_eq!(before, fs::read(&path).unwrap());
         write_cache_to_file(&path, &current).unwrap();
         assert!(decode_storage::<PersistentStorage>(&path).is_ok());
+        assert!(!read_cache_with_format(&path).unwrap().1);
+    }
+
+    /// Accepts `remaining` bytes, then fails like a full disk.
+    struct FullDisk {
+        remaining: usize,
+    }
+
+    impl Write for FullDisk {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::ErrorKind::StorageFull.into());
+            }
+            let written = buf.len().min(self.remaining);
+            self.remaining -= written;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn snapshot_storage(temp: &Path) -> PersistentStorage {
+        fs::write(temp.join("kept.txt"), "data").unwrap();
+        let path = temp.join("source.db");
+        SearchCache::walk_fs(temp).flush_to_file(&path).unwrap();
+        read_cache_from_file(&path).unwrap()
+    }
+
+    #[test]
+    fn encoding_reports_errors_from_the_final_flush() {
+        let temp = tempdir::TempDir::new("full-disk").unwrap();
+        let storage = snapshot_storage(temp.path());
+        // A tiny snapshot fits in the buffers, so the failure surfaces only while
+        // flushing and finishing the zstd frame.
+        for remaining in [0, 8, 64] {
+            assert!(encode_storage(FullDisk { remaining }, &storage).is_err());
+        }
+        assert!(
+            encode_storage(
+                FullDisk {
+                    remaining: usize::MAX
+                },
+                &storage
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn failed_write_keeps_previous_snapshot_and_removes_temp_file() {
+        let temp = tempdir::TempDir::new("failed-write").unwrap();
+        let storage = snapshot_storage(temp.path());
+        let path = temp.path().join("index.db");
+        write_cache_to_file(&path, &storage).unwrap();
+        assert!(!path.with_extension("sctmp").exists());
+        let before = fs::read(&path).unwrap();
+
+        // The temp file cannot be created: the previous snapshot is untouched.
+        fs::create_dir(path.with_extension("sctmp")).unwrap();
+        assert!(write_cache_to_file(&path, &storage).is_err());
+        assert_eq!(before, fs::read(&path).unwrap());
+        assert!(read_cache_from_file(&path).is_ok());
+
+        // The final rename fails: the encoded temp file is removed.
+        let blocked = temp.path().join("blocked");
+        fs::create_dir_all(blocked.join("occupied")).unwrap();
+        assert!(write_cache_to_file(&blocked, &storage).is_err());
+        assert!(!blocked.with_extension("sctmp").exists());
     }
 
     #[test]

@@ -72,6 +72,10 @@ extension Model {
         self.error = e.localizedDescription
         self.live = false
       case .success(let reply):
+        if reply.watcher_stopped == true {
+          self.error = "Filesystem watcher stopped. Resume Live updates or rescan."
+          self.live = false
+        }
         let processed = reply.processed_events ?? 0
         if let events = reply.events, self.activeTab == "events" {
           self.events = events
@@ -95,6 +99,18 @@ extension Model {
         }
         if reply.changed == true { self.refreshPending = true }
         let now = ProcessInfo.processInfo.systemUptime
+        // Backfilled sizes and dates leave the displayed rows valid, and visible rows
+        // load their own metadata. Re-sort or re-filter only when the view uses it:
+        // at most every 10 seconds, and once more when the backfill finishes.
+        if reply.metadata_changed == true && self.displayDependsOnMetadata {
+          self.metadataRefreshPending = true
+        }
+        let backfillFinished = self.metadataIndexing && reply.metadata_indexing != true
+        self.metadataIndexing = reply.metadata_indexing == true
+        if self.metadataRefreshPending && (backfillFinished || now - self.lastRefresh > 10) {
+          self.metadataRefreshPending = false
+          self.refreshPending = true
+        }
         if self.refreshPending && self.debounceWork == nil && !self.searching
           && now - self.lastRefresh > 1
         {
@@ -118,6 +134,13 @@ extension Model {
       }
     }
   }
+  /// Sorting or filtering by size or date, whose results change as metadata is indexed.
+  var displayDependsOnMetadata: Bool {
+    ["size", "mtime", "ctime"].contains(sortKey)
+      || query.range(of: Self.metadataFilter, options: .regularExpression) != nil
+  }
+  static let metadataFilter =
+    #"(?i)\b(size|dm|datemodified|dc|datecreated|da|dateaccessed|dr|daterun):"#
   /// A new engine restarts its event counter; drop the previous engine's list.
   func resetEvents() {
     events = []

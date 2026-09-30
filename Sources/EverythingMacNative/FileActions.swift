@@ -62,47 +62,48 @@ final class FileActions {
   let preview = PreviewController()
   let queue = DispatchQueue(label: "everything.mac.file-actions", qos: .userInitiated)
   let trashItem: (URL) throws -> Void
+  /// Asked before trashing more than `trashConfirmationThreshold` items.
+  let confirmTrash: (Int) -> Bool
+  static let trashConfirmationThreshold = 50
   let pasteboard: NSPasteboard
-  private var pendingCopy: DispatchWorkItem? {
+  /// An action requested while the selection was loading; replaced by a newer request.
+  private var pendingAction: DispatchWorkItem? {
     didSet { oldValue?.cancel() }
   }
   init(_ model: Model, trashItem: @escaping (URL) throws -> Void = {
     try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
-  }, pasteboard: NSPasteboard = .general) {
+  }, confirmTrash: @escaping (Int) -> Bool = FileActions.askToTrash,
+    pasteboard: NSPasteboard = .general) {
     self.model = model
     self.trashItem = trashItem
+    self.confirmTrash = confirmTrash
     self.pasteboard = pasteboard
     preview.navigate = { [weak model] in model?.tableAction?($0) }
   }
   func perform(_ action: String, paths explicitPaths: [String]? = nil) {
     guard let model = model else { return }
-    let copying = ["copy", "paths", "names"].contains(action)
-    if copying {
-      pendingCopy = nil
-      if model.error == "Selection is loading; try again." { model.error = nil }
-    }
-    if copying, explicitPaths == nil, model.selectionLoading {
+    pendingAction = nil
+    if model.error == "Selection is loading; try again." { model.error = nil }
+    // Every action (double-click, Space, F2, F8, F9, copy) waits for a click's
+    // queued selection instead of failing while the engine is busy.
+    if explicitPaths == nil, model.selectionLoading {
       let selection = model.selectionEpoch
       let index = model.indexEpoch
       let generation = model.generation
       let work = DispatchWorkItem { [weak self, weak model] in
         guard let self = self, let model = model else { return }
-        self.pendingCopy = nil
+        self.pendingAction = nil
         guard !model.closed, model.activeTab == "files",
           model.selectionEpoch == selection, model.indexEpoch == index,
           model.generation == generation else { return }
         self.perform(action)
       }
-      pendingCopy = work
+      pendingAction = work
       // Resume on the next main turn, after the selection reply has been applied.
       model.selectionDidLoad = { [weak model] in
         model?.selectionDidLoad = nil
         DispatchQueue.main.async(execute: work)
       }
-      return
-    }
-    guard explicitPaths != nil || !model.selectionLoading else {
-      model.error = "Selection is loading; try again."
       return
     }
     guard let paths = explicitPaths else {
@@ -141,8 +142,22 @@ final class FileActions {
         forType: .string)
     case "rename": rename(paths)
     case "trash":
+      let targets = Self.trashTargets(paths)
+      guard targets.count <= Self.trashConfirmationThreshold || confirmTrash(targets.count)
+      else { return }
       let trashItem = self.trashItem
-      run { for url in urls { try trashItem(url) } }
+      run {
+        // One failure must not leave the rest of the selection behind.
+        var failures: [Error] = []
+        for path in targets {
+          do { try trashItem(URL(fileURLWithPath: path)) } catch { failures.append(error) }
+        }
+        if let first = failures.first {
+          throw messageError(
+            "Moved \(targets.count - failures.count) of \(targets.count) items to the Trash. \(first.localizedDescription)"
+          )
+        }
+      }
     case "terminal":
       let app = model.prefs.terminalApplication
       run {
@@ -200,6 +215,29 @@ final class FileActions {
     return destination
   }
 
+  /// Items inside a selected folder go to the Trash with that folder.
+  static func trashTargets(_ paths: [String]) -> [String] {
+    let selected = Set(paths)
+    var seen = Set<String>()
+    return paths.filter { path in
+      var current = path
+      while true {
+        let parent = (current as NSString).deletingLastPathComponent
+        if parent == current || parent.isEmpty { break }
+        if selected.contains(parent) { return false }
+        current = parent
+      }
+      return seen.insert(path).inserted
+    }
+  }
+  static func askToTrash(_ count: Int) -> Bool {
+    let alert = NSAlert()
+    alert.messageText = "Move \(count) items to the Trash?"
+    alert.informativeText = "You can restore them from the Trash in Finder."
+    alert.addButton(withTitle: "Move to Trash")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
+  }
   func run(_ operation: @escaping () throws -> Void) {
     queue.async { [weak self] in
       let result = Result { try operation() }
