@@ -102,7 +102,9 @@ Creations, removals, renames, and coalesced subtree changes remove and walk the
 path again. `cn_poll` reports the first kind as `metadata_changed`, which keeps row
 IDs valid: Swift refreshes the visible rows and re-sorts only when the view sorts or
 filters by size or date. It reports the second kind as `changed`, which invalidates
-row IDs and makes Swift repeat the search. Name matching scans live names in the
+row IDs and makes Swift repeat the search. Files the app itself moves to the Trash
+leave the index at once through `cn_remove_paths`, followed by an immediate refresh;
+their FSEvents arrive later and change nothing. Name matching scans live names in the
 name index in parallel key ranges; the process-wide name pool is only used to
 intern names.
 
@@ -185,9 +187,11 @@ This trashes only disposable fixture files, verifies that unselected files remai
 and restores each fixture from the recovery location returned by macOS Trash.
 The larger selection exceeds the UI's 128-path sample, checking that every
 selected file is resolved even when the displayed result generation is stale.
-Since 0.1.57 this check has timed out at step 23, the single-file case, on unchanged
-code as well; treat that timeout as a known issue rather than a new regression until
-it is fixed, and report it explicitly.
+The report's `timings` field records, for one and for 130 files, how long the Trash
+move took and how long after the key press the rows left the results, measured with
+the app's poll timer running. From 0.1.57 to 0.1.64 this check timed out at step 23
+because it waited for a status message that the following refresh replaced within
+milliseconds; it now waits for the action's completion.
 
 To check that live file changes preserve the selected row without flickering:
 

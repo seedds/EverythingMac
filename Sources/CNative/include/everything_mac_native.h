@@ -30,6 +30,9 @@ CNBuffer cn_watch(CNEngine *engine, bool enabled, const char *checkpoint);
 // dates indexed or updated in place) keeps them valid. `watcher_stopped` reports a
 // lost FSEvents stream.
 CNBuffer cn_poll(CNEngine *engine, uint64_t since_processed, bool include_events);
+// Applies removals the app made itself (JSON array of absolute paths) without
+// waiting for FSEvents; `changed` invalidates row IDs as in cn_poll.
+CNBuffer cn_remove_paths(CNEngine *engine, const char *paths);
 CNBuffer cn_scan(const char *root, const char *ignores, const char *includes, const char *patterns, const CNRequest *request, CNEngine **out);
 CNBuffer cn_validate_exclusions(const char *patterns);
 // Skips the write when the index is unchanged since it was opened from, or last

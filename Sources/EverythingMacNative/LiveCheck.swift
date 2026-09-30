@@ -24,6 +24,14 @@ final class LiveCheck {
   var trashActions: FileActions?
   var trashExpected = Set<String>()
   var trashReceipts: [(URL, URL)] = []
+  /// Trash steps: 0 waits for the Trash move, 1 for the row to leave the results,
+  /// 2 (single file) for the restored file to be indexed again.
+  var trashPhase = 0
+  var trashStarted = 0.0
+  var totalBeforeTrash = 0
+  var removedAt: Double?
+  var removalTimer: Timer?
+  var timings: [String: Double] = [:]
   init(model: Model, output: String) {
     self.model = model
     self.output = output
@@ -115,19 +123,37 @@ final class LiveCheck {
       return
     }
     if trashCheck && (step == 23 || step == 27) {
-      guard model.status == "File action completed" else { return }
+      let label = step == 23 ? "single" : "batch"
+      guard let actions = trashActions, actions.completedActions >= (step == 23 ? 1 : 2) else {
+        return
+      }
       do {
-        guard Set(trashReceipts.map { $0.0.path }) == trashExpected,
-          trashReceipts.allSatisfy({ !FileManager.default.fileExists(atPath: $0.0.path) }),
-          FileManager.default.fileExists(atPath: root.appendingPathComponent("beta.txt").path)
-        else { throw messageError("Trash did not move exactly the selected files") }
-        try restoreTrashedFixtures()
-        if step == 23 {
+        switch trashPhase {
+        case 0:
+          guard Set(trashReceipts.map { $0.0.path }) == trashExpected,
+            trashReceipts.allSatisfy({ !FileManager.default.fileExists(atPath: $0.0.path) }),
+            FileManager.default.fileExists(atPath: root.appendingPathComponent("beta.txt").path)
+          else { throw messageError("Trash did not move exactly the selected files") }
+          timings["\(label)TrashCompletedMs"] = (actions.lastCompletedAt - trashStarted) * 1000
+          trashPhase = 1
+        case 1:
+          guard let removedAt = removedAt else { return }
+          removalTimer?.invalidate()
+          timings["\(label)RowRemovedMs"] = (removedAt - trashStarted) * 1000
+          try restoreTrashedFixtures()
+          if step == 27 {
+            model.timer?.invalidate()
+            next("F8 trashes all 130 selected files beyond the 128-path UI sample; fixtures restored")
+            finish(nil)
+          } else {
+            trashPhase = 2
+          }
+        default:
+          // The restored file must be indexed again before the next steps count results.
+          guard model.total == totalBeforeTrash else { return }
+          model.timer?.invalidate()
+          trashPhase = 0
           next("F8 trashes exactly one selected file after live row invalidation; fixture restored")
-          model.submit(background: true)
-        } else {
-          next("F8 trashes all 130 selected files beyond the 128-path UI sample; fixtures restored")
-          finish(nil)
         }
       } catch { finish(error.localizedDescription) }
       return
@@ -356,6 +382,20 @@ final class LiveCheck {
       }
     } catch { finish(error.localizedDescription) }
   }
+  /// Times F8 from the key press: a 5 ms watcher notes when the result count drops,
+  /// with the app's poll timer running as it does outside this check.
+  func startTrashTiming() {
+    totalBeforeTrash = model.total
+    let target = totalBeforeTrash - trashExpected.count
+    removedAt = nil
+    trashStarted = ProcessInfo.processInfo.systemUptime
+    removalTimer?.invalidate()
+    removalTimer = Timer.scheduledTimer(withTimeInterval: 0.005, repeats: true) { [weak self] _ in
+      guard let self = self, self.removedAt == nil, self.model.total == target else { return }
+      self.removedAt = ProcessInfo.processInfo.systemUptime
+    }
+    model.startTimer()
+  }
   func pollBeforeTerminalAction() {
     pending = true
     let ticket = model.displayedGeneration
@@ -378,6 +418,7 @@ final class LiveCheck {
         self.since = ProcessInfo.processInfo.systemUptime
         if self.trashCheck {
           self.model.status = "Testing Trash…"
+          self.startTrashTiming()
           self.trashActions?.perform("trash")
         } else {
           self.model.actions.perform("terminal")
@@ -431,6 +472,7 @@ final class LiveCheck {
     }
     let report: [String: Any] = [
       "checks": checks, "error": reportError as Any? ?? NSNull(), "fixture": directory.path,
+      "timings": timings,
     ]
     do {
       try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])

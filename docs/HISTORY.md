@@ -251,6 +251,19 @@ passed (the system-wide cancellation test excluded), clippy passed, and the self
 selection, feature, live, tab, and terminal checks passed; `--trash-check` timed out at
 step 23 as before.
 
+## Immediate Trash updates — 0.1.65
+
+Pressing F8 moved a file to the Trash within about 7 ms, but its row stayed in the
+results for about 1.5 s: the refresh right after the action ran before macOS reported
+the removal through FSEvents, and the refresh that followed the event waited for the
+one-second background-refresh limit. The app now removes the paths it trashed from
+the index at once through `cn_remove_paths` and refreshes immediately. The trash
+check, which had timed out at step 23 since 0.1.57 because it waited for a status
+message that the refresh replaced within milliseconds, now waits for the action's
+completion, passes, and reports F8 timings. Recorded checks: 1,829 Rust tests passed
+(the system-wide cancellation test excluded), clippy passed, and the self, sort,
+selection, feature, live, tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

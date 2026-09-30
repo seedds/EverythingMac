@@ -72,6 +72,9 @@ final class FileActions {
   let confirmLarge: (_ action: String, _ count: Int) -> Bool
   static let confirmationThreshold = 50
   let pasteboard: NSPasteboard
+  /// File operations finished (successfully or not) and when the last one did.
+  private(set) var completedActions = 0
+  private(set) var lastCompletedAt = 0.0
   /// An action requested while the selection was loading; replaced by a newer request.
   private var pendingAction: DispatchWorkItem? {
     didSet { oldValue?.cancel() }
@@ -158,17 +161,21 @@ final class FileActions {
       guard targets.count <= Self.confirmationThreshold || confirmLarge(action, targets.count)
       else { return }
       let trashItem = self.trashItem
-      run {
+      runRemoving {
         // One failure must not leave the rest of the selection behind.
+        var trashed: [String] = []
         var failures: [Error] = []
         for path in targets {
-          do { try trashItem(fileURL(path)) } catch { failures.append(error) }
+          do {
+            try trashItem(fileURL(path))
+            trashed.append(path)
+          } catch { failures.append(error) }
         }
-        if let first = failures.first {
-          throw messageError(
-            "Moved \(targets.count - failures.count) of \(targets.count) items to the Trash. \(first.localizedDescription)"
-          )
+        let error = failures.first.map {
+          messageError(
+            "Moved \(trashed.count) of \(targets.count) items to the Trash. \($0.localizedDescription)")
         }
+        return (trashed, error)
       }
     case "terminal":
       let app = model.prefs.terminalApplication
@@ -257,16 +264,32 @@ final class FileActions {
     return alert.runModal() == .alertFirstButtonReturn
   }
   func run(_ operation: @escaping () throws -> Void) {
+    runRemoving {
+      do {
+        try operation()
+        return ([], nil)
+      } catch { return ([], error) }
+    }
+  }
+  /// Runs a file operation off the main thread. Paths it reports as removed leave
+  /// the index at once, so results update without waiting for the filesystem events
+  /// that confirm them.
+  func runRemoving(_ operation: @escaping () -> (removed: [String], error: Error?)) {
     queue.async { [weak self] in
-      let result = Result { try operation() }
+      let (removed, error) = operation()
       DispatchQueue.main.async {
+        self?.completedActions += 1
+        self?.lastCompletedAt = ProcessInfo.processInfo.systemUptime
         guard let model = self?.model, !model.closed else { return }
-        switch result {
-        case .success:
-          model.status = "File action completed"
+        if !removed.isEmpty { model.applyRemovals(removed) }
+        if let error = error {
+          model.error = error.localizedDescription
+          return
+        }
+        model.status = "File action completed"
+        if removed.isEmpty {
           model.refreshPending = true
           model.poll()
-        case .failure(let e): model.error = e.localizedDescription
         }
       }
     }

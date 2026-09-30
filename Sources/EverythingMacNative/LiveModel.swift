@@ -146,6 +146,29 @@ extension Model {
   }
   static let metadataFilter =
     #"(?i)\b(size|dm|datemodified|dc|datecreated|da|dateaccessed|dr|daterun):"#
+  /// Drops files the app itself just removed from the index and refreshes at once,
+  /// rather than waiting for the filesystem events and the refresh throttle.
+  func applyRemovals(_ paths: [String]) {
+    guard ready, !closed else { return }
+    let json = jsonString(paths)
+    let epoch = indexEpoch
+    engine.perform({ h in try json.withCString { try decode(cn_remove_paths(h, $0)) } }) {
+      [weak self] result in
+      guard let self = self, !self.closed, self.indexEpoch == epoch else { return }
+      guard case .success(let reply) = result, reply.changed == true else {
+        self.refreshPending = true
+        self.poll()
+        return
+      }
+      if reply.needs_rescan == true {
+        self.scan(useCurrentConfig: true)
+        return
+      }
+      self.refreshPending = false
+      self.lastRefresh = ProcessInfo.processInfo.systemUptime
+      self.submit(background: true)
+    }
+  }
   /// A new engine restarts its event counter; drop the previous engine's list.
   func resetEvents() {
     events = []

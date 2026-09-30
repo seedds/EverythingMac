@@ -1,7 +1,7 @@
 //! Serialized engine operations; FSEvents callbacks only enqueue SDK events.
 use super::*;
 use crossbeam_channel::TryRecvError;
-use everything_mac_sdk::EventWatcher;
+use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent};
 use search_cache::{HandleFSEError, NodeIdentity, WalkData};
 use std::{collections::HashSet, fs, os::fd::AsRawFd, path::PathBuf};
 
@@ -259,6 +259,47 @@ pub unsafe extern "C" fn cn_poll(
             reply["events"] = json!(state.events);
         }
         Ok(reply)
+    })
+}
+
+/// # Safety
+/// Valid serialized handle and a JSON array of absolute paths. Applies removals the
+/// app made itself, such as moving files to the Trash, without waiting for FSEvents,
+/// which later report them as no-ops. Old row IDs are invalidated on change.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cn_remove_paths(engine: *mut Engine, paths: *const c_char) -> Buffer {
+    guarded(|| {
+        let paths: Vec<PathBuf> =
+            serde_json::from_str(&unsafe { text(paths)? }).map_err(|e| e.to_string())?;
+        let engine = unsafe { engine.as_ref() }.ok_or("No index loaded")?;
+        let mut state = engine
+            .0
+            .lock()
+            .map_err(|_| "Engine faulted; reopen index")?;
+        // Keep the FSEvents position: these events are replayed confirmations.
+        let id = state.cache.last_event_id();
+        let events = paths
+            .into_iter()
+            .map(|path| FsEvent {
+                path,
+                id,
+                flag: EventFlag::ItemRemoved,
+            })
+            .collect();
+        let changed = match state.cache.handle_fs_events(events) {
+            Ok(changed) => changed,
+            Err(HandleFSEError::Rescan) => {
+                state.watcher = None;
+                state.needs_rescan = true;
+                true
+            }
+        };
+        if changed {
+            state.results.clear();
+            state.generation = 0;
+            state.dirty = true;
+        }
+        Ok(json!({"status":"ok", "changed":changed, "needs_rescan":state.needs_rescan}))
     })
 }
 

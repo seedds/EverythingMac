@@ -4,8 +4,8 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.64 studies cover live updates,
-parallel name matching, large selections, and saving and startup memory; the other matching study covers the
+These are workstation measurements. The 0.1.60–0.1.65 studies cover live updates,
+parallel name matching, large selections, saving and startup memory, and F8; the other matching study covers the
 0.1.55 changes, and the versioned sorting studies cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
 Search/sort times exclude index opening and UI rendering unless a table says otherwise.
@@ -13,6 +13,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Moving files to the Trash, 0.1.65](#moving-files-to-the-trash-0165) | After F8, a trashed file left the results after 14–20 ms instead of about 1.5 s, and 130 files after 70–85 ms instead of 0.5–1 s. |
 | [Saving and startup memory, 0.1.64](#saving-and-startup-memory-0164) | Opening 4,573,469 entries fell from 2.67 s and 818 MiB to 2.15 s and 538 MiB; each index save holds the engine for about 340 ms instead of 415–440 ms and needs 188 MiB less extra memory, and idle saves happen at most every 10 minutes. |
 | [Large selections, 0.1.62](#large-selections-0162) | Selecting all 4,573,469 results fell from about 2.8 s and 239 MiB to 37 ms and 70 MiB, and restoring that selection after a search from about 4 s to about 70 ms. |
 | [Parallel name matching, 0.1.61](#parallel-name-matching-0161) | Unscoped case-insensitive name queries fell from 26–188 ms to 3–10.5 ms on 4,573,469 entries, with identical ordered results; folder-scoped queries gained less, and exact/prefix lookups, the all-files query, and index loading were unchanged. |
@@ -25,6 +26,26 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Moving files to the Trash (0.1.65)
+
+Measured on 2026-09-30 with `./run.sh --live-check … --trash-check`, which trashes
+disposable fixture files with the real app model and file actions and restores them.
+Timing starts when F8's action runs; a 5 ms timer notes when the result count drops,
+with the app's normal 0.5 s poll timer running. The 0.1.64 figures come from 0.1.64
+built with the same check. Each build ran three times.
+
+| Measurement | 0.1.64 | 0.1.65 |
+| --- | ---: | ---: |
+| One file: Trash move finished | 7.0–7.5 ms | 6.5–7.4 ms |
+| One file: row left the results | 1,514–1,544 ms | 14–20 ms |
+| 130 files: Trash moves finished | 43–79 ms | 62–69 ms |
+| 130 files: rows left the results | 518–1,026 ms | 70–85 ms |
+
+The Trash move itself was already fast. In 0.1.64 the refresh right after the action
+ran before macOS reported the removal, and the refresh after the FSEvents arrived
+waited for the one-second background-refresh limit. Version 0.1.65 removes the trashed
+paths from the index directly and refreshes immediately.
 
 ## Saving and startup memory (0.1.64)
 

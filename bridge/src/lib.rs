@@ -605,6 +605,43 @@ mod tests {
     }
 
     #[test]
+    fn removed_paths_leave_the_index_before_their_events() {
+        use everything_mac_sdk::{EventFlag, FsEvent};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let gone = tmp.path().join("gone.txt");
+        let kept = tmp.path().join("kept.txt");
+        fs::write(&gone, b"g").unwrap();
+        fs::write(&kept, b"k").unwrap();
+        let cache = SearchCache::walk_fs(tmp.path());
+        let ids = [&gone, &kept].map(|path| cache.node_index_for_path(path).unwrap());
+        let mut state = State::new(cache, tmp.path().to_owned());
+        state.results = ids.to_vec();
+        state.generation = 1;
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        fs::remove_file(&gone).unwrap();
+        let paths = CString::new(json!([gone, kept]).to_string()).unwrap();
+        unsafe {
+            let removed = reply(live::cn_remove_paths(&mut engine, paths.as_ptr()));
+            assert_eq!(removed["changed"], true);
+            assert_eq!(reply(cn_rows(&mut engine, 1, 0, 10))["status"], "stale");
+        }
+        let mut state = engine.0.lock().unwrap();
+        assert!(state.cache.node_index_for_path(&gone).is_none());
+        // A path that still exists is scanned again rather than dropped.
+        assert!(state.cache.node_index_for_path(&kept).is_some());
+        // The event confirming the removal arrives later and changes nothing.
+        let id = state.cache.last_event_id() + 1;
+        let flag = EventFlag::ItemRemoved | EventFlag::ItemIsFile;
+        let confirmation = vec![FsEvent {
+            path: gone.clone(),
+            id,
+            flag,
+        }];
+        assert!(!state.cache.handle_fs_events(confirmation).unwrap());
+    }
+
+    #[test]
     fn attribute_events_keep_results_and_report_metadata() {
         use everything_mac_sdk::{EventFlag, FsEvent};
         let _lock = TEST_LOCK.lock().unwrap();
