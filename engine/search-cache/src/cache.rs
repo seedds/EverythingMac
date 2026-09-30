@@ -64,11 +64,6 @@ pub struct SearchCache {
     /// Per-slot counters bumped when a node is removed; in memory only.
     slot_generations: Vec<u32>,
     instance: u64,
-    pub(crate) skipped_cloud_files: std::sync::Mutex<HashSet<SlabIndex>>,
-    #[cfg(test)]
-    pub(crate) content_metadata_flags: std::collections::HashMap<PathBuf, u32>,
-    #[cfg(test)]
-    pub(crate) content_open_count: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -85,24 +80,17 @@ pub struct SearchOutcome {
     /// `Some(vec![])` means completed search with zero matches.
     pub nodes: Option<Vec<SlabIndex>>,
     pub highlights: Vec<String>,
-    /// Unique cloud-only files not read while evaluating content filters.
-    pub skipped_cloud_files: Vec<SlabIndex>,
 }
 
 impl SearchOutcome {
     fn new(nodes: Option<Vec<SlabIndex>>, highlights: Vec<String>) -> Self {
-        Self {
-            nodes,
-            highlights,
-            skipped_cloud_files: Vec::new(),
-        }
+        Self { nodes, highlights }
     }
 
     fn cancelled() -> Self {
         Self {
             nodes: None,
             highlights: vec![],
-            skipped_cloud_files: vec![],
         }
     }
 
@@ -114,12 +102,10 @@ impl SearchOutcome {
         let SearchOutcome {
             nodes: primary_nodes,
             highlights: primary_highlights,
-            skipped_cloud_files: primary_skipped,
         } = self;
         let SearchOutcome {
             nodes: secondary_nodes,
             highlights: secondary_highlights,
-            skipped_cloud_files: secondary_skipped,
         } = other;
 
         let (Some(primary_nodes), Some(secondary_nodes)) = (primary_nodes, secondary_nodes) else {
@@ -132,7 +118,6 @@ impl SearchOutcome {
         Self {
             nodes: Some(merged_nodes),
             highlights: merged_highlights,
-            skipped_cloud_files: Self::merge_preserve_order(primary_skipped, secondary_skipped),
         }
     }
 
@@ -351,12 +336,7 @@ impl SearchCache {
             metadata_changed: false,
             slot_generations: Vec::new(),
             instance: NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed),
-            skipped_cloud_files: Default::default(),
             sort_indexes: Default::default(),
-            #[cfg(test)]
-            content_metadata_flags: Default::default(),
-            #[cfg(test)]
-            content_open_count: Default::default(),
         }
     }
 
@@ -383,12 +363,7 @@ impl SearchCache {
             metadata_changed: false,
             slot_generations: Vec::new(),
             instance: NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed),
-            skipped_cloud_files: Default::default(),
             sort_indexes: Default::default(),
-            #[cfg(test)]
-            content_metadata_flags: Default::default(),
-            #[cfg(test)]
-            content_open_count: Default::default(),
         }
     }
 
@@ -518,11 +493,7 @@ impl SearchCache {
             return Ok(SearchOutcome::cancelled());
         }
 
-        let SearchOutcome {
-            nodes,
-            highlights,
-            skipped_cloud_files,
-        } = outcome;
+        let SearchOutcome { nodes, highlights } = outcome;
         let Some(nodes) = nodes else {
             return Ok(SearchOutcome::cancelled());
         };
@@ -542,7 +513,6 @@ impl SearchCache {
         Ok(SearchOutcome {
             nodes: Some(scoped_nodes),
             highlights,
-            skipped_cloud_files,
         })
     }
 
@@ -557,7 +527,6 @@ impl SearchCache {
         let SearchOutcome {
             nodes: scope_nodes,
             highlights: scope_highlights,
-            skipped_cloud_files: scope_skipped,
         } = scope;
         let Some(scope_nodes) = scope_nodes else {
             return Ok(SearchOutcome::cancelled());
@@ -568,7 +537,6 @@ impl SearchCache {
         let SearchOutcome {
             nodes: primary_nodes,
             highlights: primary_highlights,
-            skipped_cloud_files: primary_skipped,
         } = primary;
         let Some(primary_nodes) = primary_nodes else {
             return Ok(SearchOutcome::cancelled());
@@ -578,10 +546,6 @@ impl SearchCache {
         Ok(SearchOutcome {
             nodes: Some(primary_nodes),
             highlights,
-            skipped_cloud_files: SearchOutcome::merge_preserve_order(
-                scope_skipped,
-                primary_skipped,
-            ),
         })
     }
 
@@ -600,20 +564,9 @@ impl SearchCache {
         unquoted.expr = transform(unquoted.expr);
         let optimized = optimize_query(unquoted);
         let search_time = Instant::now();
-        self.skipped_cloud_files.get_mut().unwrap().clear();
         let result = self.evaluate_expr(&optimized.expr, base, options, cancellation_token);
-        let skipped_cloud_files = self
-            .skipped_cloud_files
-            .get_mut()
-            .unwrap()
-            .drain()
-            .collect();
         info!("Search time: {:?}", search_time.elapsed());
-        result.map(|nodes| SearchOutcome {
-            nodes,
-            highlights,
-            skipped_cloud_files,
-        })
+        result.map(|nodes| SearchOutcome { nodes, highlights })
     }
 
     // Why this exists:
@@ -983,7 +936,6 @@ impl SearchCache {
             rescan_count,
             name_index,
             stop: _,
-            skipped_cloud_files: _,
             ..
         } = self;
         let exclusion_patterns = file_nodes.exclusions.patterns().to_vec();
@@ -1641,7 +1593,6 @@ fn require_folder_expr(expr: Expr) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::CONTENT_BUFFER_BYTES;
     use fswalk::NodeFileType;
     use std::{
         fs,
@@ -2202,23 +2153,6 @@ mod tests {
     }
 
     #[test]
-    fn directory_query_with_content_filter_main_query_uses_scope_base() {
-        let temp_dir = TempDir::new("directory_query_content_scope").unwrap();
-        let root = temp_dir.path();
-        fs::create_dir_all(root.join("Work/Docs")).unwrap();
-        fs::create_dir_all(root.join("Personal/Docs")).unwrap();
-        fs::write(root.join("Work/Docs/report.md"), b"shared needle").unwrap();
-        fs::write(root.join("Personal/Docs/report.md"), b"shared needle").unwrap();
-
-        let mut cache = SearchCache::walk_fs(root);
-        let nodes = scoped_search(&mut cache, Some("Work/Docs"), Some("content:needle"));
-        let paths = paths_from_nodes(&nodes);
-
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].ends_with("/Work/Docs/report.md"));
-    }
-
-    #[test]
     fn directory_query_with_empty_scope_base_returns_no_main_results() {
         let temp_dir = TempDir::new("directory_query_empty_scope_base").unwrap();
         let root = temp_dir.path();
@@ -2358,9 +2292,9 @@ mod tests {
             build_base_filter_fixture("base_filter_permutations_scope");
 
         for query in [
-            "file: report ext:md size:>3k content:needle dm:today",
-            "content:needle size:>3k ext:md file: report dm:today",
-            "dm:today report content:needle ext:md size:>3k file:",
+            "file: report ext:md size:>3k dm:today",
+            "size:>3k ext:md file: report dm:today",
+            "dm:today report ext:md size:>3k file:",
         ] {
             let nodes = scoped_search(&mut cache, Some("Work/Docs"), Some(query));
             assert_node_suffixes(&nodes, &["/Work/Docs/report.md"]);
@@ -2372,9 +2306,9 @@ mod tests {
         let (_temp_dir, _root, mut cache) = build_base_filter_fixture("base_filter_boolean_scope");
 
         for query in [
-            "(ext:md | ext:txt) content:needle !archive",
-            "content:needle !archive (ext:md | ext:txt)",
-            "!(archive) (ext:md | ext:txt) content:needle",
+            "(ext:md | ext:txt) !archive",
+            "!archive (ext:md | ext:txt)",
+            "!(archive) (ext:md | ext:txt)",
         ] {
             let nodes = scoped_search(&mut cache, Some("Work/Docs"), Some(query));
             assert_node_suffixes(
@@ -2397,27 +2331,15 @@ mod tests {
         let personal_nested = root.join("Personal/Docs/Nested");
 
         for query in [
-            format!(
-                r#"parent:"{}" ext:md content:needle !archive"#,
-                work_docs.display()
-            ),
-            format!(
-                r#"ext:md !archive content:needle parent:"{}""#,
-                work_docs.display()
-            ),
-            format!(
-                r#"nosubfolders:"{}" ext:md content:needle !archive"#,
-                work_docs.display()
-            ),
+            format!(r#"parent:"{}" ext:md !archive"#, work_docs.display()),
+            format!(r#"ext:md !archive parent:"{}""#, work_docs.display()),
+            format!(r#"nosubfolders:"{}" ext:md !archive"#, work_docs.display()),
         ] {
             let nodes = scoped_search(&mut cache, Some("Work/Docs"), Some(&query));
             assert_node_suffixes(&nodes, &["/Work/Docs/report.md"]);
         }
 
-        let nested_query = format!(
-            r#"infolder:"{}" ext:md content:needle"#,
-            work_nested.display()
-        );
+        let nested_query = format!(r#"infolder:"{}" ext:md"#, work_nested.display());
         let nodes = scoped_search(&mut cache, Some("Work/Docs"), Some(&nested_query));
         assert_node_suffixes(&nodes, &["/Work/Docs/Nested/nested.md"]);
 
@@ -2471,7 +2393,7 @@ mod tests {
             ("video:clip dc:today", vec!["/Work/Docs/clip.mp4"]),
             ("exe:tool dc:today", vec!["/Work/Docs/tool.exe"]),
             (
-                "(type:audio | type:video | type:exe) content:needle dc:today",
+                "(type:audio | type:video | type:exe) dc:today",
                 vec![
                     "/Work/Docs/clip.mp4",
                     "/Work/Docs/song.mp3",
@@ -2497,10 +2419,7 @@ mod tests {
             CancellationToken::noop(),
         ));
 
-        let or_query = format!(
-            r#"(parent:"{}" | ext:txt) content:needle"#,
-            personal_docs.display()
-        );
+        let or_query = format!(r#"(parent:"{}" | ext:txt)"#, personal_docs.display());
         let indices = guard_indices(cache.search_with_options_base(
             &or_query,
             Some(&scope),
@@ -3574,233 +3493,6 @@ mod tests {
         assert_eq!(nodes.len(), 2);
         assert!(nodes.iter().any(|node| node.path.ends_with("AlphaOne.md")));
         assert!(nodes.iter().any(|node| node.path.ends_with("alphaTwo.md")));
-    }
-
-    #[test]
-    fn content_filter_matches_file_bodies() {
-        let temp_dir = TempDir::new("content_filter_matches_file_bodies").unwrap();
-        let dir = temp_dir.path();
-
-        fs::write(dir.join("notes.txt"), b"rust memchr finder\nsecond line").unwrap();
-        fs::write(dir.join("other.txt"), b"nothing to see here").unwrap();
-
-        let mut cache = SearchCache::walk_fs(dir);
-        let opts = SearchOptions {
-            case_insensitive: false,
-        };
-        let indices = guard_indices(cache.search_with_options(
-            "content:memchr",
-            opts,
-            CancellationToken::noop(),
-        ));
-        assert_eq!(indices.len(), 1);
-        let nodes = cache.expand_file_nodes(&indices);
-        assert!(nodes[0].path.ends_with("notes.txt"));
-
-        let opts = SearchOptions {
-            case_insensitive: true,
-        };
-        let insensitive = guard_indices(cache.search_with_options(
-            "content:MEMCHR",
-            opts,
-            CancellationToken::noop(),
-        ));
-        assert_eq!(insensitive.len(), 1);
-        let nodes = cache.expand_file_nodes(&insensitive);
-        assert!(nodes[0].path.ends_with("notes.txt"));
-    }
-
-    #[test]
-    fn content_filter_order_limits_file_opens() {
-        let dir = TempDir::new("content_order").unwrap();
-        fs::write(dir.path().join("match.txt"), "needle").unwrap();
-        fs::write(dir.path().join("other.bin"), "needle").unwrap();
-        let mut cache = SearchCache::walk_fs(dir.path());
-        for query in [
-            "content:needle ext:txt",
-            "ext:txt content:needle",
-            "!content:missing ext:txt",
-            "(content:needle | absent) ext:txt",
-        ] {
-            cache.content_open_count.store(0, Ordering::Relaxed);
-            assert_eq!(cache.search(query).unwrap().len(), 1);
-            assert_eq!(
-                cache.content_open_count.load(Ordering::Relaxed),
-                1,
-                "{query}"
-            );
-        }
-    }
-
-    #[test]
-    fn cloud_content_is_unknown_and_counted_once_per_search() {
-        let dir = TempDir::new("cloud_content").unwrap();
-        let cloud = dir.path().join("cloud.txt");
-        fs::write(&cloud, "needle").unwrap();
-        fs::write(dir.path().join("local.txt"), "needle").unwrap();
-        let mut cache = SearchCache::walk_fs(dir.path());
-        cache.content_metadata_flags.insert(cloud, 0x40000000);
-        for query in [
-            "ext:txt content:needle",
-            "ext:txt !content:missing",
-            "ext:txt (content:needle | content:missing)",
-        ] {
-            let outcome = cache
-                .search_with_options(query, SearchOptions::default(), CancellationToken::noop())
-                .unwrap();
-            assert_eq!(outcome.nodes.unwrap().len(), 1, "{query}");
-            assert_eq!(outcome.skipped_cloud_files.len(), 1, "{query}");
-        }
-        let outcome = cache
-            .search_with_options(
-                "ext:txt",
-                SearchOptions::default(),
-                CancellationToken::noop(),
-            )
-            .unwrap();
-        assert_eq!(outcome.nodes.unwrap().len(), 2);
-        assert!(outcome.skipped_cloud_files.is_empty());
-        // A separate successful filename branch still makes a cloud file a result.
-        assert_eq!(
-            cache
-                .search("(content:needle | cloud) !absent ext:txt")
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    #[test]
-    fn content_filter_matches_across_chunks() {
-        let temp_dir = TempDir::new("content_filter_matches_across_chunks").unwrap();
-        let dir = temp_dir.path();
-
-        let mut payload = vec![b'a'; CONTENT_BUFFER_BYTES.saturating_sub(1)];
-        payload.extend_from_slice(b"XYZ");
-        payload.extend(std::iter::repeat_n(b'a', 32));
-        fs::write(dir.join("large.bin"), &payload).unwrap();
-
-        let mut cache = SearchCache::walk_fs(dir);
-        let opts = SearchOptions {
-            case_insensitive: false,
-        };
-        let indices = guard_indices(cache.search_with_options(
-            "content:XYZ",
-            opts,
-            CancellationToken::noop(),
-        ));
-        assert_eq!(indices.len(), 1);
-        let nodes = cache.expand_file_nodes(&indices);
-        assert!(nodes.iter().any(|node| node.path.ends_with("large.bin")));
-    }
-
-    #[test]
-    fn content_filter_single_byte_respects_case_sensitivity() {
-        let temp_dir =
-            TempDir::new("content_filter_single_byte_respects_case_sensitivity").unwrap();
-        let dir = temp_dir.path();
-
-        fs::write(dir.join("letters.txt"), b"AaBb").unwrap();
-
-        let mut cache = SearchCache::walk_fs(dir);
-
-        let insensitive = guard_indices(cache.search_with_options(
-            "content:a",
-            SearchOptions {
-                case_insensitive: true,
-            },
-            CancellationToken::noop(),
-        ));
-        assert_eq!(insensitive.len(), 1);
-
-        let sensitive = guard_indices(cache.search_with_options(
-            "content:a",
-            SearchOptions {
-                case_insensitive: false,
-            },
-            CancellationToken::noop(),
-        ));
-        assert_eq!(sensitive.len(), 1); // File contains lowercase 'a'
-
-        // But searching for uppercase 'A' case-sensitively should also work
-        let sensitive_upper = guard_indices(cache.search_with_options(
-            "content:A",
-            SearchOptions {
-                case_insensitive: false,
-            },
-            CancellationToken::noop(),
-        ));
-        assert_eq!(sensitive_upper.len(), 1);
-
-        // Searching for 'z' should return nothing
-        let no_match = guard_indices(cache.search_with_options(
-            "content:z",
-            SearchOptions {
-                case_insensitive: false,
-            },
-            CancellationToken::noop(),
-        ));
-        assert!(no_match.is_empty());
-    }
-
-    #[test]
-    fn content_filter_matches_at_buffer_boundary() {
-        let temp_dir = TempDir::new("content_filter_matches_at_buffer_boundary").unwrap();
-        let dir = temp_dir.path();
-
-        // Place the needle so that it starts at the final byte of the first buffer
-        // read and finishes in the next read.
-        let mut payload = vec![b'a'; CONTENT_BUFFER_BYTES.saturating_sub(1)];
-        payload.push(b'X'); // last byte of first chunk
-        payload.extend_from_slice(b"YZ"); // spans into second chunk
-        payload.extend(std::iter::repeat_n(b'a', 32));
-        fs::write(dir.join("boundary.bin"), &payload).unwrap();
-
-        let mut cache = SearchCache::walk_fs(dir);
-        let indices = guard_indices(cache.search_with_options(
-            "content:XYZ",
-            SearchOptions {
-                case_insensitive: false,
-            },
-            CancellationToken::noop(),
-        ));
-        assert_eq!(indices.len(), 1);
-        let nodes = cache.expand_file_nodes(&indices);
-        assert!(nodes.iter().any(|node| node.path.ends_with("boundary.bin")));
-    }
-
-    #[test]
-    fn content_filter_matches_when_needle_near_buffer_size() {
-        let temp_dir = TempDir::new("content_filter_matches_when_needle_near_buffer_size").unwrap();
-        let dir = temp_dir.path();
-
-        // Build a long needle that exceeds the base buffer size, then place it once.
-        let needle_len = CONTENT_BUFFER_BYTES + 8;
-        let needle: String = std::iter::repeat_n('N', needle_len).collect();
-        let needle_bytes = needle.as_bytes();
-
-        let mut payload = Vec::new();
-        payload.extend(std::iter::repeat_n(b'a', 16));
-        payload.extend_from_slice(needle_bytes);
-        payload.extend(std::iter::repeat_n(b'b', 16));
-        fs::write(dir.join("long_needle.bin"), &payload).unwrap();
-
-        let mut cache = SearchCache::walk_fs(dir);
-        let query = format!("content:{needle}");
-        let indices = guard_indices(cache.search_with_options(
-            &query,
-            SearchOptions {
-                case_insensitive: false,
-            },
-            CancellationToken::noop(),
-        ));
-        assert_eq!(indices.len(), 1);
-        let nodes = cache.expand_file_nodes(&indices);
-        assert!(
-            nodes
-                .iter()
-                .any(|node| node.path.ends_with("long_needle.bin"))
-        );
     }
 
     #[test]

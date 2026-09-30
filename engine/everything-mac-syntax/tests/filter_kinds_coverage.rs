@@ -28,35 +28,10 @@ fn maps_known_filter_names() {
         ("datemodified", FilterKind::DateModified),
         ("dc", FilterKind::DateCreated),
         ("datecreated", FilterKind::DateCreated),
-        ("da", FilterKind::DateAccessed),
-        ("dateaccessed", FilterKind::DateAccessed),
-        ("dr", FilterKind::DateRun),
-        ("daterun", FilterKind::DateRun),
         ("parent", FilterKind::Parent),
         ("infolder", FilterKind::InFolder),
+        ("in", FilterKind::InFolder),
         ("nosubfolders", FilterKind::NoSubfolders),
-        ("child", FilterKind::Child),
-        ("attrib", FilterKind::Attribute),
-        ("attribdupe", FilterKind::AttributeDuplicate),
-        ("dmdupe", FilterKind::DateModifiedDuplicate),
-        ("dupe", FilterKind::Duplicate),
-        ("namepartdupe", FilterKind::NamePartDuplicate),
-        ("sizedupe", FilterKind::SizeDuplicate),
-        ("artist", FilterKind::Artist),
-        ("album", FilterKind::Album),
-        ("title", FilterKind::Title),
-        ("genre", FilterKind::Genre),
-        ("year", FilterKind::Year),
-        ("track", FilterKind::Track),
-        ("comment", FilterKind::Comment),
-        ("width", FilterKind::Width),
-        ("height", FilterKind::Height),
-        ("dimensions", FilterKind::Dimensions),
-        ("orientation", FilterKind::Orientation),
-        ("bitdepth", FilterKind::BitDepth),
-        ("case", FilterKind::CaseSensitive),
-        ("content", FilterKind::Content),
-        ("nowholefilename", FilterKind::NoWholeFilename),
     ];
 
     for (name, expected) in cases {
@@ -66,18 +41,50 @@ fn maps_known_filter_names() {
     }
 }
 
+/// Everything filters that EverythingMac does not implement, and any other
+/// `name:` text, are ordinary words matched against names.
 #[test]
-fn preserves_custom_names() {
-    let f = parse_filter("proj", None);
-    match f.kind {
-        FilterKind::Custom(n) => assert_eq!(n, "proj"),
-        other => panic!("{other:?}"),
-    }
-
-    let f = parse_filter("D", None);
-    match f.kind {
-        FilterKind::Custom(n) => assert_eq!(n, "D"),
-        other => panic!("{other:?}"),
+fn unsupported_filter_names_are_words() {
+    let names = [
+        "content",
+        "tag",
+        "t",
+        "da",
+        "dateaccessed",
+        "dr",
+        "daterun",
+        "child",
+        "attrib",
+        "attribdupe",
+        "dmdupe",
+        "dupe",
+        "namepartdupe",
+        "sizedupe",
+        "artist",
+        "album",
+        "title",
+        "genre",
+        "year",
+        "track",
+        "comment",
+        "width",
+        "height",
+        "dimensions",
+        "orientation",
+        "bitdepth",
+        "case",
+        "nowholefilename",
+        "proj",
+        "D",
+    ];
+    for name in names {
+        for query in [format!("{name}:"), format!("{name}:value")] {
+            assert_eq!(
+                parse_query(&query).unwrap().expr,
+                Expr::Term(Term::Word(query.clone())),
+                "query={query}"
+            );
+        }
     }
 }
 
@@ -103,6 +110,6 @@ fn argument_shapes_overview() {
     assert!(matches!(f.argument.unwrap().kind, ArgumentKind::Phrase));
 
     // bare
-    let f = parse_filter("content", Some("error"));
+    let f = parse_filter("dm", Some("today"));
     assert!(matches!(f.argument.unwrap().kind, ArgumentKind::Bare));
 }

@@ -259,8 +259,7 @@ pub unsafe extern "C" fn cn_search(
         state.generation = generation;
         Ok(
             json!({"status":"ok", "generation":generation, "total":state.results.len(),
-            "search_ms":search_ms, "highlights":outcome.highlights,
-            "skipped_cloud_files":outcome.skipped_cloud_files.len()}),
+            "search_ms":search_ms, "highlights":outcome.highlights}),
         )
     })
 }

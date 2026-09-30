@@ -326,6 +326,23 @@ checks: 1,842 Rust tests passed (the system-wide cancellation test excluded), cl
 passed, and the self, sort, selection, feature, live, tab, terminal, and trash checks
 passed.
 
+## Names-only search — 0.1.69
+
+`content:` opened and read every candidate file, and `tag:` read each file's Finder-tag
+extended attribute or asked Spotlight, so either could make a search slow; EverythingMac
+is meant to search names. Both filters were removed, together with every Everything
+filter the engine never implemented (date accessed and run, `child:`, attributes,
+duplicates, media properties, `case:`, `nowholefilename:`) and the parser's `Custom`
+kind. The parser now recognizes only the filters the engine implements; any other
+`name:` text is part of an ordinary word and is matched against names, so `content:x`
+finds names containing `content:x` rather than an error. The query optimizer keeps
+scope filters first, then words, then the other filters in typed order. Removed with
+them: the `file-tags` crate, the cloud-placeholder skip count in search replies and
+the status bar, and the content and tag tests. Recorded checks: 1,644 Rust tests passed
+(the system-wide cancellation test excluded; the count fell with the removed suites),
+clippy passed, and the self, sort, selection, feature, live, tab, terminal, and trash
+checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

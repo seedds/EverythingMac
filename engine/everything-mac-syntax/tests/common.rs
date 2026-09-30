@@ -68,14 +68,6 @@ pub fn filter_kind(expr: &Expr) -> (&FilterKind, &Option<FilterArgument>) {
     }
 }
 
-pub fn filter_is_custom(expr: &Expr, name: &str) {
-    let (k, _) = filter_kind(expr);
-    match k {
-        FilterKind::Custom(n) => assert_eq!(n, name),
-        other => panic!("expected Custom({name}), got: {other:?}"),
-    }
-}
-
 pub fn filter_is_kind(expr: &Expr, kind: &FilterKind) {
     let (k, _) = filter_kind(expr);
     assert_eq!(k, kind);

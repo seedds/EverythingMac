@@ -14,10 +14,15 @@ results table, and a compact bottom status bar**.
 | Main search field | Search filenames, or filter recent events when Events is selected. |
 | Folder scope field | Always visible to the right of the search field. Filters file results by folder; clear it to remove the filter. Disabled on the Events tab. |
 | Search Library button | Left of the search field, beside Aa; browse saved searches and recent history. |
-| Aa button | Left of the search field; toggles case-sensitive matching. When off, names and the `parent:`, `infolder:`, `content:`, and `tag:` filters ignore case for all letters, including accented and non-Latin ones. |
+| Aa button | Left of the search field; toggles case-sensitive matching. When off, names and the `parent:` and `infolder:` filters ignore case for all letters, including accented and non-Latin ones. |
 | Results table | Name, Path, Size on disk, Modified, and Created columns, with resizable widths and single-line middle truncation. |
 | Bottom status bar | Lifecycle state (Ready, Updating, Paused; hover for index details), Files/Events segmented control with counts, rescan, selection count, and search duration. Updating also appears while folders changed on disk are read in the background. |
 | Index menu | Live Updates on/off (Paused in the status bar while off), Rescan (Option-Command-R), and Cancel Scan. |
+
+Searches match file and folder names and paths only; they never open files or read
+their contents or Finder tags. The supported filters are listed in **Help → Search &
+Shortcuts**. Other text with a colon, such as `content:invoice` or `tag:work`, is
+matched against names like any other word.
 
 Enter submits a search immediately. Typing uses a **100 ms debounce** by default;
 Settings → General → **Search delay** offers none, 100, and 300 ms, and is saved. Existing rows
@@ -215,8 +220,9 @@ Missing or incompatible snapshots produce an actionable error without starting a
 scan.
 
 “Read-only” describes the **index**, not the files represented by it. File actions
-still operate on real files, and metadata/content queries retain the engine’s
-existing filesystem reads. A snapshot is not a frozen copy of file contents.
+still operate on real files, and size and date filters can still read sizes and dates
+from disk for items the index has none for. A snapshot is not a frozen copy of file
+contents.
 
 ## Permissions and troubleshooting
 

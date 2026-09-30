@@ -165,7 +165,7 @@ extension Model {
       || query.range(of: Self.metadataFilter, options: .regularExpression) != nil
   }
   static let metadataFilter =
-    #"(?i)\b(size|dm|datemodified|dc|datecreated|da|dateaccessed|dr|daterun):"#
+    #"(?i)\b(size|dm|datemodified|dc|datecreated):"#
   /// Drops files the app itself just removed from the index and refreshes at once,
   /// rather than waiting for the filesystem events and the refresh throttle.
   func applyRemovals(_ paths: [String]) {

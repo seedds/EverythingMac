@@ -13,13 +13,13 @@ using familiar macOS actions.
 
 ## Features
 
-- Search filenames and paths with wildcards, regular expressions, Boolean queries,
-  and filters. Reusable sort indexes support sorting all matching results.
+- Search file and folder names and paths with wildcards, regular expressions, Boolean
+  queries, and filters. Searches never open files or read their contents. Reusable
+  sort indexes support sorting all matching results.
 - Live filesystem updates that refresh sizes and dates in place, indexed disk usage,
   and selections that stay stable as files change, even across millions of results.
   Open, reveal, preview, rename, copy, drag, or trash selected files.
 - Exclude names and glob patterns such as `node_modules`, `*.log`, and `**/build/**`.
-  Content searches skip offline cloud placeholders rather than downloading them.
 - Saved searches, the latest 100 distinct recent searches, a configurable global
   activation shortcut, and searchable offline help.
 

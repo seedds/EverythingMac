@@ -359,7 +359,7 @@ final class FeatureCheck {
     model.submit(background: true)
     try await waitFor { !model.searching }
     try check(model.library.recent.isEmpty, "Background refresh does not enter history")
-    try await search("content:")
+    try await search("size:abc")
     try await Task.sleep(nanoseconds: 2_100_000_000)
     try check(
       model.error != nil && model.library.recent.isEmpty, "Failed query is excluded from history")

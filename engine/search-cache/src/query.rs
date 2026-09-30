@@ -6,25 +6,13 @@ use anyhow::{Result, anyhow, bail};
 use everything_mac_syntax::{
     ArgumentKind, ComparisonOp, Expr, Filter, FilterArgument, FilterKind, RangeSeparator, Term,
 };
-use file_tags::{read_tags_from_path, search_tags_using_mdfind};
 use fswalk::NodeFileType;
 use hashbrown::HashSet;
 use jiff::{Timestamp, civil::Date, tz::TimeZone};
-use memchr::arch::all::rabinkarp;
 use query_segmentation::query_segmentation;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use regex::RegexBuilder;
 use search_cancel::CancellationToken;
-#[cfg(target_os = "macos")]
-use std::os::macos::fs::MetadataExt;
-use std::{fs::File, io::Read, path::Path};
-
-pub(crate) const CONTENT_BUFFER_BYTES: usize = 64 * 1024;
-
-/// Threshold for switching from iterating file metadata to using Spotlight (mdfind).
-/// When the base set exceeds this size, Spotlight's indexed search is faster than
-/// reading xattr metadata for each file individually.
-const TAG_FILTER_MDFIND_THRESHOLD: usize = 10000;
+use std::path::Path;
 
 impl SearchCache {
     pub(crate) fn evaluate_expr(
@@ -115,25 +103,13 @@ impl SearchCache {
         let Some(mut universe) = self.nodes_from_base_ref(base, token) else {
             return Ok(None);
         };
-        let previous_skipped = std::mem::take(self.skipped_cloud_files.get_mut().unwrap());
-        let evaluated = self.evaluate_expr(inner, base, options, token);
-        let inner_skipped = std::mem::replace(
-            self.skipped_cloud_files.get_mut().unwrap(),
-            previous_skipped,
-        );
-        self.skipped_cloud_files
-            .get_mut()
-            .unwrap()
-            .extend(inner_skipped.iter().copied());
-        if let Some(negated) = evaluated? {
+        if let Some(negated) = self.evaluate_expr(inner, base, options, token)? {
             if difference_in_place(&mut universe, &negated, token).is_none() {
                 return Ok(None);
             }
         } else {
             return Ok(None);
         }
-        // An unread cloud file is unknown, not a confirmed non-match.
-        universe.retain(|index| !inner_skipped.contains(index));
         Ok(Some(universe))
     }
 
@@ -595,21 +571,6 @@ impl SearchCache {
                     .ok_or_else(|| anyhow!("dc: requires a date or range"))?;
                 self.evaluate_date_filter(DateField::Created, argument, base, token)
             }
-            FilterKind::Content => {
-                let argument = filter
-                    .argument
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("content: requires a value"))?;
-                self.evaluate_content_filter(argument, base, options, token)
-            }
-            FilterKind::Tag => {
-                let argument = filter
-                    .argument
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("tag: requires a value"))?;
-                self.evaluate_tag_filter(argument, base, options, token)
-            }
-            _ => bail!("Filter {:?} is not supported yet", filter.kind),
         }
     }
 
@@ -888,242 +849,6 @@ impl SearchCache {
             };
             predicate.matches(timestamp)
         }))
-    }
-
-    fn evaluate_content_filter(
-        &mut self,
-        argument: &FilterArgument,
-        base: Option<Vec<SlabIndex>>,
-        options: SearchOptions,
-        token: CancellationToken,
-    ) -> Result<Option<Vec<SlabIndex>>> {
-        if argument.raw.is_empty() {
-            bail!("content: requires a value");
-        }
-        let needle = ContentNeedle::new(&argument.raw, options.case_insensitive)?;
-
-        let Some(nodes) = self.nodes_from_base(base, token) else {
-            return Ok(None);
-        };
-
-        // An indexed parallel iterator keeps matches in the order of the searched nodes.
-        let matched_indices = nodes
-            .into_par_iter()
-            .filter(|index| self.file_nodes[*index].file_type_hint() == NodeFileType::File)
-            .filter_map(|index| {
-                let path = self.node_path(index)?;
-                // Reading a dataless file materializes it. Inspect fresh metadata before
-                // opening it; cached metadata may predate eviction by the cloud provider.
-                #[cfg(target_os = "macos")]
-                if self.content_file_is_dataless(&path) {
-                    self.skipped_cloud_files.lock().unwrap().insert(index);
-                    return None;
-                }
-                self.node_content_matches(&path, &needle, token)?
-                    .then_some(index)
-            })
-            .collect();
-
-        Ok(token.is_cancelled().map(|()| matched_indices))
-    }
-
-    fn evaluate_tag_filter(
-        &mut self,
-        argument: &FilterArgument,
-        base: Option<Vec<SlabIndex>>,
-        options: SearchOptions,
-        token: CancellationToken,
-    ) -> Result<Option<Vec<SlabIndex>>> {
-        let raw_needles: Vec<String> = match &argument.kind {
-            ArgumentKind::Bare | ArgumentKind::Phrase => {
-                let raw = argument.raw.trim();
-                if raw.is_empty() {
-                    bail!("tag: requires a value");
-                }
-                vec![raw.to_string()]
-            }
-            ArgumentKind::List(values) => {
-                let normalized: Vec<String> = values
-                    .iter()
-                    .map(|value| value.trim())
-                    .filter(|value| !value.is_empty())
-                    .map(|value| value.to_string())
-                    .collect();
-
-                if normalized.is_empty() {
-                    bail!("tag: requires a value");
-                }
-                normalized
-            }
-            ArgumentKind::Range(_) | ArgumentKind::Comparison(_) => {
-                bail!("tag: does not support ranges or comparisons");
-            }
-        };
-        let needles = if options.case_insensitive {
-            raw_needles
-                .into_iter()
-                .map(|value| value.to_lowercase())
-                .collect()
-        } else {
-            raw_needles
-        };
-
-        let Some(nodes) = self.nodes_from_base(base, token) else {
-            return Ok(None);
-        };
-
-        // If base is a small set, filtering it by accessing file metadata;
-        // otherwise use mdfind to quickly narrow down.
-        // Both paths keep matches in the order of the searched nodes.
-        let matched_indices = if nodes.len() <= TAG_FILTER_MDFIND_THRESHOLD {
-            nodes
-                .into_par_iter()
-                .filter_map(|index| {
-                    let path = self.node_path(index)?;
-                    self.node_tags_match_any(&path, &needles, options.case_insensitive, token)?
-                        .then_some(index)
-                })
-                .collect()
-        } else {
-            let allowed: HashSet<SlabIndex> =
-                search_tags_using_mdfind(needles, options.case_insensitive)?
-                    .into_iter()
-                    .filter_map(|path| self.node_index_for_path(&path))
-                    .collect();
-            let mut nodes = nodes;
-            nodes.retain(|index| allowed.contains(index));
-            nodes
-        };
-
-        Ok(token.is_cancelled().map(|()| matched_indices))
-    }
-
-    #[cfg(target_os = "macos")]
-    fn content_file_is_dataless(&self, path: &Path) -> bool {
-        // SF_DATALESS: opening the file would ask its provider to download it.
-        const SF_DATALESS: u32 = 0x40000000;
-        #[cfg(test)]
-        if let Some(flags) = self.content_metadata_flags.get(path) {
-            return flags & SF_DATALESS != 0;
-        }
-        path.symlink_metadata()
-            .is_ok_and(|metadata| metadata.st_flags() & SF_DATALESS != 0)
-    }
-
-    /// user need to ensure that needle is lowercased when case_insensitive is set
-    fn node_content_matches(
-        &self,
-        path: &Path,
-        needle: &ContentNeedle,
-        token: CancellationToken,
-    ) -> Option<bool> {
-        token.is_cancelled()?;
-
-        #[cfg(test)]
-        self.content_open_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let Ok(mut file) = File::open(path) else {
-            return Some(false);
-        };
-        let (needle, case_insensitive) = match needle {
-            ContentNeedle::Bytes { bytes, fold_ascii } => (bytes.as_slice(), *fold_ascii),
-            ContentNeedle::Unicode { regex, overlap } => {
-                return content_matches_regex(&mut file, regex, *overlap, token);
-            }
-        };
-
-        if needle.len() == 1 {
-            let needle = needle[0];
-            let mut buffer = vec![0u8; CONTENT_BUFFER_BYTES];
-            if case_insensitive {
-                let lowercase_target = needle.to_ascii_lowercase();
-                let uppercase_target = needle.to_ascii_uppercase();
-                loop {
-                    token.is_cancelled()?;
-                    let read = match file.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(count) => count,
-                        Err(_) => return Some(false),
-                    };
-                    if buffer[..read]
-                        .iter()
-                        .any(|&c| c == lowercase_target || c == uppercase_target)
-                    {
-                        return Some(true);
-                    }
-                }
-            } else {
-                loop {
-                    token.is_cancelled()?;
-                    let read = match file.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(count) => count,
-                        Err(_) => return Some(false),
-                    };
-                    if buffer[..read].contains(&needle) {
-                        return Some(true);
-                    }
-                }
-            };
-
-            return Some(false);
-        }
-
-        // ensure needle is lowercased if case_insensitive is set
-        if case_insensitive {
-            debug_assert_eq!(needle, needle.to_ascii_lowercase());
-        }
-        let overlap = needle.len().saturating_sub(1);
-        let finder = rabinkarp::Finder::new(needle);
-        let mut buffer = vec![0u8; CONTENT_BUFFER_BYTES + overlap];
-        let mut carry_len = 0usize;
-
-        loop {
-            token.is_cancelled()?;
-
-            let Ok(read) = file.read(&mut buffer[carry_len..]) else {
-                return Some(false);
-            };
-            if read == 0 {
-                break;
-            }
-
-            let chunk_len = carry_len + read;
-            let chunk = &mut buffer[..chunk_len];
-
-            if case_insensitive {
-                chunk[carry_len..].make_ascii_lowercase();
-            }
-
-            if finder.find(chunk, needle).is_some() {
-                return Some(true);
-            }
-
-            let keep = overlap.min(chunk.len());
-            if keep > 0 {
-                let start = chunk.len().saturating_sub(keep);
-                chunk.copy_within(start.., 0);
-            }
-            carry_len = keep;
-        }
-
-        Some(false)
-    }
-
-    fn node_tags_match_any(
-        &self,
-        path: &Path,
-        needles: &[String],
-        case_insensitive: bool,
-        token: CancellationToken,
-    ) -> Option<bool> {
-        token.is_cancelled()?;
-
-        let tags = read_tags_from_path(path, case_insensitive)?;
-        let matched = tags
-            .iter()
-            .any(|tag| needles.iter().any(|needle| tag.contains(needle)));
-        Some(matched)
     }
 
     fn nodes_from_base(
@@ -1760,71 +1485,6 @@ fn size_unit_multiplier(unit: &str) -> Result<u64> {
         _ => bail!("Unknown size unit: {unit:?}"),
     };
     Ok(multiplier)
-}
-
-/// What `content:` looks for in file bytes.
-enum ContentNeedle {
-    /// Exact bytes. With `fold_ascii`, the needle is lowercase and ASCII letters in
-    /// the file match either case.
-    Bytes { bytes: Vec<u8>, fold_ascii: bool },
-    /// A case-insensitive needle with letters beyond ASCII, matched with Unicode case
-    /// folding. `overlap` bytes carry over between reads, since a matching character
-    /// can take up to 4 bytes in UTF-8.
-    Unicode {
-        regex: regex::bytes::Regex,
-        overlap: usize,
-    },
-}
-
-impl ContentNeedle {
-    fn new(raw: &str, case_insensitive: bool) -> Result<Self> {
-        if !case_insensitive || raw.is_ascii() {
-            let bytes = if case_insensitive {
-                raw.to_ascii_lowercase()
-            } else {
-                raw.to_owned()
-            };
-            return Ok(Self::Bytes {
-                bytes: bytes.into_bytes(),
-                fold_ascii: case_insensitive,
-            });
-        }
-        let regex = regex::bytes::RegexBuilder::new(&regex::escape(raw))
-            .case_insensitive(true)
-            .build()?;
-        Ok(Self::Unicode {
-            regex,
-            overlap: raw.chars().count() * 4 - 1,
-        })
-    }
-}
-
-/// Reads a file in chunks, keeping `overlap` bytes from the previous chunk so a
-/// match that spans two reads is still found.
-fn content_matches_regex(
-    file: &mut File,
-    regex: &regex::bytes::Regex,
-    overlap: usize,
-    token: CancellationToken,
-) -> Option<bool> {
-    let mut buffer = vec![0u8; CONTENT_BUFFER_BYTES + overlap];
-    let mut carry_len = 0usize;
-    loop {
-        token.is_cancelled()?;
-        let Ok(read) = file.read(&mut buffer[carry_len..]) else {
-            return Some(false);
-        };
-        if read == 0 {
-            return Some(false);
-        }
-        let chunk_len = carry_len + read;
-        if regex.is_match(&buffer[..chunk_len]) {
-            return Some(true);
-        }
-        let keep = overlap.min(chunk_len);
-        buffer.copy_within(chunk_len - keep..chunk_len, 0);
-        carry_len = keep;
-    }
 }
 
 fn filter_nodes(

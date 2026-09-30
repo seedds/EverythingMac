@@ -39,8 +39,8 @@ fn comparisons_are_detected() {
     filter_is_kind(&expr, &FilterKind::Size);
     filter_arg_is_comparison(&expr, ComparisonOp::Gt, "1GB");
 
-    let expr = parse_ok("width:<=4000");
-    filter_is_kind(&expr, &FilterKind::Width);
+    let expr = parse_ok("size:<=4000");
+    filter_is_kind(&expr, &FilterKind::Size);
     filter_arg_is_comparison(&expr, ComparisonOp::Lte, "4000");
 
     let expr = parse_ok("size:=10mb");

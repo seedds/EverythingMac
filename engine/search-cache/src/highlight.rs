@@ -766,14 +766,14 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_path() {
+    fn test_unknown_prefix_with_path() {
         let terms = parse_and_highlight("path:src/test").unwrap();
         assert_eq!(terms, vec!["test"]);
     }
 
     #[test]
     fn test_filter_unicode() {
-        let terms = parse_and_highlight("name:你好").unwrap();
+        let terms = parse_and_highlight("file:你好").unwrap();
         assert_eq!(terms, vec!["你好"]);
     }
 
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn test_filter_phrase_with_spaces() {
-        let terms = parse_and_highlight("name:\"hello world\"").unwrap();
+        let terms = parse_and_highlight("file:\"hello world\"").unwrap();
         assert_eq!(terms, vec!["hello world"]);
     }
 
@@ -857,13 +857,13 @@ mod tests {
 
     #[test]
     fn test_filter_with_underscore() {
-        let terms = parse_and_highlight("name:test_file").unwrap();
+        let terms = parse_and_highlight("file:test_file").unwrap();
         assert_eq!(terms, vec!["test_file"]);
     }
 
     #[test]
     fn test_filter_with_dot() {
-        let terms = parse_and_highlight("name:file.test.txt").unwrap();
+        let terms = parse_and_highlight("file:file.test.txt").unwrap();
         assert_eq!(terms, vec!["file.test.txt"]);
     }
 
@@ -893,13 +893,13 @@ mod tests {
 
     #[test]
     fn test_filter_with_emoji() {
-        let terms = parse_and_highlight("name:test🔥file").unwrap();
+        let terms = parse_and_highlight("file:test🔥file").unwrap();
         assert_eq!(terms, vec!["test🔥file"]);
     }
 
     #[test]
     fn test_filter_special_chars() {
-        let terms = parse_and_highlight("name:test@file.txt").unwrap();
+        let terms = parse_and_highlight("file:test@file.txt").unwrap();
         assert_eq!(terms, vec!["test@file.txt"]);
     }
 
@@ -1145,8 +1145,9 @@ mod tests {
 
     #[test]
     fn test_colon_in_word() {
+        // Only supported filters take an argument; other text with a colon is a word.
         let terms = parse_and_highlight("test:file").unwrap();
-        assert_eq!(terms, vec!["file"]);
+        assert_eq!(terms, vec!["test:file"]);
     }
 
     #[test]
@@ -1281,7 +1282,7 @@ mod tests {
 
     #[test]
     fn test_segmentation_in_filter() {
-        let terms = parse_and_highlight("name:testFile").unwrap();
+        let terms = parse_and_highlight("file:testFile").unwrap();
         assert_eq!(terms, vec!["testfile"]);
     }
 
@@ -1384,7 +1385,7 @@ mod tests {
     #[test]
     fn test_segment_url_like() {
         let terms = parse_and_highlight("https://example.com").unwrap();
-        assert_eq!(terms, vec!["example.com"]);
+        assert_eq!(terms, vec!["https://example.com"]);
     }
 
     #[test]
@@ -1621,13 +1622,13 @@ mod tests {
 
     #[test]
     fn test_sanitize_in_filter() {
-        let terms = parse_and_highlight("name:*test*").unwrap();
+        let terms = parse_and_highlight("file:*test*").unwrap();
         assert_eq!(terms, vec!["test"]);
     }
 
     #[test]
     fn test_sanitize_wildcard_only_in_filter() {
-        let terms = parse_and_highlight("name:***").unwrap();
+        let terms = parse_and_highlight("file:***").unwrap();
         assert_eq!(terms.len(), 0);
     }
 
@@ -1709,7 +1710,7 @@ mod tests {
 
     #[test]
     fn test_filter_quoted_with_wildcards() {
-        let terms = parse_and_highlight("name:\"*test*\"").unwrap();
+        let terms = parse_and_highlight("file:\"*test*\"").unwrap();
 
         // Quoted argument is treated as phrase, wildcards are processed
         assert_eq!(terms, vec!["*test*"]);
@@ -1723,7 +1724,7 @@ mod tests {
 
     #[test]
     fn test_quoted_phrase_argument_in_filter() {
-        let terms = parse_and_highlight("content:\"hello world\"").unwrap();
+        let terms = parse_and_highlight("file:\"hello world\"").unwrap();
         assert_eq!(terms, vec!["hello world"]);
     }
 
@@ -1837,7 +1838,7 @@ mod tests {
 
     #[test]
     fn test_quoted_comparison_in_filter() {
-        let terms = parse_and_highlight("name:>\"test\"").unwrap();
+        let terms = parse_and_highlight("file:>\"test\"").unwrap();
 
         // Comparison values are not highlighted
         assert_eq!(terms.len(), 0);
@@ -1845,7 +1846,7 @@ mod tests {
 
     #[test]
     fn test_quoted_range_in_filter() {
-        let terms = parse_and_highlight("name:\"a\"..\"z\"").unwrap();
+        let terms = parse_and_highlight("file:\"a\"..\"z\"").unwrap();
 
         // Range values are not highlighted
         assert_eq!(terms.len(), 0);
@@ -2119,7 +2120,7 @@ mod tests {
 
     #[test]
     fn test_dedup_filter_arguments() {
-        let terms = parse_and_highlight("ext:txt name:txt path:txt").unwrap();
+        let terms = parse_and_highlight("ext:txt file:txt folder:txt").unwrap();
         assert_eq!(terms, vec!["txt"]);
     }
 

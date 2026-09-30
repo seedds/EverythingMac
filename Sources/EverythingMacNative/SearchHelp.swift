@@ -18,7 +18,7 @@ enum SearchHelp {
   static let entries: [SearchHelpEntry] = [
     .init(
       "Names and phrases",
-      "Search filenames by substring. Quotes keep words together; spaces between terms mean AND.",
+      "Search file and folder names by substring. Quotes keep words together; spaces between terms mean AND. Text with a colon that is not one of the filters below, such as note:draft, is matched against names too.",
       "report"),
     .init("Quoted phrase", "Match a phrase containing spaces.", "\"annual report\""),
     .init(
@@ -61,11 +61,6 @@ enum SearchHelp {
     .init(
       "Direct children", "parent: and nosubfolders: restrict results to direct children.",
       "parent:~/Downloads"),
-    .init("Finder tags", "tag: (t:) matches Finder tags.", "tag:work"),
-    .init(
-      "File contents",
-      "content: reads literal bytes, not extracted PDF or Office text. Cloud placeholders are skipped and counted. Narrow the scope for large searches.",
-      "ext:txt content:invoice"),
     .init(
       "Exclusion patterns",
       "Preferences → Exclude patterns removes matching entries from the index. node_modules matches names anywhere; *.log matches names by extension; **/build/** prunes build directories. A trailing / means directories only. Patterns are case-sensitive and still apply inside Include paths."

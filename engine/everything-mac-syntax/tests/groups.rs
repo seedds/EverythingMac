@@ -10,10 +10,8 @@ fn angle_bracket_group_with_or() {
     let g = &parts[0];
     let or_parts = as_or(g);
     assert_eq!(or_parts.len(), 2);
-    filter_is_custom(&or_parts[0], "D");
-    filter_arg_none(&or_parts[0]);
-    filter_is_custom(&or_parts[1], "E");
-    filter_arg_none(&or_parts[1]);
+    word_is(&or_parts[0], "D:");
+    word_is(&or_parts[1], "E:");
 
     word_is(&parts[1], "*.mp3");
 }

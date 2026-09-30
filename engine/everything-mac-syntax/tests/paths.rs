@@ -24,19 +24,13 @@ fn parses_unc_paths_and_child_filter() {
     let expr = parse_ok("\\\\srv\\share child:*.mp3");
     let parts = as_and(&expr);
     word_is(&parts[0], "\\\\srv\\share");
-    filter_is_kind(&parts[1], &everything_mac_syntax::FilterKind::Child);
-    filter_arg_raw(&parts[1], "*.mp3");
+    word_is(&parts[1], "child:*.mp3");
 }
 
 #[test]
 fn parses_windows_drive_roots_and_dirs() {
-    let expr = parse_ok("D:");
-    filter_is_custom(&expr, "D");
-    filter_arg_none(&expr);
-
-    let expr = parse_ok(r"D:\\Music\\");
-    filter_is_custom(&expr, "D");
-    filter_arg_raw(&expr, r"\\Music\\");
+    word_is(&parse_ok("D:"), "D:");
+    word_is(&parse_ok(r"D:\\Music\\"), r"D:\\Music\\");
 }
 
 #[test]

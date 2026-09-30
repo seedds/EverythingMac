@@ -87,8 +87,8 @@ fn filters_interleave_with_terms_and_groups() {
     // <D:|E:>
     let or_parts = as_or(&parts[2]);
     assert_eq!(or_parts.len(), 2);
-    filter_is_custom(&or_parts[0], "D");
-    filter_is_custom(&or_parts[1], "E");
+    word_is(&or_parts[0], "D:");
+    word_is(&or_parts[1], "E:");
     // baz
     word_is(&parts[3], "baz");
     // filters land at the tail
@@ -99,18 +99,14 @@ fn filters_interleave_with_terms_and_groups() {
 }
 
 #[test]
-fn many_dimension_values_and_ranges() {
+fn many_size_comparisons_and_ranges() {
     let cases = [
-        "dimensions:800x600",
-        "dimensions:1024x768",
-        "dimensions:1920x1080",
-        "dimensions:3840x2160",
-        "width:>100",
-        "width:>=100",
-        "width:=100",
-        "width:!=100",
-        "height:<100",
-        "height:<=100",
+        "size:>100",
+        "size:>=100",
+        "size:=100",
+        "size:!=100",
+        "size:<100",
+        "size:<=100",
         "size:1..10",
         "size:..10",
         "size:1..",

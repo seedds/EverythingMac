@@ -98,7 +98,7 @@ fn trailing_backslash_without_closing() {
 
 #[test]
 fn escaped_quote_in_filter_without_closing() {
-    let err = parse_err("content:\"test\\\"value");
+    let err = parse_err("parent:\"test\\\"value");
     assert!(err.message.contains("missing closing quote"));
 }
 

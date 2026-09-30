@@ -399,11 +399,11 @@ fn complex_nested_escapes() {
 
 #[test]
 fn escaped_quote_in_filter_and_phrase() {
-    let expr = parse_ok("content:\"a\\\"b\" \"c\\\"d\"");
+    let expr = parse_ok("ext:\"a\\\"b\" \"c\\\"d\"");
     let parts = as_and(&expr);
     assert_eq!(parts.len(), 2);
     word_is(&parts[0], "\"c\\\"d\"");
-    filter_is_kind(&parts[1], &FilterKind::Content);
+    filter_is_kind(&parts[1], &FilterKind::Ext);
 }
 
 #[test]

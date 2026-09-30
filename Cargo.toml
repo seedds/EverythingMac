@@ -1,3 +1,3 @@
 [workspace]
 resolver = "3"
-members = ["bridge", "engine/search-cache", "engine/search-cancel", "engine/everything-mac-sdk", "engine/fswalk", "engine/namepool", "engine/file-tags", "engine/query-segmentation", "engine/everything-mac-syntax", "engine/slab-mmap"]
+members = ["bridge", "engine/search-cache", "engine/search-cancel", "engine/everything-mac-sdk", "engine/fswalk", "engine/namepool", "engine/query-segmentation", "engine/everything-mac-syntax", "engine/slab-mmap"]

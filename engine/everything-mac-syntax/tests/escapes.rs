@@ -170,15 +170,15 @@ fn grouped_expression_with_escaped_quotes() {
 fn filter_with_escaped_quote_bare() {
     // Without quotes, backslash-quote appears as part of a word, but parser treats it as starting a quote
     // So we need to properly quote it
-    let expr = parse_ok("content:\"test\\\"value\"");
-    filter_is_kind(&expr, &FilterKind::Content);
+    let expr = parse_ok("parent:\"test\\\"value\"");
+    filter_is_kind(&expr, &FilterKind::Parent);
     filter_arg_raw(&expr, "\"test\\\"value\"");
 }
 
 #[test]
 fn filter_with_escaped_quote_in_phrase() {
-    let expr = parse_ok("content:\"test\\\"value\"");
-    filter_is_kind(&expr, &FilterKind::Content);
+    let expr = parse_ok("parent:\"test\\\"value\"");
+    filter_is_kind(&expr, &FilterKind::Parent);
     filter_arg_raw(&expr, "\"test\\\"value\"");
 }
 
@@ -314,13 +314,13 @@ fn escaped_quote_between_regular_quotes() {
 
 #[test]
 fn multiple_filters_with_escaped_quotes() {
-    let expr = parse_ok("folder:\"a\\\"b\" parent:\"c\\\"d\" content:\"e\\\"f\"");
+    let expr = parse_ok("folder:\"a\\\"b\" parent:\"c\\\"d\" ext:\"e\\\"f\"");
     let parts = as_and(&expr);
     assert_eq!(parts.len(), 3);
     // 优化器会重排: infolder/parent (priority 0), then other filters
     filter_is_kind(&parts[0], &FilterKind::Parent);
     filter_is_kind(&parts[1], &FilterKind::Folder);
-    filter_is_kind(&parts[2], &FilterKind::Content);
+    filter_is_kind(&parts[2], &FilterKind::Ext);
 }
 
 #[test]
@@ -357,9 +357,9 @@ fn escaped_quote_in_mixed_boolean_expression() {
 }
 
 #[test]
-fn tag_filter_with_escaped_quotes() {
-    let expr = parse_ok("tag:\"Project\\\"A\\\"\"");
-    filter_is_kind(&expr, &FilterKind::Tag);
+fn ext_list_with_escaped_quotes() {
+    let expr = parse_ok("ext:\"Project\\\"A\\\"\"");
+    filter_is_kind(&expr, &FilterKind::Ext);
     filter_arg_raw(&expr, "\"Project\\\"A\\\"\"");
 }
 

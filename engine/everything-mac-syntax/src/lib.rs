@@ -55,8 +55,7 @@ impl Query {
 /// - Removes `Expr::Empty` operands from conjunctions (returning `Expr::Empty`
 ///   or the lone operand when appropriate).
 /// - Reorders filters by cost: `infolder:` and `parent:` first (same priority),
-///   other filters next, then `tag:`, and finally content-reading expressions.
-///   Other non-filters stay between the scope filters and the remaining filter tail.
+///   then non-filters, then the other filters in the order they were typed.
 /// - Collapses any OR chain containing `Expr::Empty` into a single
 ///   `Expr::Empty`, matching EverythingMac's "empty means whole universe" semantics.
 ///
@@ -127,22 +126,16 @@ fn optimize_or(parts: Vec<Expr>) -> Expr {
 /// Priority levels (lower executes first):
 /// - 0: Scope filters (`infolder:`, `parent:`) - narrow search space first
 /// - 1: Non-filter terms (words, phrases, boolean ops) - cheap string matching
-/// - 2: Generic filters (`ext:`, `type:`, `size:`, etc.) - moderate cost
-/// - 3: Tag filters (`tag:`) - expensive metadata access
-/// - 4: Expressions containing `content:` - file reads, runs last
+/// - 2: Other filters (`ext:`, `type:`, `size:`, etc.)
 fn reorder_by_priority(parts: &mut Vec<Expr>) {
     if parts.len() <= 1 {
         return;
     }
 
     let priority = |expr: &Expr| -> u8 {
-        if contains_content_filter(expr) {
-            return 4;
-        }
         match expr {
             Expr::Term(Term::Filter(filter)) => match filter.kind {
                 FilterKind::InFolder | FilterKind::Parent => 0,
-                FilterKind::Tag => 3,
                 _ => 2,
             },
             _ => 1,
@@ -157,15 +150,6 @@ fn reorder_by_priority(parts: &mut Vec<Expr>) {
     keyed.sort_by_key(|(prio, _)| *prio);
 
     parts.extend(keyed.into_iter().map(|(_, expr)| expr));
-}
-
-fn contains_content_filter(expr: &Expr) -> bool {
-    match expr {
-        Expr::Term(Term::Filter(filter)) => filter.kind == FilterKind::Content,
-        Expr::Not(inner) => contains_content_filter(inner),
-        Expr::And(parts) | Expr::Or(parts) => parts.iter().any(contains_content_filter),
-        _ => false,
-    }
 }
 
 /// Logical structure for Everything queries.
@@ -259,8 +243,8 @@ pub struct Filter {
     pub argument: Option<FilterArgument>,
 }
 
-/// Strongly-typed view over Everything's built-in filters. Custom macros fall
-/// back to [`FilterKind::Custom`].
+/// The Everything filters EverythingMac implements. They work from names, paths,
+/// and indexed metadata; any other `name:` text is part of an ordinary word.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilterKind {
     /// Only match files (`file:`).
@@ -340,20 +324,6 @@ pub enum FilterKind {
     /// assert!(matches!(filter.kind, FilterKind::DateCreated));
     /// ```
     DateCreated,
-    /// Date accessed (`da:` / `dateaccessed:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("da:yesterday").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::DateAccessed));
-    /// ```
-    DateAccessed,
-    /// Date run (`dr:` / `daterun:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("dr:today").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::DateRun));
-    /// ```
-    DateRun,
     /// Restrict to direct children of a folder (`parent:`).
     /// ```
     /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
@@ -375,180 +345,12 @@ pub enum FilterKind {
     /// assert!(matches!(filter.kind, FilterKind::NoSubfolders));
     /// ```
     NoSubfolders,
-    /// Require a folder containing matching children (`child:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("child:*.mp3").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Child));
-    /// ```
-    Child,
-    /// Match file-system attributes (`attrib:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("attrib:H").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Attribute));
-    /// ```
-    Attribute,
-    /// Attribute duplicate detection (`attribdupe:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("attribdupe:").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::AttributeDuplicate));
-    /// ```
-    AttributeDuplicate,
-    /// Date-modified duplicate detection (`dmdupe:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("dmdupe:").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::DateModifiedDuplicate));
-    /// ```
-    DateModifiedDuplicate,
-    /// Name duplicate detection (`dupe:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("dupe:").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Duplicate));
-    /// ```
-    Duplicate,
-    /// Duplicate detection ignoring extensions (`namepartdupe:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("namepartdupe:").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::NamePartDuplicate));
-    /// ```
-    NamePartDuplicate,
-    /// Duplicate detection by size (`sizedupe:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("sizedupe:").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::SizeDuplicate));
-    /// ```
-    SizeDuplicate,
-    /// Audio metadata—artist (`artist:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("artist:Daft").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Artist));
-    /// ```
-    Artist,
-    /// Audio metadata—album (`album:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("album:Discovery").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Album));
-    /// ```
-    Album,
-    /// Audio metadata—title (`title:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("title:OneMoreTime").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Title));
-    /// ```
-    Title,
-    /// Audio metadata—genre (`genre:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("genre:house").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Genre));
-    /// ```
-    Genre,
-    /// Audio metadata—year (`year:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("year:2024").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Year));
-    /// ```
-    Year,
-    /// Audio metadata—track number (`track:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("track:01").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Track));
-    /// ```
-    Track,
-    /// Audio metadata—comment (`comment:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("comment:live").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Comment));
-    /// ```
-    Comment,
-    /// Image width comparisons (`width:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("width:>4000").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Width));
-    /// ```
-    Width,
-    /// Image height comparisons (`height:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("height:<=2000").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Height));
-    /// ```
-    Height,
-    /// Combined dimensions (`dimensions:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("dimensions:1920x1080").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Dimensions));
-    /// ```
-    Dimensions,
-    /// Orientation filter (`orientation:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("orientation:horizontal").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Orientation));
-    /// ```
-    Orientation,
-    /// Bit depth filter (`bitdepth:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("bitdepth:24").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::BitDepth));
-    /// ```
-    BitDepth,
-    /// Case-sensitive search toggle (`case:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("case:ABC").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::CaseSensitive));
-    /// ```
-    CaseSensitive,
-    /// Finder tag filter (`tag:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("tag:Project").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Tag));
-    /// ```
-    Tag,
-    /// Content search (`content:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("content:error").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Content));
-    /// ```
-    Content,
-    /// Temporarily disable whole filename matching (`nowholefilename:`).
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("nowholefilename:report").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::NoWholeFilename));
-    /// ```
-    NoWholeFilename,
-    /// User-defined macro or unrecognized filter name.
-    /// ```
-    /// use everything_mac_syntax::{parse_query, Expr, Term, FilterKind};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("proj:").unwrap().expr else { panic!() };
-    /// assert!(matches!(filter.kind, FilterKind::Custom(name) if name == "proj"));
-    /// ```
-    Custom(String),
 }
 
 impl FilterKind {
-    fn from_name(name: &str) -> Self {
+    fn from_name(name: &str) -> Option<Self> {
         let lower = name.to_ascii_lowercase();
-        match lower.as_str() {
+        Some(match lower.as_str() {
             "file" => FilterKind::File,
             "folder" => FilterKind::Folder,
             "ext" => FilterKind::Ext,
@@ -560,36 +362,11 @@ impl FilterKind {
             "size" => FilterKind::Size,
             "dm" | "datemodified" => FilterKind::DateModified,
             "dc" | "datecreated" => FilterKind::DateCreated,
-            "da" | "dateaccessed" => FilterKind::DateAccessed,
-            "dr" | "daterun" => FilterKind::DateRun,
             "parent" => FilterKind::Parent,
             "infolder" | "in" => FilterKind::InFolder,
             "nosubfolders" => FilterKind::NoSubfolders,
-            "child" => FilterKind::Child,
-            "attrib" => FilterKind::Attribute,
-            "attribdupe" => FilterKind::AttributeDuplicate,
-            "dmdupe" => FilterKind::DateModifiedDuplicate,
-            "dupe" => FilterKind::Duplicate,
-            "namepartdupe" => FilterKind::NamePartDuplicate,
-            "sizedupe" => FilterKind::SizeDuplicate,
-            "artist" => FilterKind::Artist,
-            "album" => FilterKind::Album,
-            "title" => FilterKind::Title,
-            "genre" => FilterKind::Genre,
-            "year" => FilterKind::Year,
-            "track" => FilterKind::Track,
-            "comment" => FilterKind::Comment,
-            "width" => FilterKind::Width,
-            "height" => FilterKind::Height,
-            "dimensions" => FilterKind::Dimensions,
-            "orientation" => FilterKind::Orientation,
-            "bitdepth" => FilterKind::BitDepth,
-            "case" => FilterKind::CaseSensitive,
-            "tag" | "t" => FilterKind::Tag,
-            "content" => FilterKind::Content,
-            "nowholefilename" => FilterKind::NoWholeFilename,
-            _ => FilterKind::Custom(name.to_string()),
-        }
+            _ => return None,
+        })
     }
 }
 
@@ -700,7 +477,7 @@ pub enum ComparisonOp {
     ///
     /// ```
     /// use everything_mac_syntax::{parse_query, Expr, Term, ArgumentKind, ComparisonOp};
-    /// let Expr::Term(Term::Filter(filter)) = parse_query("width:<=4000").unwrap().expr else { panic!() };
+    /// let Expr::Term(Term::Filter(filter)) = parse_query("size:<=4000").unwrap().expr else { panic!() };
     /// let ArgumentKind::Comparison(value) = filter.argument.unwrap().kind else { panic!() };
     /// assert!(matches!(value.op, ComparisonOp::Lte));
     /// ```
@@ -958,11 +735,17 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Only supported filter names start a filter; any other `name:` stays
+            // part of the word and is matched against names.
             if ch == ':' && seen {
                 let name = &self.input[start..self.pos];
-                if is_valid_filter_name(name) {
+                if name.eq_ignore_ascii_case("regex") {
                     self.advance_char();
-                    return self.parse_filter_term(name.to_string());
+                    return Ok(Term::Regex(self.parse_regex_pattern()?));
+                }
+                if let Some(kind) = FilterKind::from_name(name) {
+                    self.advance_char();
+                    return self.parse_filter_term(kind);
                 }
             }
 
@@ -981,15 +764,7 @@ impl<'a> Parser<'a> {
         Ok(Term::Word(text))
     }
 
-    // After seeing `name:`, decide whether this is the regex prefix (which
-    // switches the entire query into regex mode) or a normal filter.
-    fn parse_filter_term(&mut self, name: String) -> Result<Term, ParseError> {
-        if name.eq_ignore_ascii_case("regex") {
-            let pattern = self.parse_regex_pattern()?;
-            return Ok(Term::Regex(pattern));
-        }
-
-        let kind = FilterKind::from_name(&name);
+    fn parse_filter_term(&mut self, kind: FilterKind) -> Result<Term, ParseError> {
         let argument = self.parse_filter_argument(&kind)?;
         Ok(Term::Filter(Filter { kind, argument }))
     }
@@ -1248,11 +1023,7 @@ impl<'a> Parser<'a> {
                 if !rest.is_char_boundary(idx) {
                     return false;
                 }
-                let name = &rest[..idx];
-                if !is_valid_filter_name(name) {
-                    return false;
-                }
-                return true;
+                return is_filter_name(&rest[..idx]);
             }
         }
         false
@@ -1273,11 +1044,8 @@ fn is_keyword_boundary_char(ch: char) -> bool {
         || ch == '\0'
 }
 
-fn is_valid_filter_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+fn is_filter_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("regex") || FilterKind::from_name(name).is_some()
 }
 
 /// Lightweight heuristic classification so downstream code can handle the most
@@ -1449,13 +1217,7 @@ fn try_parse_hyphen_range(raw: &str) -> Option<RangeValue> {
 
 /// Only date-related filters accept hyphenated ranges.
 fn allows_hyphen_range(kind: &FilterKind) -> bool {
-    matches!(
-        kind,
-        FilterKind::DateCreated
-            | FilterKind::DateModified
-            | FilterKind::DateAccessed
-            | FilterKind::DateRun
-    )
+    matches!(kind, FilterKind::DateCreated | FilterKind::DateModified)
 }
 
 fn has_digit(value: &str) -> bool {
@@ -1557,22 +1319,8 @@ mod tests {
         };
         assert_eq!(parts.len(), 2);
 
-        let Expr::Or(choices) = &parts[0] else {
-            panic!("expected OR group");
-        };
-        assert_eq!(choices.len(), 2);
-        let mut names = Vec::new();
-        for choice in choices {
-            let Expr::Term(Term::Filter(filter)) = choice else {
-                panic!("expected filter term");
-            };
-            assert!(filter.argument.is_none());
-            let FilterKind::Custom(name) = &filter.kind else {
-                panic!("expected drive-like custom filter");
-            };
-            names.push(name.as_str());
-        }
-        assert_eq!(names, ["D", "E"]);
+        // Drive letters are not filters; they are matched against names.
+        assert_eq!(parts[0], Expr::Or(vec![word("D:"), word("E:")]));
 
         assert_eq!(parts[1], word("*.mp3"));
     }
@@ -1710,7 +1458,7 @@ mod tests {
 
     #[test]
     fn parses_comparison_arguments() {
-        let query = parse_query("size:>1GB width:<=4000").unwrap();
+        let query = parse_query("size:>1GB size:<=4000").unwrap();
         let Expr::And(parts) = query.expr else {
             panic!("expected AND expression");
         };
@@ -1725,11 +1473,11 @@ mod tests {
         assert_eq!(*op, ComparisonOp::Gt);
         assert_eq!(value, "1GB");
 
-        let Expr::Term(Term::Filter(width)) = &parts[1] else {
+        let Expr::Term(Term::Filter(upper)) = &parts[1] else {
             panic!();
         };
         let ArgumentKind::Comparison(ComparisonValue { op, value }) =
-            &width.argument.as_ref().unwrap().kind
+            &upper.argument.as_ref().unwrap().kind
         else {
             panic!();
         };
@@ -1765,7 +1513,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_unc_paths_and_child_filter() {
+    fn parses_unc_paths_and_unsupported_filter_as_word() {
         let query = parse_query("\\\\srv\\share child:*.mp3").unwrap();
         let Expr::And(parts) = query.expr else {
             panic!();
@@ -1775,11 +1523,7 @@ mod tests {
         };
         assert_eq!(path, "\\\\srv\\share");
 
-        let Expr::Term(Term::Filter(child)) = &parts[1] else {
-            panic!();
-        };
-        assert!(matches!(child.kind, FilterKind::Child));
-        assert_eq!(child.argument.as_ref().unwrap().raw, "*.mp3");
+        assert_eq!(parts[1], word("child:*.mp3"));
     }
 
     #[test]
@@ -1947,30 +1691,6 @@ mod tests {
                 query: r"D:\Music\ !child:*.mp3",
             },
             DocExample {
-                line: 183,
-                query: "attrib:H",
-            },
-            DocExample {
-                line: 183,
-                query: "attrib:R",
-            },
-            DocExample {
-                line: 250,
-                query: "dimensions:1920x1080",
-            },
-            DocExample {
-                line: 250,
-                query: "width:>4000",
-            },
-            DocExample {
-                line: 276,
-                query: "dupe: *.mp4",
-            },
-            DocExample {
-                line: 276,
-                query: "size:>1gb sizedupe:",
-            },
-            DocExample {
                 line: 284,
                 query: "folder: dm:pastmonth ext:docx report",
             },
@@ -2005,10 +1725,6 @@ mod tests {
             DocExample {
                 line: 349,
                 query: "ABC|123",
-            },
-            DocExample {
-                line: 359,
-                query: "case:ABC",
             },
             DocExample {
                 line: 367,
@@ -2065,14 +1781,6 @@ mod tests {
             DocExample {
                 line: 428,
                 query: "video: size:>1gb",
-            },
-            DocExample {
-                line: 439,
-                query: "audio: year:2024",
-            },
-            DocExample {
-                line: 439,
-                query: "musiclastyear:",
             },
             DocExample {
                 line: 478,

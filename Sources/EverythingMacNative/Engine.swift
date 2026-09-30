@@ -22,7 +22,6 @@ struct Reply: Decodable {
   let generation: UInt64?
   let load_ms: Double?
   let search_ms: Double?
-  let skipped_cloud_files: Int?
   let rows: [Row]?
   let root: String?
   let ignores: [String]?
@@ -550,9 +549,7 @@ struct Sample: Codable {
     visibleRowsStale = false
     pendingPages.removeAll()
     pendingDraw = ticket
-    let skipped = reply.skipped_cloud_files ?? 0
     status = "\(total) results · Rust \(String(format: "%.1f", backendMS)) ms"
-      + (skipped > 0 ? " · \(skipped) cloud files skipped" : "")
     revision &+= 1
     // New results are shown without waiting for the coalesced pass.
     tableUpdate?()
