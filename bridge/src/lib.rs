@@ -581,6 +581,64 @@ mod tests {
     }
 
     #[test]
+    fn attribute_events_keep_results_and_report_metadata() {
+        use everything_mac_sdk::{EventFlag, FsEvent};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        let file = root.join("kept.txt");
+        fs::write(&file, "short").unwrap();
+        let index = temp.path().join("index.db");
+        SearchCache::walk_fs(&root).flush_to_file(&index).unwrap();
+        let index = CString::new(index.to_str().unwrap()).unwrap();
+        let query = CString::new("kept").unwrap();
+        let empty = CString::new("").unwrap();
+        unsafe {
+            let mut engine = ptr::null_mut();
+            assert_eq!(
+                reply(cn_engine_open(index.as_ptr(), &mut engine))["status"],
+                "ok"
+            );
+            let request = cn_request_new();
+            let searched = reply(cn_search(
+                engine,
+                request,
+                1,
+                query.as_ptr(),
+                empty.as_ptr(),
+                false,
+            ));
+            cn_request_free(request);
+            assert_eq!(searched["total"], 1);
+            fs::write(&file, "longer contents").unwrap();
+            {
+                let mut state = (*engine).0.lock().unwrap();
+                let id = state.cache.last_event_id() + 1;
+                let flag = EventFlag::ItemModified | EventFlag::ItemIsFile;
+                let events = vec![FsEvent {
+                    path: file.clone(),
+                    id,
+                    flag,
+                }];
+                assert!(!state.cache.handle_fs_events(events).unwrap());
+            }
+            let polled = reply(live::cn_poll(engine, 0, false));
+            assert_eq!(polled["changed"], false);
+            assert_eq!(polled["metadata_changed"], true);
+            // The displayed generation stays valid and shows the new size.
+            let rows = reply(cn_rows(engine, 1, 0, 128));
+            assert_eq!(rows["status"], "ok");
+            assert_eq!(rows["rows"][0]["size"], 15);
+            assert_eq!(
+                reply(live::cn_poll(engine, 0, false))["metadata_changed"],
+                false
+            );
+            cn_engine_close(engine);
+        }
+    }
+
+    #[test]
     fn date_index_backfills_legacy_snapshots_persists_and_tracks_events() {
         use everything_mac_sdk::{EventFlag, FsEvent};
         use std::time::{Duration, UNIX_EPOCH};

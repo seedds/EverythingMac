@@ -83,7 +83,7 @@ final class SelectionCheck {
         urls.map(\.path) == [selectedPath] else { return }
       copyChecks.append("Copy waits for selection and writes the selected file URL")
       mutate()
-    } else if stage == 2 && model.displayedGeneration != generation {
+    } else if stage == 2 && (model.displayedGeneration != generation || updatedInPlace()) {
       guard table.selectedRowIndexes.count == 1,
         let row = model.rows[table.selectedRow], row.path == selectedPath else { return }
       guard table.rowView(atRow: table.selectedRow, makeIfNecessary: false)?.isSelected == true
@@ -181,6 +181,12 @@ final class SelectionCheck {
           : "Selection flickered: \(self.observedGaps) highlight gaps, \(self.observedCountGaps) count gaps")
       }
     }
+  }
+
+  /// Editing a file updates its size in place: rows stay valid without a new search.
+  func updatedInPlace() -> Bool {
+    cycle == 1 && model.displayedGeneration == generation
+      && model.rows.values.contains { $0.path == selectedPath && $0.size == 22 }
   }
 
   func mutate() {

@@ -9,7 +9,8 @@ use anyhow::{Context, Result, anyhow};
 use everything_mac_sdk::{EventFlag, FsEvent, ScanType, current_event_id};
 use everything_mac_syntax::{Expr, Filter, FilterKind, Term, optimize_query, parse_query};
 use fswalk::{
-    Node, NodeMetadata, WalkData, should_ignore_path, walk_it, walk_it_without_root_chain,
+    Node, NodeFileType, NodeMetadata, WalkData, should_ignore_path, walk_it,
+    walk_it_without_root_chain,
 };
 use hashbrown::HashSet;
 use namepool::NamePool;
@@ -39,6 +40,8 @@ pub struct SearchCache {
     rescan_count: u64,
     pub(crate) name_index: NameIndex,
     stop: &'static AtomicBool,
+    /// Set when events updated an item's metadata in place; see `take_metadata_changed`.
+    metadata_changed: bool,
     pub(crate) skipped_cloud_files: std::sync::Mutex<HashSet<SlabIndex>>,
     #[cfg(test)]
     pub(crate) content_metadata_flags: std::collections::HashMap<PathBuf, u32>,
@@ -322,6 +325,7 @@ impl SearchCache {
             rescan_count,
             name_index,
             stop: cancel,
+            metadata_changed: false,
             skipped_cloud_files: Default::default(),
             sort_indexes: Default::default(),
             #[cfg(test)]
@@ -351,6 +355,7 @@ impl SearchCache {
             rescan_count: 0,
             name_index: NameIndex::default(),
             stop: cancel,
+            metadata_changed: false,
             skipped_cloud_files: Default::default(),
             sort_indexes: Default::default(),
             #[cfg(test)]
@@ -733,7 +738,8 @@ impl SearchCache {
                     },
                 );
                 let index = self.push_node(node);
-                self.file_nodes[current].add_children(index);
+                // A new ID cannot already be a child; skip `add_children`'s scan.
+                self.file_nodes[current].children.push(index);
                 index
             };
         }
@@ -757,6 +763,20 @@ impl SearchCache {
             self.remove_node_path(path);
             return None;
         };
+        // Case-insensitive volumes also resolve a name that differs from the stored
+        // one only by case or Unicode normalization, such as the old side of
+        // `mv Foo foo`. Index the stored name, and drop siblings whose spelling no
+        // longer exists.
+        let stored_path;
+        let mut respelled = false;
+        let path = match (path.parent(), path.file_name(), on_disk_name(path)) {
+            (Some(parent), Some(requested), Some(stored)) if stored != requested => {
+                stored_path = parent.join(stored);
+                respelled = true;
+                stored_path.as_path()
+            }
+            _ => path,
+        };
         if self.should_ignore(path)
             || self
                 .file_nodes
@@ -766,17 +786,27 @@ impl SearchCache {
             self.remove_node_path(path);
             return None;
         }
-        let parent = path.parent().expect(
+        let parent_path = path.parent().expect(
             "scan_path_recursive doesn't expected to scan root(should be filtered outside)",
         );
         // Ensure node of the path parent is existed
-        let parent = self.create_node_chain(parent);
+        let parent = self.create_node_chain(parent_path);
         // Remove node(if exists) and do a full rescan
-        if let Some(&old_node) = self.file_nodes[parent]
+        let name = path.file_name();
+        let stale: Vec<SlabIndex> = self.file_nodes[parent]
             .children
             .iter()
-            .find(|&&x| path.file_name() == Some(OsStr::new(self.file_nodes[x].name())))
-        {
+            .copied()
+            .filter(|&child| {
+                let child_name = OsStr::new(self.file_nodes[child].name());
+                Some(child_name) == name
+                    || (respelled
+                        && name.is_some_and(|name| same_name_ignoring_case(child_name, name))
+                        && on_disk_name(&parent_path.join(child_name)).as_deref()
+                            != Some(child_name))
+            })
+            .collect();
+        for old_node in stale {
             self.remove_node(old_node);
         }
         // For incremental data, we need metadata
@@ -790,8 +820,8 @@ impl SearchCache {
         .with_exclusions(self.file_nodes.exclusions.clone());
         walk_it_without_root_chain(&walk_data).map(|node| {
             let node = self.create_node_slab_update_name_index_and_name_pool(Some(parent), &node);
-            // Push the newly created node to the parent's children
-            self.file_nodes[parent].add_children(node);
+            // A new ID cannot already be a child; skip `add_children`'s scan.
+            self.file_nodes[parent].children.push(node);
             node
         })
     }
@@ -859,22 +889,33 @@ impl SearchCache {
 
     /// Removes a node and its children recursively by index.
     fn remove_node(&mut self, index: SlabIndex) {
-        fn remove_single_node(cache: &mut SearchCache, index: SlabIndex) {
-            if let Some(node) = cache.file_nodes.try_remove(index) {
-                cache.sort_indexes.changed(index);
-                let removed = cache.name_index.remove_index(node.name(), index);
-                assert!(removed, "inconsistent name index and node");
-            }
-        }
-
         // Remove parent reference, make whole subtree unreachable.
         if let Some(parent) = self.file_nodes[index].parent() {
             self.file_nodes[parent].children.retain(|&x| x != index);
         }
+        let mut removed = vec![];
         let mut stack = vec![index];
         while let Some(current) = stack.pop() {
             stack.extend_from_slice(&self.file_nodes[current].children);
-            remove_single_node(self, current);
+            removed.push(current);
+        }
+        // Postings are located by path, so update them while the nodes still exist,
+        // once per name rather than once per removed file.
+        let mut by_name: hashbrown::HashMap<&'static str, Vec<SlabIndex>> =
+            hashbrown::HashMap::new();
+        for &id in &removed {
+            by_name
+                .entry(self.file_nodes[id].name())
+                .or_default()
+                .push(id);
+        }
+        for (name, ids) in by_name {
+            let count = self.name_index.remove_indices(name, &ids, &self.file_nodes);
+            assert_eq!(count, ids.len(), "inconsistent name index and node");
+        }
+        for id in removed {
+            self.file_nodes.try_remove(id);
+            self.sort_indexes.changed(id);
         }
     }
 
@@ -946,6 +987,35 @@ impl SearchCache {
 
     pub fn last_event_id(&mut self) -> u64 {
         self.last_event_id
+    }
+
+    /// Whether events updated sizes or dates in place since the last call. Those
+    /// updates keep node IDs, so they do not count as structural changes.
+    pub fn take_metadata_changed(&mut self) -> bool {
+        std::mem::take(&mut self.metadata_changed)
+    }
+
+    /// Stores fresh metadata for an indexed item whose event reports only attribute
+    /// changes. Returns false when the path must be scanned instead: the item is
+    /// missing from the index or the disk, or its type changed.
+    fn update_metadata_in_place(&mut self, path: &Path, kind: NodeFileType) -> bool {
+        let Some(index) = self.node_index_for_path(path) else {
+            return false;
+        };
+        let Ok(metadata) = path.symlink_metadata() else {
+            return false;
+        };
+        let metadata = SlabNodeMetadataCompact::some(metadata.into());
+        let node = &mut self.file_nodes[index];
+        if metadata.file_type_hint() != kind || node.file_type_hint() != kind {
+            return false;
+        }
+        if node.metadata != metadata {
+            node.metadata = metadata;
+            self.sort_indexes.metadata_changed(index, false);
+            self.metadata_changed = true;
+        }
+        true
     }
 
     pub fn rescan_count(&self) -> u64 {
@@ -1070,6 +1140,16 @@ impl SearchCache {
             return Err(HandleFSEError::Rescan);
         }
         let mut changed = false;
+        // Attribute-only changes update indexed items in place: IDs stay valid and a
+        // folder's subtree is not walked again. File-level events report changed
+        // children separately, so these events never stand in for descendants.
+        let events: Vec<FsEvent> = events
+            .into_iter()
+            .filter(|event| {
+                !in_place_kind(event.flag)
+                    .is_some_and(|kind| self.update_metadata_in_place(&event.path, kind))
+            })
+            .collect();
         for scan_path in scan_paths(events) {
             info!("Scanning path: {scan_path:?}");
             let existed = self.node_index_for_path(&scan_path).is_some();
@@ -1083,6 +1163,100 @@ impl SearchCache {
             self.update_last_event_id(max_event_id);
         }
         Ok(changed)
+    }
+}
+
+/// The item's name as stored on disk, which on case-insensitive volumes can differ
+/// from `path`'s last component by case or Unicode normalization. A final symlink
+/// is not followed.
+fn on_disk_name(path: &Path) -> Option<std::ffi::OsString> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    #[repr(C, align(8))]
+    struct Reply([u8; 4096]);
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut request = libc::attrlist {
+        bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: libc::ATTR_CMN_NAME,
+        volattr: 0,
+        dirattr: 0,
+        fileattr: 0,
+        forkattr: 0,
+    };
+    let mut reply = Reply([0; 4096]);
+    let status = unsafe {
+        libc::getattrlist(
+            path.as_ptr(),
+            (&raw mut request).cast(),
+            reply.0.as_mut_ptr().cast(),
+            reply.0.len(),
+            libc::FSOPT_NOFOLLOW,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    // A u32 length, then an attrreference_t whose data offset is relative to the
+    // reference itself and points at the NUL-terminated name.
+    const REFERENCE: usize = size_of::<u32>();
+    let reference: libc::attrreference_t =
+        unsafe { std::ptr::read_unaligned(reply.0.as_ptr().add(REFERENCE).cast()) };
+    let start = REFERENCE.checked_add(usize::try_from(reference.attr_dataoffset).ok()?)?;
+    let end = start.checked_add(reference.attr_length as usize)?;
+    let name = reply.0.get(start..end)?.split(|&byte| byte == 0).next()?;
+    Some(std::ffi::OsString::from_vec(name.to_vec()))
+}
+
+/// Whether two names differ at most by case or Unicode normalization.
+fn same_name_ignoring_case(a: &OsStr, b: &OsStr) -> bool {
+    match (a.to_str(), b.to_str()) {
+        (Some(a), Some(b)) => a
+            .nfc()
+            .flat_map(char::to_lowercase)
+            .eq(b.nfc().flat_map(char::to_lowercase)),
+        _ => a == b,
+    }
+}
+
+/// Classifies events that only change attributes of an existing item, which can
+/// then be updated in place. Creation, removal, renames, clones, hard links and
+/// coalesced subtree changes are scanned instead, as is `ItemModified` on a
+/// folder, which the scan paths treat as covering its descendants.
+fn in_place_kind(flag: EventFlag) -> Option<NodeFileType> {
+    const ATTRIBUTES: EventFlag = EventFlag::ItemInodeMetaMod
+        .union(EventFlag::ItemFinderInfoMod)
+        .union(EventFlag::ItemChangeOwner)
+        .union(EventFlag::ItemXattrMod);
+    const STRUCTURAL: EventFlag = EventFlag::ItemCreated
+        .union(EventFlag::ItemRemoved)
+        .union(EventFlag::ItemRenamed)
+        .union(EventFlag::MustScanSubDirs)
+        .union(EventFlag::Cloned)
+        .union(EventFlag::IsHardlink)
+        .union(EventFlag::IsLastHardlink)
+        .union(EventFlag::Mount)
+        .union(EventFlag::Unmount)
+        .union(EventFlag::RootChanged)
+        .union(EventFlag::UserDropped)
+        .union(EventFlag::KernelDropped)
+        .union(EventFlag::EventIdsWrapped)
+        .union(EventFlag::HistoryDone);
+    const TYPES: EventFlag = EventFlag::ItemIsFile
+        .union(EventFlag::ItemIsDir)
+        .union(EventFlag::ItemIsSymlink);
+    if flag.intersects(STRUCTURAL) {
+        return None;
+    }
+    let kind = flag & TYPES;
+    if kind == EventFlag::ItemIsFile && flag.intersects(ATTRIBUTES | EventFlag::ItemModified) {
+        Some(NodeFileType::File)
+    } else if kind == EventFlag::ItemIsDir
+        && flag.intersects(ATTRIBUTES)
+        && (flag - EventFlag::ItemIsDir - EventFlag::OwnEvent - ATTRIBUTES).is_empty()
+    {
+        Some(NodeFileType::Dir)
+    } else {
+        None
     }
 }
 
@@ -4726,5 +4900,225 @@ mod tests {
         });
         let out = scan_paths(events);
         assert_eq!(out, vec![PathBuf::from("/long")]);
+    }
+
+    fn event(cache: &mut SearchCache, path: PathBuf, flag: EventFlag) -> FsEvent {
+        let id = cache.last_event_id() + 1;
+        FsEvent { path, id, flag }
+    }
+
+    #[test]
+    fn in_place_events_are_attribute_only() {
+        use EventFlag as F;
+        assert_eq!(
+            in_place_kind(F::ItemModified | F::ItemIsFile),
+            Some(NodeFileType::File)
+        );
+        assert_eq!(
+            in_place_kind(F::ItemXattrMod | F::ItemIsDir),
+            Some(NodeFileType::Dir)
+        );
+        assert_eq!(
+            in_place_kind(F::ItemInodeMetaMod | F::ItemChangeOwner | F::ItemIsDir | F::OwnEvent),
+            Some(NodeFileType::Dir)
+        );
+        for flag in [
+            F::ItemModified,
+            F::ItemIsFile,
+            F::ItemModified | F::ItemIsDir,
+            F::ItemCreated | F::ItemModified | F::ItemIsFile,
+            F::ItemRemoved | F::ItemInodeMetaMod | F::ItemIsFile,
+            F::ItemRenamed | F::ItemXattrMod | F::ItemIsDir,
+            F::ItemInodeMetaMod | F::ItemIsSymlink,
+            F::ItemModified | F::ItemIsFile | F::IsHardlink,
+            F::ItemModified | F::ItemIsFile | F::Cloned,
+            F::MustScanSubDirs | F::ItemInodeMetaMod | F::ItemIsDir,
+        ] {
+            assert_eq!(in_place_kind(flag), None, "{flag:?}");
+        }
+    }
+
+    #[test]
+    fn attribute_events_update_items_in_place() {
+        let temp = TempDir::new("in_place_file").unwrap();
+        let root = temp.path();
+        let file = root.join("dir/file.txt");
+        fs::create_dir(root.join("dir")).unwrap();
+        fs::write(&file, b"before").unwrap();
+        let mut cache = SearchCache::walk_fs(root);
+        let id = cache.node_index_for_path(&file).unwrap();
+        fs::write(&file, b"after, and longer").unwrap();
+        let modified = event(
+            &mut cache,
+            file.clone(),
+            EventFlag::ItemModified | EventFlag::ItemIsFile,
+        );
+        let event_id = modified.id;
+        assert!(
+            !cache.handle_fs_events(vec![modified]).unwrap(),
+            "not a structural change"
+        );
+        assert!(cache.take_metadata_changed());
+        assert!(!cache.take_metadata_changed());
+        assert_eq!(cache.last_event_id(), event_id);
+        assert_eq!(
+            cache.node_index_for_path(&file),
+            Some(id),
+            "the node keeps its ID"
+        );
+        assert_eq!(cache.file_nodes[id].metadata.as_ref().unwrap().size(), 17);
+        // Metadata that did not change is not reported.
+        let unchanged = event(
+            &mut cache,
+            file.clone(),
+            EventFlag::ItemInodeMetaMod | EventFlag::ItemIsFile,
+        );
+        assert!(!cache.handle_fs_events(vec![unchanged]).unwrap());
+        assert!(!cache.take_metadata_changed());
+        // A replaced item of another type is scanned instead.
+        fs::remove_file(&file).unwrap();
+        fs::create_dir(&file).unwrap();
+        let replaced = event(
+            &mut cache,
+            file.clone(),
+            EventFlag::ItemModified | EventFlag::ItemIsFile,
+        );
+        assert!(cache.handle_fs_events(vec![replaced]).unwrap());
+        let replaced_id = cache.node_index_for_path(&file).unwrap();
+        assert_eq!(
+            cache.file_nodes[replaced_id].file_type_hint(),
+            NodeFileType::Dir
+        );
+    }
+
+    #[test]
+    fn folder_attribute_events_keep_the_subtree_and_its_new_children() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new("in_place_folder").unwrap();
+        let root = temp.path();
+        let big = root.join("big");
+        fs::create_dir_all(big.join("sub")).unwrap();
+        fs::write(big.join("sub/a.txt"), b"").unwrap();
+        fs::write(big.join("b.txt"), b"").unwrap();
+        let mut cache = SearchCache::walk_fs(root);
+        let existing = [
+            big.clone(),
+            big.join("sub"),
+            big.join("sub/a.txt"),
+            big.join("b.txt"),
+        ];
+        let ids: Vec<_> = existing
+            .iter()
+            .map(|path| cache.node_index_for_path(path).unwrap())
+            .collect();
+        fs::set_permissions(&big, fs::Permissions::from_mode(0o750)).unwrap();
+        fs::write(big.join("new.txt"), b"").unwrap();
+        let events = vec![
+            event(
+                &mut cache,
+                big.clone(),
+                EventFlag::ItemInodeMetaMod | EventFlag::ItemIsDir,
+            ),
+            event(
+                &mut cache,
+                big.join("new.txt"),
+                EventFlag::ItemCreated | EventFlag::ItemIsFile,
+            ),
+        ];
+        assert!(
+            cache.handle_fs_events(events).unwrap(),
+            "the new file is structural"
+        );
+        let after: Vec<_> = existing
+            .iter()
+            .map(|path| cache.node_index_for_path(path).unwrap())
+            .collect();
+        assert_eq!(after, ids, "the folder's subtree was not walked again");
+        assert_eq!(cache.search("new.txt").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn name_postings_stay_in_path_order_through_live_changes() {
+        let temp = TempDir::new("postings_order").unwrap();
+        let root = temp.path();
+        let posted = |dir: &str| {
+            fs::create_dir_all(root.join(dir)).unwrap();
+            fs::write(root.join(dir).join("index.js"), b"").unwrap();
+        };
+        for dir in ["a", "a/b", "a.b", "c", "c/a", "z"] {
+            posted(dir);
+        }
+        for i in 0..2_000 {
+            posted(&format!("del/m{i:04}"));
+        }
+        let mut cache = SearchCache::walk_fs(root);
+        for dir in ["b/x", "a/b/c", "a b", "c/a/index.js.d"] {
+            posted(dir);
+        }
+        fs::remove_dir_all(root.join("del")).unwrap();
+        fs::remove_dir_all(root.join("c")).unwrap();
+        posted("c/new");
+        let events = ["b", "a/b/c", "a b", "del", "c"]
+            .into_iter()
+            .map(|dir| {
+                event(
+                    &mut cache,
+                    root.join(dir),
+                    EventFlag::ItemCreated | EventFlag::ItemIsDir,
+                )
+            })
+            .collect();
+        assert!(cache.handle_fs_events(events).unwrap());
+        let paths = |cache: &SearchCache| -> Vec<PathBuf> {
+            cache
+                .name_index
+                .get("index.js")
+                .unwrap()
+                .iter()
+                .map(|id| cache.node_path(*id).unwrap())
+                .collect()
+        };
+        let live = paths(&cache);
+        assert_eq!(live, paths(&SearchCache::walk_fs(root)));
+        assert!(live.is_sorted(), "postings follow PathBuf order");
+        // a, a/b, a/b/c, a b, a.b, b/x, c/new, z: `del` and the old `c` are gone.
+        assert_eq!(live.len(), 8);
+    }
+
+    #[test]
+    fn case_only_renames_leave_one_node() {
+        let temp = TempDir::new("case_rename").unwrap();
+        let root = temp.path();
+        fs::write(root.join("Probe"), b"").unwrap();
+        if !root.join("probe").exists() {
+            // A case-sensitive volume keeps Foo and foo as different items.
+            return;
+        }
+        fs::create_dir_all(root.join("Folder/inner")).unwrap();
+        fs::write(root.join("Folder/inner/file.txt"), b"").unwrap();
+        fs::write(root.join("Report.TXT"), b"").unwrap();
+        let mut cache = SearchCache::walk_fs(root);
+        fs::rename(root.join("Folder"), root.join("folder")).unwrap();
+        fs::rename(root.join("Report.TXT"), root.join("report.txt")).unwrap();
+        let events = [
+            ("Folder", EventFlag::ItemIsDir),
+            ("folder", EventFlag::ItemIsDir),
+            ("Report.TXT", EventFlag::ItemIsFile),
+            ("report.txt", EventFlag::ItemIsFile),
+        ]
+        .into_iter()
+        .map(|(name, kind)| event(&mut cache, root.join(name), EventFlag::ItemRenamed | kind))
+        .collect();
+        assert!(cache.handle_fs_events(events).unwrap());
+        let root_id = cache.node_index_for_path(root).unwrap();
+        let mut names: Vec<_> = cache.file_nodes[root_id]
+            .children
+            .iter()
+            .map(|&child| cache.file_nodes[child].name())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Probe", "folder", "report.txt"]);
+        assert_eq!(cache.search("file.txt").unwrap().len(), 1);
+        assert!(cache.name_index.get("Folder").is_none());
     }
 }

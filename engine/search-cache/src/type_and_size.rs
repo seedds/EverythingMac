@@ -1,7 +1,7 @@
 use fswalk::NodeFileType;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
 #[serde(transparent)]
 /// state in the high 2 bits, type in the next 2bits, size in the low 60 bits
 pub struct StateTypeSize(u64);

@@ -1,5 +1,6 @@
 use crate::{SlabIndex, SlabNode, ThinSlab};
 use std::{
+    cmp::Ordering,
     ffi::OsStr,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
@@ -50,6 +51,36 @@ impl FileNodes {
                 .map(OsStr::new)
                 .collect(),
         )
+    }
+
+    /// Writes the nodes from the top-level entry down to `index` itself, omitting
+    /// the root that every path shares. `None` if a node is missing.
+    pub(crate) fn path_chain(
+        &self,
+        mut index: SlabIndex,
+        chain: &mut Vec<SlabIndex>,
+    ) -> Option<()> {
+        chain.clear();
+        while let Some(parent) = self.slab.get(index)?.parent() {
+            chain.push(index);
+            index = parent;
+        }
+        chain.reverse();
+        Some(())
+    }
+
+    /// Orders two `path_chain`s component by component, which is the order of
+    /// `PathBuf`'s `Ord` kept by the name index, without building either path.
+    pub(crate) fn cmp_chains(&self, a: &[SlabIndex], b: &[SlabIndex]) -> Ordering {
+        for (x, y) in a.iter().zip(b) {
+            if x != y {
+                let order = self.slab[*x].name().cmp(self.slab[*y].name());
+                if order.is_ne() {
+                    return order;
+                }
+            }
+        }
+        a.len().cmp(&b.len())
     }
 
     pub(crate) fn path(&self) -> &Path {

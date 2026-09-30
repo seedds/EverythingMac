@@ -111,6 +111,8 @@ extension Model {
           self.metadataRefreshPending = false
           self.refreshPending = true
         }
+        // Rows on screen show sizes and dates updated in place without a new search.
+        if reply.metadata_changed == true && !self.refreshPending { self.refreshVisibleRows() }
         if self.refreshPending && self.debounceWork == nil && !self.searching
           && now - self.lastRefresh > 1
         {

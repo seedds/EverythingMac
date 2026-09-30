@@ -1,4 +1,5 @@
 use crate::{FileNodes, NAME_POOL, SlabIndex};
+use hashbrown::HashSet;
 use itertools::Itertools;
 use search_cancel::CancellationToken;
 use serde::{Deserialize, Serialize};
@@ -33,16 +34,46 @@ impl SortedSlabIndices {
     }
 
     pub fn insert(&mut self, index: SlabIndex, slab: &FileNodes) {
-        let Some(target_path) = slab.node_path(index) else {
+        let mut target = Vec::new();
+        if slab.path_chain(index, &mut target).is_none() {
             return;
-        };
-        if let Err(pos) = self.indices.binary_search_by(|existing| {
-            slab.node_path(*existing)
-                .expect("node in name index must resolve to a path")
-                .cmp(&target_path)
-        }) {
+        }
+        if let Err(pos) = self.position(&target, slab) {
             self.indices.insert(pos, index);
         }
+    }
+
+    /// Binary-searches by path, comparing ancestor chains instead of building a
+    /// path for every probe.
+    fn position(&self, target: &[SlabIndex], slab: &FileNodes) -> Result<usize, usize> {
+        let mut chain = Vec::with_capacity(target.len());
+        self.indices.binary_search_by(|existing| {
+            slab.path_chain(*existing, &mut chain)
+                .expect("node in name index must resolve to a path");
+            slab.cmp_chains(&chain, target)
+        })
+    }
+
+    /// Removes one ID found by path; the node must still be in the slab.
+    fn remove_by_path(&mut self, index: SlabIndex, slab: &FileNodes) -> bool {
+        let mut target = Vec::new();
+        if slab.path_chain(index, &mut target).is_some()
+            && let Ok(pos) = self.position(&target, slab)
+            && self.indices[pos] == index
+        {
+            self.indices.remove(pos);
+            return true;
+        }
+        // Duplicate paths from older indexes can hide the ID from the search.
+        self.remove(index)
+    }
+
+    /// Removes several IDs in one pass; returns how many were present.
+    fn remove_many(&mut self, ids: &[SlabIndex]) -> usize {
+        let ids: HashSet<SlabIndex> = ids.iter().copied().collect();
+        let before = self.indices.len();
+        self.indices.retain(|id| !ids.contains(id));
+        before - self.indices.len()
     }
 
     /// # Safety
@@ -131,6 +162,23 @@ impl NameIndex {
             return false;
         };
         let removed = indices.remove(index);
+        if indices.is_empty() {
+            self.map.remove(name);
+        }
+        removed
+    }
+
+    /// Removes IDs sharing `name` while their nodes are still in the slab; returns
+    /// how many were present. Deleting a subtree updates each name's postings once
+    /// instead of scanning them for every removed file.
+    pub fn remove_indices(&mut self, name: &str, ids: &[SlabIndex], slab: &FileNodes) -> usize {
+        let Some(indices) = self.map.get_mut(name) else {
+            return 0;
+        };
+        let removed = match ids {
+            [index] => usize::from(indices.remove_by_path(*index, slab)),
+            _ => indices.remove_many(ids),
+        };
         if indices.is_empty() {
             self.map.remove(name);
         }

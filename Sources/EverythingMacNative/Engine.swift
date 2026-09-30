@@ -3,7 +3,7 @@ import CNative
 import Foundation
 import Observation
 
-struct Row: Decodable {
+struct Row: Decodable, Equatable {
   let index: Int
   let id: UInt32
   let path: String
@@ -549,6 +549,28 @@ struct Sample: Codable {
         self.rows = self.rows.filter { abs($0.key - start) < 512 }
       }
       if !loaded.isEmpty { self.revision &+= 1 }
+    }
+  }
+
+  /// Re-reads cached rows around the viewport after sizes or dates changed in place.
+  /// A row keeps metadata Swift loaded itself while the index has none yet.
+  func refreshVisibleRows() {
+    guard ready, !searching, !closed, total > 0 else { return }
+    let ticket = displayedGeneration
+    let first = (visibleStart / 128) * 128
+    for start in [first, first + 128] where start < total {
+      engine.rows(generation: ticket, start: start) { [weak self] loaded in
+        guard let self = self, !self.closed, self.displayedGeneration == ticket else { return }
+        var updated = false
+        for row in loaded {
+          guard let current = self.rows[row.index], current != row else { continue }
+          if current.path == row.path && current.metadata_loaded && !row.metadata_loaded { continue }
+          self.rows[row.index] = row
+          self.dirtyRows.insert(row.index)
+          updated = true
+        }
+        if updated { self.revision &+= 1 }
+      }
     }
   }
 

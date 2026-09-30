@@ -196,7 +196,7 @@ pub unsafe extern "C" fn cn_poll(
             .map_err(|_| "Engine faulted; reopen index")?;
         // Metadata backfill never frees or reuses slab IDs, so the current results
         // and row generation stay valid; only structural changes invalidate them.
-        let metadata_changed = std::mem::take(&mut state.metadata.changed);
+        let mut metadata_changed = std::mem::take(&mut state.metadata.changed);
         let mut changed = false;
         let mut watcher_stopped = false;
         for _ in 0..16 {
@@ -239,6 +239,11 @@ pub unsafe extern "C" fn cn_poll(
             if state.needs_rescan {
                 break;
             }
+        }
+        // Attribute-only events update sizes and dates in place, keeping row IDs.
+        if state.cache.take_metadata_changed() {
+            metadata_changed = true;
+            state.dirty = true;
         }
         if changed {
             state.results.clear();

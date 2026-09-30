@@ -169,7 +169,7 @@ impl<'a> SlabNodeMetadata<'a> {
 }
 
 /// Use a compact form so that
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub struct SlabNodeMetadataCompact {
     state_type_and_size: StateTypeSize,
     // Actually a Option<NonZeroU32>, but using u32 here due to https://github.com/serde-rs/serde/issues/1834

@@ -19,6 +19,7 @@ typed-num = { version = "0.3.0", default-features = false, features = [
   "serde",
 ] }
 itertools = "0.14"
+libc = "0.2"
 tracing = "0.1"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 enumn = "0.1"

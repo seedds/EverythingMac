@@ -26,8 +26,9 @@ void cn_cancel_scan(void);
 size_t cn_scan_count(const CNRequest *request);
 CNBuffer cn_watch(CNEngine *engine, bool enabled, const char *checkpoint);
 // Includes `events` only when include_events is set and processed_events differs
-// from since_processed. `changed` invalidates row IDs; `metadata_changed` (indexed
-// sizes/dates) keeps them valid. `watcher_stopped` reports a lost FSEvents stream.
+// from since_processed. `changed` invalidates row IDs; `metadata_changed` (sizes and
+// dates indexed or updated in place) keeps them valid. `watcher_stopped` reports a
+// lost FSEvents stream.
 CNBuffer cn_poll(CNEngine *engine, uint64_t since_processed, bool include_events);
 CNBuffer cn_scan(const char *root, const char *ignores, const char *includes, const char *patterns, const CNRequest *request, CNEngine **out);
 CNBuffer cn_validate_exclusions(const char *patterns);
