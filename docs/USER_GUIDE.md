@@ -184,8 +184,11 @@ The app processes filesystem events and writes checkpoints while idle, at most e
 10 minutes (within about a minute of a new scan), and before quitting. Folders that
 events report as new or changed, such as a large folder moved into place, are read in
 the background; searches continue meanwhile, and the results update when reading
-finishes. While the search window is hidden, minimized, on another Space, or covered by
-other windows, the index stays current, large changes included, but the displayed
+finishes. If reading a folder stops responding for 10 seconds, as a cloud storage
+folder can when its provider hangs, other changes are applied without it and that
+folder is read again once it responds. While the search window is hidden, minimized,
+on another Space, or covered by other windows, the index stays current, large changes
+included, but the displayed
 search is not repeated; it runs again as soon as the window is shown. When thousands of
 files change at once, faster than macOS delivers their events, macOS drops some of them;
 EverythingMac then reads the dropped changes back from macOS's event history instead of
