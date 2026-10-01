@@ -263,7 +263,7 @@ EverythingMac needs its own filesystem permissions. For protected locations,
 enable it under **System Settings → Privacy & Security → Full Disk Access**, then
 relaunch. The app provides permission guidance and a link to System Settings. Items
 inside folders the app cannot open are left out of the index, including when they
-change.
+change. Folders whose details macOS withholds are still listed as folders, without dates.
 
 If the activation shortcut is already registered by another app, EverythingMac reports
 the conflict. Record an alternative in Settings → General. A failed replacement keeps the working shortcut.

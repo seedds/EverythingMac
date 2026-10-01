@@ -124,12 +124,41 @@ fn watch(state: &mut State) {
 /// polls, which the app sends soon after, so searches run in between.
 const POLL_TIME: Duration = Duration::from_millis(10);
 
+/// A walk that reads nothing for this long waits on a folder that does not answer,
+/// such as a cloud folder whose provider hangs. It is set aside, so that later
+/// changes are applied, and its folders are walked again once it returns.
+const WALK_STALL: Duration = Duration::from_secs(10);
+
+fn walk_stall() -> Duration {
+    #[cfg(test)]
+    if let Some(stall) = super::tests::walk_stall() {
+        return stall;
+    }
+    WALK_STALL
+}
+
 /// Walks of the folders an event batch changed, running without the engine lock.
 /// Later batches wait for them and for what they found to be applied, since they
 /// may depend on the result. Dropping it cancels the walks.
 pub(super) struct PendingWalk {
     result: mpsc::Receiver<Option<ScannedEvents>>,
     cancel: Arc<AtomicBool>,
+    /// Set by the walk as it reads items, and cleared when a poll notices.
+    active: Arc<AtomicBool>,
+    /// When a poll last noticed the walk reading, or the walk started.
+    last_active: Instant,
+    /// The paths the walk reads, to walk again if it is set aside.
+    paths: Vec<PathBuf>,
+}
+
+impl PendingWalk {
+    /// Whether the walk read nothing for `walk_stall()`.
+    fn stalled(&mut self) -> bool {
+        if self.active.swap(false, Ordering::Relaxed) {
+            self.last_active = Instant::now();
+        }
+        self.last_active.elapsed() >= walk_stall()
+    }
 }
 
 impl Drop for PendingWalk {
@@ -157,12 +186,22 @@ static WALK_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
 pub(super) fn start_walk(scan: EventScan) -> PendingWalk {
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
+    let active = Arc::new(AtomicBool::new(false));
+    let reading = active.clone();
     let (sender, result) = mpsc::sync_channel(1);
+    let paths = scan.paths().to_vec();
     #[cfg(test)]
     let gate = super::tests::walk_gate(scan.paths());
     WALK_POOL.spawn(move || {
         let scanned = catch_unwind(AssertUnwindSafe(|| {
-            scan.scan(|| stop.load(Ordering::Relaxed))
+            // Walks check for cancellation at every item they read. Writing only
+            // when a poll has cleared the flag keeps parallel walks from contending.
+            scan.scan(|| {
+                if !reading.load(Ordering::Relaxed) {
+                    reading.store(true, Ordering::Relaxed);
+                }
+                stop.load(Ordering::Relaxed)
+            })
         }))
         .ok()
         .flatten();
@@ -172,7 +211,13 @@ pub(super) fn start_walk(scan: EventScan) -> PendingWalk {
         }
         let _ = sender.send(scanned);
     });
-    PendingWalk { result, cancel }
+    PendingWalk {
+        result,
+        cancel,
+        active,
+        last_active: Instant::now(),
+        paths,
+    }
 }
 
 /// Applies the pending walk until `deadline` if it finishes by `wait_until`.
@@ -184,7 +229,7 @@ pub(super) fn finish_walk(
     changed: &mut bool,
 ) -> bool {
     if state.applying.is_none() {
-        let Some(walk) = &state.walk else {
+        let Some(walk) = &mut state.walk else {
             return true;
         };
         let scanned = match walk
@@ -192,7 +237,13 @@ pub(super) fn finish_walk(
             .recv_timeout(wait_until.saturating_duration_since(Instant::now()))
         {
             Ok(scanned) => scanned,
-            Err(mpsc::RecvTimeoutError::Timeout) => return false,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if !walk.stalled() {
+                    return false;
+                }
+                set_aside(state);
+                return true;
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => None,
         };
         state.walk = None;
@@ -219,6 +270,34 @@ pub(super) fn finish_walk(
         *changed |= remove_paths(state, removed);
     }
     true
+}
+
+/// Stops waiting for a walk that stopped reading. Its result is never applied: its
+/// folders are walked again once it returns, after the changes applied meanwhile.
+fn set_aside(state: &mut State) {
+    let walk = state.walk.take().expect("a walk is pending");
+    walk.cancel.store(true, Ordering::Relaxed);
+    // Paths the app removed meanwhile are out of the index, and stay out.
+    state.removed_during_walk.clear();
+    state.stalled.push(walk);
+}
+
+/// Walks the folders of set-aside walks again once they have returned. Returns
+/// whether a walk is still pending.
+fn walk_again(state: &mut State, deadline: Instant, changed: &mut bool) -> bool {
+    let mut paths = Vec::new();
+    state.stalled.retain(|walk| {
+        let waiting = matches!(walk.result.try_recv(), Err(mpsc::TryRecvError::Empty));
+        if !waiting {
+            paths.extend(walk.paths.iter().cloned());
+        }
+        waiting
+    });
+    if paths.is_empty() {
+        return false;
+    }
+    state.walk = Some(start_walk(state.cache.walk_again(paths)));
+    !finish_walk(state, deadline, deadline, changed)
 }
 
 fn apply_scanned(state: &mut State, scanned: ScannedEvents, changed: &mut bool) {
@@ -451,6 +530,9 @@ fn apply_events(state: &mut State, changed: &mut bool, watcher_stopped: &mut boo
     let deadline = started + POLL_TIME;
     // Walks started by earlier polls are not waited for.
     let mut walking = !finish_walk(state, started, deadline, changed);
+    if !walking {
+        walking = walk_again(state, deadline, changed);
+    }
     for _ in 0..16 {
         if walking || state.needs_rescan {
             break;
@@ -554,6 +636,7 @@ pub(super) fn contain<T>(state: &mut State, change: impl FnOnce(&mut State) -> T
 fn stop_for_rescan(state: &mut State) {
     state.watcher = None;
     state.walk = None;
+    state.stalled.clear();
     state.applying = None;
     state.metadata.stop();
     state.needs_rescan = true;

@@ -142,7 +142,8 @@ Attribute changes of the root itself are also applied in place; any other event 
 root asks for a full rescan, as does an attribute event that cannot be applied, since
 walking the root again would read everything. A path that cannot be read at all, being
 gone or under a folder that cannot be entered, counts as missing, as a full scan could
-not list it either.
+not list it either. A folder whose own metadata cannot be read, as for some folders
+macOS protects, is still a folder: walks take its type from its folder's listing.
 Creations, removals, renames, and coalesced subtree changes walk the path again,
 and the walk is merged into the index: unchanged items keep their nodes and IDs,
 items whose sizes or dates changed are updated in place, and only items that appeared
@@ -165,7 +166,11 @@ poll waits up to 10 ms for the walks it starts and applies steps until then; the
 waits for the next polls, which Swift sends 5 ms after a reply that reports `applying`,
 or 50 ms after one that reports `walking` while walks are still reading folders.
 Later event batches wait until a walk is applied, and paths the app removes meanwhile
-are removed again afterwards. Each folder's children are kept in name order, so a
+are removed again afterwards. A walk that reads nothing for 10 s, such as one waiting
+on a cloud folder whose provider hangs, is set aside so that later batches are
+applied; its result is discarded, and its paths are walked again once it returns.
+Walks mark each item they read in a flag that polls clear, so a long walk that keeps
+reading is never set aside. Each folder's children are kept in name order, so a
 path is found by binary search at each level; indexes saved by earlier versions are
 put in order as they open.
 

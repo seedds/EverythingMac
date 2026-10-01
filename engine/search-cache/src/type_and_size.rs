@@ -17,6 +17,10 @@ impl StateTypeSize {
         Self::new(State::Unaccessible, NodeFileType::File, 0)
     }
 
+    pub fn unaccessible_dir() -> Self {
+        Self::new(State::Unaccessible, NodeFileType::Dir, 0)
+    }
+
     pub fn some(r#type: NodeFileType, size: u64) -> Self {
         Self::new(State::Some, r#type, size)
     }

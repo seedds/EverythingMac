@@ -40,9 +40,10 @@ impl SortedSlabIndices {
         if slab.path_chain(index, &mut target).is_none() {
             return;
         }
-        if let Err(pos) = self.position(&target, slab) {
-            self.indices.insert(pos, index);
-        }
+        // Another item can have the same path: one below a folder that an older
+        // index lists twice. Both are listed, next to each other.
+        let (Ok(pos) | Err(pos)) = self.position(&target, slab);
+        self.indices.insert(pos, index);
     }
 
     /// Binary-searches by path, comparing ancestor chains instead of building a

@@ -797,12 +797,14 @@ impl SearchCache {
                 let metadata = std::fs::symlink_metadata(&current_path)
                     .map(NodeMetadata::from)
                     .ok();
+                // Each item on the path holds the next, so it is a folder even when
+                // its metadata cannot be read.
                 let index = self.push_node(
                     Some(current),
                     name,
                     match metadata {
                         Some(metadata) => SlabNodeMetadataCompact::some(metadata),
-                        None => SlabNodeMetadataCompact::unaccessible(),
+                        None => SlabNodeMetadataCompact::unaccessible_dir(),
                     },
                 );
                 self.insert_child(current, index);
@@ -1294,6 +1296,16 @@ impl SearchCache {
         })
     }
 
+    /// Reads `paths` from disk again, such as those of a walk that was given up;
+    /// applying the result records no event position.
+    pub fn walk_again(&self, paths: Vec<PathBuf>) -> EventScan {
+        EventScan {
+            paths: topmost_paths(paths),
+            max_event_id: None,
+            config: self.scan_config(),
+        }
+    }
+
     /// Applies what an `EventScan` read from disk. Returns whether indexed items changed.
     /// Items whose metadata alone changed are updated in place; see
     /// `take_metadata_changed`. To apply large changes in steps, use
@@ -1607,17 +1619,25 @@ fn path_segment_matches(name: &str, segment: &OsStr, case_insensitive: bool) -> 
 /// Result:
 /// - Local benchmarks skipped rescans for 173,034 events out of 415,449.
 fn scan_paths(events: Vec<FsEvent>) -> Vec<PathBuf> {
-    let mut candidates: Vec<(PathBuf, usize)> = events
+    topmost_paths(
+        events
+            .into_iter()
+            .filter(|event| {
+                // Sometimes there are ridiculous events assuming dir as file, so we always scan them as folder
+                matches!(
+                    event.flag.scan_type(),
+                    ScanType::SingleNode | ScanType::Folder
+                )
+            })
+            .map(|event| event.path),
+    )
+}
+
+/// `paths` without those below another, which walks of it read.
+fn topmost_paths(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut candidates: Vec<(PathBuf, usize)> = paths
         .into_iter()
-        .filter(|event| {
-            // Sometimes there are ridiculous events assuming dir as file, so we always scan them as folder
-            matches!(
-                event.flag.scan_type(),
-                ScanType::SingleNode | ScanType::Folder
-            )
-        })
-        .map(|event| {
-            let path = event.path;
+        .map(|path| {
             let depth = path_depth(&path);
             (path, depth)
         })
@@ -1685,9 +1705,12 @@ fn construct_node_slab(
         children,
         name,
         metadata,
+        is_dir,
     } = node;
     let metadata = match metadata {
         Some(metadata) => SlabNodeMetadataCompact::some(metadata),
+        // Walks read the metadata of every folder, so they could not read this one's.
+        None if is_dir => SlabNodeMetadataCompact::unaccessible_dir(),
         None => SlabNodeMetadataCompact::none(),
     };
     let name = names.intern_owned(name);
@@ -1917,6 +1940,7 @@ mod tests {
             children,
             name: name.into(),
             metadata: None,
+            is_dir: false,
         }
     }
 
@@ -2868,6 +2892,15 @@ mod tests {
         assert_eq!(cache.file_nodes[existing_index].state(), State::Some);
         assert_eq!(cache.file_nodes[missing_index].state(), State::Unaccessible);
         assert_eq!(cache.file_nodes[leaf_index].state(), State::Unaccessible);
+        // Only folders hold the items an event names.
+        assert_eq!(
+            cache.file_nodes[missing_index].file_type_hint(),
+            NodeFileType::Dir
+        );
+        assert_eq!(
+            cache.file_nodes[leaf_index].file_type_hint(),
+            NodeFileType::Dir
+        );
 
         let missing_entries = cache
             .name_index

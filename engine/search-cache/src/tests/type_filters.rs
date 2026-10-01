@@ -1730,3 +1730,87 @@ fn symlinks_match_like_files_before_and_after_their_metadata_is_read() {
     );
     expected(&mut cache);
 }
+
+/// Restores a folder's permissions when dropped, so that it can be removed.
+struct Unlock(PathBuf);
+
+impl Drop for Unlock {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+    }
+}
+
+#[test]
+fn folders_whose_metadata_cannot_be_read_stay_folders() {
+    use everything_mac_sdk::{EventFlag, FsEvent};
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new("type_unreadable_folder").unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let top = root.join("top");
+    let locked = top.join("locked");
+    fs::create_dir_all(locked.join("inner")).unwrap();
+    fs::write(locked.join("file.txt"), b"x").unwrap();
+    // Listed but not entered, its items' metadata cannot be read, as for some
+    // folders macOS protects.
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o444)).unwrap();
+    let _unlock = Unlock(locked.clone());
+    let under_root = |cache: &mut SearchCache, query: &str| -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = cache
+            .search(query)
+            .unwrap()
+            .into_iter()
+            .filter_map(|index| cache.node_path(index))
+            .filter_map(|path| path.strip_prefix(&root).ok().map(PathBuf::from))
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect();
+        paths.sort();
+        paths
+    };
+    let expected_folders = ["top", "top/locked", "top/locked/inner"].map(PathBuf::from);
+    let expected_files = [PathBuf::from("top/locked/file.txt")];
+
+    let mut cache = SearchCache::walk_fs(&root);
+    assert_eq!(under_root(&mut cache, "folder:"), expected_folders);
+    assert_eq!(under_root(&mut cache, "file:"), expected_files);
+
+    // Live updates walk the folders again: an index from an older version, which
+    // stored the folder as a file, is corrected.
+    let inner = cache.node_index_for_path(&locked.join("inner")).unwrap();
+    cache.file_nodes[inner].metadata = crate::SlabNodeMetadataCompact::unaccessible();
+    assert_eq!(under_root(&mut cache, "folder:").len(), 2);
+    let id = cache.last_event_id();
+    let rescan = FsEvent {
+        path: top.clone(),
+        id: id + 1,
+        flag: EventFlag::MustScanSubDirs,
+    };
+    cache.handle_fs_events(vec![rescan]).unwrap();
+    assert_eq!(under_root(&mut cache, "folder:"), expected_folders);
+    assert_eq!(under_root(&mut cache, "file:"), expected_files);
+
+    // Added by a live update.
+    let mut cache = SearchCache::walk_fs(&root);
+    let moved = root.join("moved");
+    fs::rename(&top, &moved).unwrap();
+    let id = cache.last_event_id();
+    let events = [
+        (&top, EventFlag::ItemRenamed),
+        (&moved, EventFlag::ItemRenamed),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (path, flag))| FsEvent {
+        path: path.clone(),
+        id: id + 1 + i as u64,
+        flag: flag | EventFlag::ItemIsDir,
+    })
+    .collect();
+    cache.handle_fs_events(events).unwrap();
+    let moved_folders = ["moved", "moved/locked", "moved/locked/inner"].map(PathBuf::from);
+    assert_eq!(under_root(&mut cache, "folder:"), moved_folders);
+    assert_eq!(
+        under_root(&mut cache, "file:"),
+        [PathBuf::from("moved/locked/file.txt")]
+    );
+}

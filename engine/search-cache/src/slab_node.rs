@@ -186,6 +186,14 @@ impl SlabNodeMetadataCompact {
         }
     }
 
+    /// A folder whose metadata cannot be read; folder filters still see it.
+    pub fn unaccessible_dir() -> Self {
+        Self {
+            state_type_and_size: StateTypeSize::unaccessible_dir(),
+            ..Self::unaccessible()
+        }
+    }
+
     pub fn some(
         fswalk::NodeMetadata {
             r#type,

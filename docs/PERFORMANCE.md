@@ -855,9 +855,9 @@ Snapshot: `build/indexed-sort-benchmark/current-source.db`, SHA-256 `81d2fc0a715
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
 CARGO_PROFILE_RELEASE_STRIP=none cargo build --locked --release \
-  -p cardinal-native-prototype --lib --example sort_index_updates
+  -p everything-mac-native-prototype --lib --example sort_index_updates
 swiftc -O -module-cache-path /tmp/everything-mac-sort-module-cache -I Sources/CNative \
-  scripts/benchmark-sort.swift -L target/release -lcardinal_native_prototype \
+  scripts/benchmark-sort.swift -L target/release -leverything_mac_native_prototype \
   -framework CoreServices -framework CoreFoundation -framework Security \
   -liconv -lresolv -o /tmp/everything-mac-maintained-sort-benchmark
 python3 scripts/benchmark-sort.py /tmp/everything-mac-maintained-sort-benchmark \
@@ -968,14 +968,14 @@ From the repository root:
 
 ```sh
 PATH="$HOME/.cargo/bin:$PATH" CARGO_PROFILE_RELEASE_STRIP=none \
-  cargo build --locked --release -p cardinal-native-prototype \
+  cargo build --locked --release -p everything-mac-native-prototype \
   --example metadata_inventory --lib
 
 target/release/examples/metadata_inventory /path/to/copied-index.db
 
 swiftc -O -module-cache-path /tmp/everything-mac-sort-module-cache \
   -I Sources/CNative scripts/benchmark-sort.swift \
-  -L target/release -lcardinal_native_prototype \
+  -L target/release -leverything_mac_native_prototype \
   -framework CoreServices -framework CoreFoundation -framework Security \
   -liconv -lresolv -o /tmp/everything-mac-indexed-sort-benchmark
 
@@ -1077,10 +1077,10 @@ The bridge's existing `search_ms` field ends before sorting. This benchmark inst
 From the repository root, build the harness:
 
 ```sh
-PATH="$HOME/.cargo/bin:$PATH" cargo build --locked --release -p cardinal-native-prototype
+PATH="$HOME/.cargo/bin:$PATH" cargo build --locked --release -p everything-mac-native-prototype
 swiftc -O -module-cache-path /tmp/everything-mac-sort-module-cache \
   -I Sources/CNative scripts/benchmark-sort.swift \
-  -L target/release -lcardinal_native_prototype \
+  -L target/release -leverything_mac_native_prototype \
   -framework CoreServices -framework CoreFoundation -framework Security \
   -liconv -lresolv -o /tmp/everything-mac-benchmark-sort
 ```

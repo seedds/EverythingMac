@@ -21,6 +21,9 @@ pub struct Node {
     pub children: Vec<Node>,
     pub name: Box<str>,
     pub metadata: Option<NodeMetadata>,
+    /// A folder, as its metadata says, or its folder's listing when the metadata
+    /// cannot be read, as for some folders macOS protects.
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -242,7 +245,7 @@ impl<'w, F: Fn() -> bool> WalkData<'w, F> {
 pub fn walk_it_without_root_chain<F: Fn() -> bool + Send + Sync>(
     walk_data: &WalkData<'_, F>,
 ) -> Option<Node> {
-    walk(walk_data.root_path, walk_data)
+    walk(walk_data.root_path, false, walk_data)
 }
 
 /// return `Some(Node)` if walk is successful.
@@ -251,7 +254,7 @@ pub fn walk_it_without_root_chain<F: Fn() -> bool + Send + Sync>(
 /// Note: if the root path is missing or inaccessible, it will still return
 /// `Some(Node)` with empty children and None metadata.
 pub fn walk_it<F: Fn() -> bool + Send + Sync>(walk_data: &WalkData<'_, F>) -> Option<Node> {
-    walk(walk_data.root_path, walk_data).map(|node_tree| {
+    walk(walk_data.root_path, false, walk_data).map(|node_tree| {
         if let Some(parent) = walk_data.root_path.parent() {
             let mut path = PathBuf::from(parent);
             let mut node = Node {
@@ -264,6 +267,7 @@ pub fn walk_it<F: Fn() -> bool + Send + Sync>(walk_data: &WalkData<'_, F>) -> Op
                     .into_owned()
                     .into_boxed_str(),
                 metadata: metadata_of_path(&path).map(NodeMetadata::from),
+                is_dir: true,
             };
             while path.pop() {
                 node = Node {
@@ -276,6 +280,7 @@ pub fn walk_it<F: Fn() -> bool + Send + Sync>(walk_data: &WalkData<'_, F>) -> Op
                         .into_owned()
                         .into_boxed_str(),
                     metadata: metadata_of_path(&path).map(NodeMetadata::from),
+                    is_dir: true,
                 };
             }
             node
@@ -287,9 +292,15 @@ pub fn walk_it<F: Fn() -> bool + Send + Sync>(walk_data: &WalkData<'_, F>) -> Op
 
 /// Note: this function will create a Node for the given path even if it's
 /// missing or inaccessible, but the metadata will be None in that case.
-fn walk<F: Fn() -> bool + Send + Sync>(path: &Path, walk_data: &WalkData<'_, F>) -> Option<Node> {
+/// `listed_dir` is whether the listing of the path's folder showed a folder.
+fn walk<F: Fn() -> bool + Send + Sync>(
+    path: &Path,
+    listed_dir: bool,
+    walk_data: &WalkData<'_, F>,
+) -> Option<Node> {
     let metadata = metadata_of_path(path);
-    let children = if metadata.as_ref().map(|x| x.is_dir()).unwrap_or_default() {
+    let is_dir = metadata.as_ref().map_or(listed_dir, Metadata::is_dir);
+    let children = if is_dir {
         walk_data.num_dirs.fetch_add(1, Ordering::Relaxed);
         let read_dir = fs::read_dir(path);
         match read_dir {
@@ -318,7 +329,7 @@ fn walk<F: Fn() -> bool + Send + Sync>(path: &Path, walk_data: &WalkData<'_, F>)
                                         if walk_data.volumes.is_some_and(|v| v.skips(&path)) {
                                             return None;
                                         }
-                                        walk(&path, walk_data)
+                                        walk(&path, true, walk_data)
                                     } else {
                                         walk_data.num_files.fetch_add(1, Ordering::Relaxed);
                                         let name = entry
@@ -336,6 +347,7 @@ fn walk<F: Fn() -> bool + Send + Sync>(path: &Path, walk_data: &WalkData<'_, F>)
                                                     // doesn't traverse symlink
                                                     entry.metadata().ok().map(NodeMetadata::from)
                                                 }),
+                                            is_dir: false,
                                         })
                                     }
                                 } else {
@@ -370,6 +382,7 @@ fn walk<F: Fn() -> bool + Send + Sync>(path: &Path, walk_data: &WalkData<'_, F>)
         children,
         name,
         metadata: metadata.map(NodeMetadata::from),
+        is_dir,
     })
 }
 
@@ -885,6 +898,32 @@ mod tests {
             root_node.metadata.is_none(),
             "missing root should have None metadata even when need_metadata is true"
         );
+    }
+
+    #[test]
+    fn listed_folders_without_metadata_are_folders() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new("fswalk_listed_folders").unwrap();
+        let root = tmp.path();
+        // Without search permission, the folder's items are listed but their
+        // metadata cannot be read, as for some folders macOS protects.
+        let locked = root.join("locked");
+        fs::create_dir_all(locked.join("inner")).unwrap();
+        fs::write(locked.join("file.txt"), b"x").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o444)).unwrap();
+        let walk_data = WalkData::simple(root, true);
+        let node = walk_it_without_root_chain(&walk_data);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        let node = node.unwrap();
+        let locked = node.children.iter().find(|c| &*c.name == "locked").unwrap();
+        assert!(locked.is_dir && locked.metadata.is_some());
+        let names: Vec<_> = locked
+            .children
+            .iter()
+            .map(|c| (&*c.name, c.is_dir, c.metadata.is_some()))
+            .collect();
+        assert_eq!(names, [("file.txt", false, false), ("inner", true, false)]);
+        assert!(node.is_dir);
     }
 
     #[test]

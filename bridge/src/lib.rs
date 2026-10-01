@@ -56,6 +56,9 @@ struct State {
     walk: Option<live::PendingWalk>,
     /// What that walk found, being applied over several polls.
     applying: Option<search_cache::PendingChanges>,
+    /// Walks that stopped reading, whose folders are walked again once they return;
+    /// see `live::set_aside`.
+    stalled: Vec<live::PendingWalk>,
     /// Paths `cn_remove_paths` removed during that walk or before it was applied,
     /// removed again after it.
     removed_during_walk: Vec<std::path::PathBuf>,
@@ -93,6 +96,7 @@ impl State {
             metadata: Default::default(),
             walk: None,
             applying: None,
+            stalled: vec![],
             removed_during_walk: vec![],
             prune_volumes: false,
             replay_from: None,
@@ -371,6 +375,33 @@ mod tests {
         });
         WALK_GATES.lock().unwrap().push((folder.to_owned(), gate));
         (walked, release)
+    }
+
+    /// How long a walk may read nothing in tests that set it, in milliseconds.
+    static WALK_STALL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    pub(super) fn walk_stall() -> Option<Duration> {
+        let ms = WALK_STALL_MS.load(std::sync::atomic::Ordering::Relaxed);
+        (ms > 0).then(|| Duration::from_millis(ms))
+    }
+
+    /// Restores the usual stall limit when dropped.
+    struct StallLimit;
+
+    impl StallLimit {
+        fn set(limit: Duration) -> Self {
+            WALK_STALL_MS.store(
+                limit.as_millis() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            Self
+        }
+    }
+
+    impl Drop for StallLimit {
+        fn drop(&mut self) {
+            WALK_STALL_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Run by a walk of `paths` after reading them.
@@ -977,6 +1008,98 @@ mod tests {
         assert!(state.cache.node_index_for_path(&later).is_some());
         assert_eq!(state.cache.last_event_id(), id + 2);
         assert!(state.events_dirty && state.walk.is_none());
+    }
+
+    #[test]
+    fn stalled_walks_are_set_aside_and_walked_again() {
+        use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let _limit = StallLimit::set(Duration::from_millis(100));
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let mut state = State::new(SearchCache::walk_fs(&root), root.clone());
+        let (events, watcher) = EventWatcher::manual();
+        state.watcher = Some(watcher);
+        let id = state.cache.last_event_id();
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        let folder = root.join("folder");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("a.txt"), "a").unwrap();
+        let later = root.join("later.txt");
+        fs::write(&later, "l").unwrap();
+        // The walk stops reading, as one waiting on a cloud folder that hangs.
+        let (walked, release) = hold_walk(&folder);
+        let send = |path: &Path, id: u64, flag: EventFlag| {
+            events
+                .send(vec![FsEvent {
+                    path: path.to_owned(),
+                    id,
+                    flag,
+                }])
+                .unwrap();
+        };
+        send(
+            &folder,
+            id + 1,
+            EventFlag::ItemCreated | EventFlag::ItemIsDir,
+        );
+        send(
+            &later,
+            id + 2,
+            EventFlag::ItemCreated | EventFlag::ItemIsFile,
+        );
+        let poll = |engine: &mut Engine| unsafe { reply(live::cn_poll(engine, 0, false)) };
+        assert_eq!(poll(&mut engine)["walking"], true);
+        walked.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Changes made while it waits are read when the folder is walked again.
+        fs::write(folder.join("b.txt"), "b").unwrap();
+        let indexed = |engine: &Engine, path: &Path| {
+            engine
+                .0
+                .lock()
+                .unwrap()
+                .cache
+                .node_index_for_path(path)
+                .is_some()
+        };
+        let started = Instant::now();
+        while !indexed(&engine, &later) {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "later events wait"
+            );
+            poll(&mut engine);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !indexed(&engine, &folder),
+            "the stalled walk is never applied"
+        );
+        assert_eq!(poll(&mut engine)["walking"], false);
+        {
+            let mut state = engine.0.lock().unwrap();
+            assert_eq!(state.stalled.len(), 1);
+            assert_eq!(state.cache.last_event_id(), id + 2);
+        }
+        drop(release);
+        let started = Instant::now();
+        while !indexed(&engine, &folder.join("b.txt")) {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "folder walked again"
+            );
+            poll(&mut engine);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut state = engine.0.lock().unwrap();
+        assert!(
+            state
+                .cache
+                .node_index_for_path(&folder.join("a.txt"))
+                .is_some()
+        );
+        assert!(state.stalled.is_empty() && state.walk.is_none());
+        assert_eq!(state.cache.last_event_id(), id + 2);
     }
 
     #[test]

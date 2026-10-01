@@ -212,12 +212,9 @@ fn older_indexes_get_children_in_name_order() {
         assert!(cache.node_index_for_path(&path).is_some(), "{path:?}");
     }
 
-    // The name index lists a path once, so list the twin as older versions did.
     let twin = cache.push_node(Some(index), "f5.txt", SlabNodeMetadataCompact::none());
     cache.insert_child(index, twin);
-    let postings = cache.name_index.get_mut("f5.txt").unwrap();
-    assert_eq!(postings.len(), 2);
-    unsafe { postings.insert_ordered(twin) };
+    assert_eq!(cache.name_index.get("f5.txt").unwrap().len(), 3);
     cache.assert_whole();
     let events = events(&mut cache, &[(&folder, EventFlag::MustScanSubDirs)]);
     assert!(cache.handle_fs_events(events).unwrap());
@@ -228,4 +225,42 @@ fn older_indexes_get_children_in_name_order() {
         "one per folder"
     );
     assert_eq!(indexed_paths(&cache, &root), disk_paths(&root));
+}
+
+/// Below a folder that an older index lists twice, an item can be added at the
+/// same path as one below the other copy. It is still found by name, and removed.
+#[test]
+fn items_at_the_path_of_another_are_indexed() {
+    let tmp = TempDir::new("twin_paths").unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    write_files(&root, 1, 2);
+    let mut cache = SearchCache::walk_fs(&root);
+    let folder = root.join("d0");
+    let first = cache.node_index_for_path(&folder).unwrap();
+    let parent = cache.node_index_for_path(&root).unwrap();
+    // The copy is listed after the first, so changes in the folder go to the first.
+    let twin = cache.push_node(Some(parent), "d0", SlabNodeMetadataCompact::none());
+    cache.insert_child(parent, twin);
+    let late = cache.push_node(Some(twin), "late.txt", SlabNodeMetadataCompact::none());
+    cache.insert_child(twin, late);
+    cache.assert_whole();
+
+    let added = folder.join("late.txt");
+    fs::write(&added, b"x").unwrap();
+    let created = events(&mut cache, &[(&added, EventFlag::ItemCreated)]);
+    assert!(cache.handle_fs_events(created).unwrap());
+    cache.assert_whole();
+    let found: Vec<_> = cache
+        .search("late.txt")
+        .unwrap()
+        .into_iter()
+        .map(|index| cache.node_parent(index))
+        .collect();
+    assert_eq!(found.len(), 2);
+    assert!(found.contains(&Some(first)) && found.contains(&Some(twin)));
+
+    fs::remove_file(&added).unwrap();
+    let removed = events(&mut cache, &[(&added, EventFlag::ItemRemoved)]);
+    assert!(cache.handle_fs_events(removed).unwrap());
+    cache.assert_whole();
 }

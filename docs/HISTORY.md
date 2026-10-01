@@ -695,6 +695,42 @@ for `size:` still notes that the filter compares logical size, which differs fro
 column. The saved-index self-check now expects the new title. Column identifiers were
 already `Size`, so saved widths and sort order carry over.
 
+## Review leftovers — 0.1.83
+
+The remaining candidates of the 0.1.79 review, checked:
+
+- Folders typed as files. Walks read each folder's metadata with `lstat`; where that
+  failed, the folder was indexed without metadata and typed as a file, although its
+  folder's listing (`d_type`) said folder. In this Mac's index (5,711,644 entries), 37
+  items could not be read: 36 folders (34 with `EPERM`, such as
+  `/private/var/db/DifferentialPrivacy` and sandbox caches in `/private/var/folders`;
+  2 with `EACCES`) and one file. `fswalk::Node` now carries `is_dir` from the listing,
+  and full scans, live walks, and `create_node_chain` (whose items each hold the next,
+  so are folders) store such folders as unreadable folders
+  (`SlabNodeMetadataCompact::unaccessible_dir`). Existing indexes keep the file type
+  until a rescan or a walk of the folder that holds them.
+- Items at the same path. `SortedSlabIndices::insert` skipped an item whose path
+  equalled another's, which happens only below a folder that an index from before
+  0.1.75 lists twice. The item was then missing from the name index, and removing it
+  failed the index's consistency check, which became a full rescan. Both are listed now.
+- Walks without a time limit. Event walks skip other volumes but read cloud storage
+  folders on the startup disk; on this Mac, listing a OneDrive folder failed with
+  `ETIMEDOUT`. A walk that blocks held back every later event batch, showing "Updating
+  changed folders…" throughout. Walks now set a flag at every item they read, which
+  polls clear; a walk that reads nothing for 10 s is set aside (`State.stalled`), later
+  batches are applied, and its paths are walked again (`SearchCache::walk_again`) once
+  it returns. Its event position is not recorded; later batches advance it.
+- Common-name inserts. Adding an item to a name's postings shifts the list. In a copy
+  of this Mac's index, the most common name had 46,046 items; adding 10,000 more, each
+  in its own folder, took 3.8 µs each (38 ms in all), against 0.8 µs for a name with
+  28,718 items and 0.3 µs for new names. A live step adds at most one item of a name to
+  a folder, so steps stay short. Not changed.
+
+New tests cover folders whose metadata cannot be read (full scans, live walks, and an
+index that typed them as files), an item added at the path of another, and a walk that
+stops reading; each failed against the old behavior. The performance guide's build
+commands used the crate's old name, `cardinal-native-prototype`, and now build.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

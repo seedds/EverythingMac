@@ -112,13 +112,14 @@ impl ScannedEvents {
     }
 }
 
-fn walked_metadata(metadata: Option<NodeMetadata>) -> SlabNodeMetadataCompact {
+fn walked_metadata(metadata: Option<NodeMetadata>, is_dir: bool) -> SlabNodeMetadataCompact {
     // Walks of changed paths read metadata; an item it could not be read for is
-    // indexed as unaccessible.
-    metadata.map_or_else(
-        SlabNodeMetadataCompact::unaccessible,
-        SlabNodeMetadataCompact::some,
-    )
+    // indexed as unaccessible, still a folder if its folder's listing said so.
+    match metadata {
+        Some(metadata) => SlabNodeMetadataCompact::some(metadata),
+        None if is_dir => SlabNodeMetadataCompact::unaccessible_dir(),
+        None => SlabNodeMetadataCompact::unaccessible(),
+    }
 }
 
 /// Puts walked items in name order. Walks list them that way already.
@@ -342,8 +343,9 @@ impl SearchCache {
             children,
             name,
             metadata,
+            is_dir,
         } = node;
-        let index = self.push_node(Some(parent), name, walked_metadata(metadata));
+        let index = self.push_node(Some(parent), name, walked_metadata(metadata, is_dir));
         if !children.is_empty() {
             steps.push(Step::Fill {
                 item: self.identity(index),
@@ -358,9 +360,12 @@ impl SearchCache {
     /// replaced by a folder of the same name, which file and folder filters see.
     fn merge_walked(&mut self, index: SlabIndex, node: Node, steps: &mut Vec<Step>) -> bool {
         let Node {
-            children, metadata, ..
+            children,
+            metadata,
+            is_dir,
+            ..
         } = node;
-        let metadata = walked_metadata(metadata);
+        let metadata = walked_metadata(metadata, is_dir);
         let indexed = &mut self.file_nodes[index];
         let type_changed = indexed.file_type_hint() != metadata.file_type_hint();
         // Items indexed without metadata have no known type to change.
