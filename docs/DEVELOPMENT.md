@@ -107,6 +107,17 @@ be read are renamed with "(unreadable)" and set `loadError`; loading the index t
 saves its folders instead of rescanning with the defaults, and a file that cannot be
 renamed is never overwritten.
 
+When FSEvents drops events on their way to the app (`UserDropped`), its event history
+still has them: `plan_fs_events` returns `HandleFSEError::Dropped`, and the bridge
+watches again from the last applied event (`replay_dropped`), which replays the batch
+and everything after it. A replay that drops events again before applying any, or eight
+replays before the history finishes replaying, rescans; `KernelDropped`, a new history,
+and changes to the root still rescan at once. `examples/drop_replay.rs` changes
+thousands of files at once and reports whether a rescan was needed. Events for the
+checkpoint's folder and its files are the app's own writes and are skipped, compared
+both as given and resolved (`own_folders`), since FSEvents reports resolved paths. A
+rescan also stops the size and date backfill of the index it replaces.
+
 Rust owns the full result-ID vector and the selection. A selection is a list of
 node identities: a slab index plus a per-slot generation that `remove_node` bumps, so
 a reused slot never matches an earlier identity, together with the cache instance
@@ -139,7 +150,9 @@ or disappeared are added or removed. `cn_poll` reports in-place updates as
 `metadata_changed`, which keeps row IDs valid: Swift refreshes the visible rows and
 re-sorts only when the view sorts or filters by size or date. It reports added or
 removed items, and items whose type changed, as `changed`, which invalidates row IDs
-and makes Swift repeat the search. Files the app itself moves to the Trash
+and makes Swift repeat the search. Trash takes the selection from
+`cn_selection_top_paths`, which leaves out items inside a selected folder, using the
+index's parent links on the engine queue. Files the app itself moves to the Trash
 leave the index at once through `cn_remove_paths`, followed by an immediate refresh;
 their FSEvents arrive later and change nothing. Name matching scans live names in the
 name index in parallel key ranges.

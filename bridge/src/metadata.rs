@@ -21,6 +21,11 @@ impl Indexing {
     pub fn active(&self) -> bool {
         self.workers != 0
     }
+
+    /// Workers finish the batch they read and stop.
+    pub fn stop(&mut self) {
+        self.pending = VecDeque::new();
+    }
 }
 
 /// Files read per batch. Each batch locks the engine twice: once to take the
@@ -145,6 +150,31 @@ mod tests {
     use super::*;
     use search_cache::SearchCache;
     use std::{fs, sync::mpsc, time::Duration};
+
+    #[test]
+    fn a_needed_rescan_stops_reading_sizes_and_dates() {
+        use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent};
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::write(root.join("file.txt"), "contents").unwrap();
+        let mut state = State::new(SearchCache::walk_fs(&root), root.clone());
+        state.metadata.pending = state.cache.pending_metadata_ids().into();
+        assert!(!state.metadata.pending.is_empty());
+        let (events, watcher) = EventWatcher::manual();
+        state.watcher = Some(watcher);
+        events
+            .send(vec![FsEvent {
+                path: root,
+                id: state.cache.last_event_id() + 1,
+                flag: EventFlag::RootChanged,
+            }])
+            .unwrap();
+        let mut engine = crate::Engine(Arc::new(Mutex::new(state)));
+        unsafe { crate::cn_buffer_free(crate::live::cn_poll(&mut engine, 0, false)) };
+        let state = engine.0.lock().unwrap();
+        assert!(state.needs_rescan);
+        assert!(state.metadata.pending.is_empty());
+    }
 
     #[test]
     fn blocked_metadata_read_does_not_lock_or_retain_the_engine() {

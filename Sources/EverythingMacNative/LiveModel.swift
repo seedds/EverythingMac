@@ -456,11 +456,16 @@ extension Model {
     if selectionCount == 0 && actions.preview.isVisible { actions.preview.update([]) }
   }
   /// Resolves selected paths for an action; `limit` bounds them (0 for all).
-  func resolveSelection(limit: Int = 0, _ completion: @escaping ([String]) -> Void) {
+  /// With `topLevel`, leaves out selected items inside a selected folder.
+  func resolveSelection(
+    limit: Int = 0, topLevel: Bool = false, _ completion: @escaping ([String]) -> Void
+  ) {
     guard !selectionLoading, selectionCount > 0 else { return }
     let epoch = selectionEpoch
     let index = indexEpoch
-    engine.perform({ try decode(cn_selection_paths($0, limit)) }) { [weak self] result in
+    engine.perform({
+      try decode(topLevel ? cn_selection_top_paths($0) : cn_selection_paths($0, limit))
+    }) { [weak self] result in
       guard let self = self, !self.closed, self.selectionEpoch == epoch,
         self.indexEpoch == index
       else { return }

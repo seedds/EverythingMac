@@ -124,7 +124,8 @@ final class FileActions {
         return
       }
       let limit = action == "preview" ? PreviewController.limit : 0
-      model.resolveSelection(limit: limit) { [weak self] paths in
+      // Trashing a folder trashes what it holds, so the Trash gets top-level items.
+      model.resolveSelection(limit: limit, topLevel: action == "trash") { [weak self] paths in
         self?.perform(action, paths: paths)
       }
       return
@@ -157,15 +158,14 @@ final class FileActions {
         forType: .string)
     case "rename": rename(paths)
     case "trash":
-      let targets = Self.trashTargets(paths)
-      guard targets.count <= Self.confirmationThreshold || confirmLarge(action, targets.count)
+      guard paths.count <= Self.confirmationThreshold || confirmLarge(action, paths.count)
       else { return }
       let trashItem = self.trashItem
       runRemoving {
         // One failure must not leave the rest of the selection behind.
         var trashed: [String] = []
         var failures: [Error] = []
-        for path in targets {
+        for path in paths {
           do {
             try trashItem(fileURL(path))
             trashed.append(path)
@@ -173,7 +173,7 @@ final class FileActions {
         }
         let error = failures.first.map {
           messageError(
-            "Moved \(trashed.count) of \(targets.count) items to the Trash. \($0.localizedDescription)")
+            "Moved \(trashed.count) of \(paths.count) items to the Trash. \($0.localizedDescription)")
         }
         return (trashed, error)
       }
@@ -240,20 +240,6 @@ final class FileActions {
   }
 
   /// Items inside a selected folder go to the Trash with that folder.
-  static func trashTargets(_ paths: [String]) -> [String] {
-    let selected = Set(paths)
-    var seen = Set<String>()
-    return paths.filter { path in
-      var current = path
-      while true {
-        let parent = (current as NSString).deletingLastPathComponent
-        if parent == current || parent.isEmpty { break }
-        if selected.contains(parent) { return false }
-        current = parent
-      }
-      return seen.insert(path).inserted
-    }
-  }
   static func askToConfirm(_ action: String, _ count: Int) -> Bool {
     let alert = NSAlert()
     if action == "trash" {

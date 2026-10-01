@@ -241,9 +241,9 @@ fn remove_paths(state: &mut State, paths: Vec<PathBuf>) -> bool {
         .collect();
     match state.cache.handle_fs_events(events) {
         Ok(changed) => changed,
-        Err(HandleFSEError::Rescan) => {
-            state.watcher = None;
-            state.needs_rescan = true;
+        // Removal events never report dropped ones.
+        Err(HandleFSEError::Rescan | HandleFSEError::Dropped) => {
+            stop_for_rescan(state);
             true
         }
     }
@@ -330,6 +330,7 @@ pub unsafe extern "C" fn cn_watch(
         if state.loaded_from.as_deref() != Some(path.as_path()) {
             state.dirty = true;
         }
+        state.own_folders = own_folders(&path);
         state.checkpoint = Some(path);
         state.watcher = None;
         if enabled {
@@ -468,9 +469,9 @@ fn apply_events(state: &mut State, changed: &mut bool, watcher_stopped: &mut boo
         let events: Vec<_> = events
             .into_iter()
             .filter_map(|mut event| {
-                if let Some(parent) = state.checkpoint.as_ref().and_then(|p| p.parent())
-                    && event.path.starts_with(parent)
-                {
+                if state.own_folders.iter().any(|folder| {
+                    event.path == *folder || event.path.parent() == Some(folder.as_path())
+                }) {
                     return None;
                 }
                 if state.event_root != state.root
@@ -483,6 +484,9 @@ fn apply_events(state: &mut State, changed: &mut bool, watcher_stopped: &mut boo
             .collect();
         state.processed_events += events.len() as u64;
         log_events(&mut state.events, &events);
+        let history_done = events
+            .iter()
+            .any(|event| event.flag.contains(EventFlag::HistoryDone));
         match state.cache.plan_fs_events(events) {
             // Without paths to read, applying only records the event position.
             Ok(scan) if scan.is_empty() => {
@@ -495,13 +499,41 @@ fn apply_events(state: &mut State, changed: &mut bool, watcher_stopped: &mut boo
                 walking = !finish_walk(state, deadline, deadline, changed);
             }
             Err(HandleFSEError::Rescan) => {
-                state.watcher = None;
-                state.needs_rescan = true;
+                stop_for_rescan(state);
                 *changed = true;
             }
+            Err(HandleFSEError::Dropped) => {
+                replay_dropped(state, changed);
+                break;
+            }
+        }
+        if history_done {
+            state.replays = 0;
         }
     }
     walking
+}
+
+/// Replays in a row, before the history finishes replaying, after which events that
+/// keep being dropped need a rescan.
+const MAX_REPLAYS: u32 = 8;
+
+/// macOS dropped events on their way to the app, as it does when thousands of
+/// files change at once, but kept them in its event history. Watching again from
+/// the last applied event replays them, including the rest of this batch, instead
+/// of rescanning everything. A replay that applied nothing before events were
+/// dropped again, or one burst that keeps dropping them, rescans.
+fn replay_dropped(state: &mut State, changed: &mut bool) {
+    let from = state.cache.last_event_id();
+    if state.replay_from == Some(from) || state.replays >= MAX_REPLAYS {
+        stop_for_rescan(state);
+        *changed = true;
+        return;
+    }
+    state.replay_from = Some(from);
+    state.replays += 1;
+    state.watcher = None;
+    watch(state);
 }
 
 /// Runs a change to the index. A panic, such as a failure to grow the index's
@@ -517,12 +549,32 @@ pub(super) fn contain<T>(state: &mut State, change: impl FnOnce(&mut State) -> T
     }
 }
 
-/// Stops applying changes to an index that needs a full rescan.
+/// Stops applying changes to an index that needs a full rescan, and reading sizes
+/// and dates for it, since the rescan replaces it.
 fn stop_for_rescan(state: &mut State) {
     state.watcher = None;
     state.walk = None;
     state.applying = None;
+    state.metadata.stop();
     state.needs_rescan = true;
+}
+
+/// The folder holding the checkpoint, as given and resolved. Events for it and the
+/// files in it, such as the checkpoint and its temporary copy, are the app's own
+/// writes. FSEvents reports resolved paths, so when the folder's path goes through
+/// a symlink, only the resolved one keeps those saves from being indexed, which
+/// would make the index unsaved again after every save.
+fn own_folders(checkpoint: &Path) -> Vec<PathBuf> {
+    let Some(folder) = checkpoint.parent() else {
+        return vec![];
+    };
+    let mut folders = vec![folder.to_path_buf()];
+    if let Ok(resolved) = folder.canonicalize()
+        && resolved != folder
+    {
+        folders.push(resolved);
+    }
+    folders
 }
 
 /// # Safety
@@ -671,6 +723,8 @@ pub unsafe extern "C" fn cn_checkpoint(engine: *mut Engine, include_events: bool
         }
         fs::create_dir_all(path.parent().ok_or("No checkpoint parent")?)
             .map_err(|e| e.to_string())?;
+        // The folder may not have existed to be resolved when watching started.
+        state.own_folders = own_folders(&path);
         let lock = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -977,7 +1031,46 @@ pub unsafe extern "C" fn cn_selection_paths(engine: *mut Engine, limit: usize) -
                     .and_then(|identity| state.cache.node_path(identity.index()))
             })
             .collect::<Option<Vec<_>>>()
-            .ok_or("One or more selected files moved or disappeared. Select the remaining files again.")?;
+            .ok_or(SELECTION_MOVED)?;
+        Ok(json!({"status":"ok", "paths":paths}))
+    })
+}
+
+const SELECTION_MOVED: &str =
+    "One or more selected files moved or disappeared. Select the remaining files again.";
+
+/// Paths of the selected items that no selected folder holds, for moving to the
+/// Trash, which moves a folder with everything in it.
+/// # Safety
+/// Engine must be live and calls serialized.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cn_selection_top_paths(engine: *mut Engine) -> Buffer {
+    guarded(|| {
+        let engine = unsafe { engine.as_ref() }.ok_or("No index loaded")?;
+        let state = engine
+            .0
+            .lock()
+            .map_err(|_| "Engine faulted; reopen index")?;
+        let selected = (0..state.selection.len())
+            .map(|entry| resolve_selected(&state, entry).map(|identity| identity.index()))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(SELECTION_MOVED)?;
+        let set: HashSet<SlabIndex> = selected.iter().copied().collect();
+        let paths = selected
+            .into_iter()
+            .filter(|&index| {
+                let mut node = index;
+                while let Some(parent) = state.cache.node_parent(node) {
+                    if set.contains(&parent) {
+                        return false;
+                    }
+                    node = parent;
+                }
+                true
+            })
+            .map(|index| state.cache.node_path(index))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(SELECTION_MOVED)?;
         Ok(json!({"status":"ok", "paths":paths}))
     })
 }

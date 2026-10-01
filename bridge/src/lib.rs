@@ -31,6 +31,9 @@ struct State {
     event_root: std::path::PathBuf,
     needs_rescan: bool,
     checkpoint: Option<std::path::PathBuf>,
+    /// The checkpoint's folder as given and as FSEvents reports it, resolved; events
+    /// for its files are the app's own writes. See `live::own_folders`.
+    own_folders: Vec<std::path::PathBuf>,
     /// The saved index this state was opened from, unchanged until `dirty` is set.
     loaded_from: Option<std::path::PathBuf>,
     /// Indexed data changed since the index was opened or last saved.
@@ -58,6 +61,10 @@ struct State {
     removed_during_walk: Vec<std::path::PathBuf>,
     /// Remove items on other volumes on the next poll; see `cn_watch`.
     prune_volumes: bool,
+    /// The event a replay of dropped events started after, and how many replays ran
+    /// since the history last finished replaying; see `live::replay_dropped`.
+    replay_from: Option<u64>,
+    replays: u32,
 }
 impl State {
     /// Sort orders are built on first use, so opening skips columns never sorted.
@@ -71,6 +78,7 @@ impl State {
             watcher: None,
             needs_rescan: false,
             checkpoint: None,
+            own_folders: vec![],
             loaded_from: None,
             dirty: true,
             events_dirty: false,
@@ -87,6 +95,8 @@ impl State {
             applying: None,
             removed_during_walk: vec![],
             prune_volumes: false,
+            replay_from: None,
+            replays: 0,
         }
     }
 }
@@ -1534,6 +1544,186 @@ mod tests {
             assert_eq!(transferred["status"], "ok");
             assert_eq!(transferred["paths"], json!([]));
         }
+    }
+
+    #[test]
+    fn the_apps_own_saves_are_not_indexed_through_a_symlinked_folder() {
+        use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent, current_event_id};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let real = root.join("real");
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("link")).unwrap();
+        let mut engine = Engine(Arc::new(Mutex::new(State::new(
+            SearchCache::walk_fs(&root),
+            root.clone(),
+        ))));
+        let checkpoint = CString::new(root.join("link/index.db").to_str().unwrap()).unwrap();
+        unsafe {
+            assert_eq!(
+                reply(live::cn_watch(&mut engine, false, checkpoint.as_ptr()))["status"],
+                "ok"
+            );
+        }
+        // FSEvents reports a save under the folder's resolved path.
+        let saved = real.join("index.db");
+        fs::write(&saved, "x").unwrap();
+        let (events, watcher) = EventWatcher::manual();
+        engine.0.lock().unwrap().watcher = Some(watcher);
+        let created = EventFlag::ItemCreated | EventFlag::ItemIsFile;
+        events
+            .send(vec![FsEvent {
+                path: saved.clone(),
+                id: current_event_id(),
+                flag: created,
+            }])
+            .unwrap();
+        let polled = unsafe { reply(live::cn_poll(&mut engine, 0, false)) };
+        assert_eq!(polled["changed"], false);
+        // Folders inside it, such as an indexed folder, are not the app's own.
+        let nested = real.join("files");
+        fs::create_dir(&nested).unwrap();
+        fs::write(nested.join("user.txt"), "x").unwrap();
+        events
+            .send(vec![FsEvent {
+                path: nested.join("user.txt"),
+                id: current_event_id(),
+                flag: created,
+            }])
+            .unwrap();
+        let polled = unsafe { reply(live::cn_poll(&mut engine, 0, false)) };
+        assert_eq!(polled["changed"], true);
+        assert!(
+            engine
+                .0
+                .lock()
+                .unwrap()
+                .cache
+                .node_index_for_path(&saved)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn trash_gets_selected_items_that_no_selected_folder_holds() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("folder");
+        let sub = folder.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let inside = folder.join("inside.txt");
+        let deeper = sub.join("deeper.txt");
+        let other = tmp.path().join("other.txt");
+        for file in [&inside, &deeper, &other] {
+            fs::write(file, "x").unwrap();
+        }
+        let cache = SearchCache::walk_fs(tmp.path());
+        let ids = [&deeper, &folder, &other, &sub, &inside]
+            .map(|path| cache.node_index_for_path(path).unwrap());
+        let mut state = State::new(cache, tmp.path().to_owned());
+        state.results = ids.to_vec();
+        state.generation = 1;
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        let ranges = CString::new("[[0,5]]").unwrap();
+        let cached = CString::new("null").unwrap();
+        unsafe {
+            let selected = reply(live::cn_select(
+                &mut engine,
+                1,
+                ranges.as_ptr(),
+                cached.as_ptr(),
+            ));
+            assert_eq!(selected["selection_count"], 5);
+            let top = reply(live::cn_selection_top_paths(&mut engine));
+            assert_eq!(top["status"], "ok");
+            assert_eq!(top["paths"], json!([folder, other]));
+            // Other actions still get every selected item.
+            assert_eq!(
+                reply(live::cn_selection_paths(&mut engine, 0))["paths"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                5
+            );
+        }
+    }
+
+    #[test]
+    fn dropped_events_are_replayed_from_the_history_unless_replays_stall() {
+        use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent, current_event_id};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let kept = root.join("kept.txt");
+        fs::write(&kept, "x").unwrap();
+        let mut engine = Engine(Arc::new(Mutex::new(State::new(
+            SearchCache::walk_fs(&root),
+            root.clone(),
+        ))));
+        // Events the test sends itself, in place of the watcher a replay starts.
+        let inject = |engine: &mut Engine, batches: Vec<Vec<FsEvent>>| {
+            let (sender, watcher) = EventWatcher::manual();
+            engine.0.lock().unwrap().watcher = Some(watcher);
+            for batch in batches {
+                sender.send(batch).unwrap();
+            }
+            let polled = unsafe { reply(live::cn_poll(engine, 0, false)) };
+            assert_eq!(polled["status"], "ok");
+            // A replay replaces the watcher, closing the test's channel.
+            (polled["needs_rescan"] == true, sender.send(vec![]).is_err())
+        };
+        let dropped = || FsEvent {
+            path: root.clone(),
+            id: current_event_id(),
+            flag: EventFlag::UserDropped | EventFlag::MustScanSubDirs,
+        };
+        // An applied change moves the history position on; its ID must exist.
+        let progress = |engine: &mut Engine| {
+            let last = engine.0.lock().unwrap().cache.last_event_id();
+            let started = Instant::now();
+            while current_event_id() <= last {
+                assert!(started.elapsed() < Duration::from_secs(10));
+                fs::write(&kept, "y").unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            vec![FsEvent {
+                path: kept.clone(),
+                id: current_event_id(),
+                flag: EventFlag::ItemModified | EventFlag::ItemIsFile,
+            }]
+        };
+        let from = engine.0.lock().unwrap().cache.last_event_id();
+        assert_eq!(inject(&mut engine, vec![vec![dropped()]]), (false, true));
+        {
+            let state = engine.0.lock().unwrap();
+            assert_eq!((state.replay_from, state.replays), (Some(from), 1));
+            assert!(state.watcher.is_some());
+        }
+        // A replay that applies events and then drops some again replays again.
+        let applied = progress(&mut engine);
+        assert_eq!(
+            inject(&mut engine, vec![applied, vec![dropped()]]),
+            (false, true)
+        );
+        assert_eq!(engine.0.lock().unwrap().replays, 2);
+        // Finishing the replayed history allows later bursts their own replays.
+        let history_done = vec![FsEvent {
+            path: root.clone(),
+            id: 0,
+            flag: EventFlag::HistoryDone,
+        }];
+        assert_eq!(inject(&mut engine, vec![history_done]), (false, false));
+        assert_eq!(engine.0.lock().unwrap().replays, 0);
+        // Dropping again before applying anything means the replay is not keeping up.
+        let applied = progress(&mut engine);
+        assert_eq!(
+            inject(&mut engine, vec![applied, vec![dropped()]]),
+            (false, true)
+        );
+        assert!(inject(&mut engine, vec![vec![dropped()]]).0);
+        let state = engine.0.lock().unwrap();
+        assert!(state.needs_rescan && state.watcher.is_none());
     }
 
     #[test]

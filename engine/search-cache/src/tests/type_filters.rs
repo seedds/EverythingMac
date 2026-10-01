@@ -1,5 +1,6 @@
 use super::prelude::*;
 use super::support::node_name;
+use crate::SlabNodeMetadataCompact;
 
 #[test]
 fn test_type_and_macro_filters() {
@@ -467,7 +468,10 @@ fn test_type_file_folder_filters() {
     fs::create_dir(tmp.path().join("folder2")).unwrap();
     fs::write(tmp.path().join("folder1/nested.txt"), b"x").unwrap();
 
-    let mut cache = SearchCache::walk_fs(tmp.path());
+    // `/var`, which holds the temporary folder, is a symlink: as an ancestor in the
+    // index it would count as a file.
+    let root = tmp.path().canonicalize().unwrap();
+    let mut cache = SearchCache::walk_fs(&root);
 
     let files = cache.search("type:file").unwrap();
     assert_eq!(files.len(), 3, "Should match only files");
@@ -479,7 +483,7 @@ fn test_type_file_folder_filters() {
         .filter(|&i| {
             cache
                 .node_path(i)
-                .map(|p| p.starts_with(tmp.path()))
+                .map(|p| p.starts_with(&root))
                 .unwrap_or_default()
         })
         .collect::<Vec<_>>();
@@ -492,7 +496,7 @@ fn test_type_file_folder_filters() {
         .filter(|&i| {
             cache
                 .node_path(i)
-                .map(|p| p.starts_with(tmp.path()))
+                .map(|p| p.starts_with(&root))
                 .unwrap_or_default()
         })
         .collect::<Vec<_>>();
@@ -506,7 +510,7 @@ fn test_type_file_folder_filters() {
         .filter(|&i| {
             cache
                 .node_path(i)
-                .map(|p| p.starts_with(tmp.path()))
+                .map(|p| p.starts_with(&root))
                 .unwrap_or_default()
         })
         .collect::<Vec<_>>();
@@ -519,7 +523,7 @@ fn test_type_file_folder_filters() {
         .filter(|&i| {
             cache
                 .node_path(i)
-                .map(|p| p.starts_with(tmp.path()))
+                .map(|p| p.starts_with(&root))
                 .unwrap_or_default()
         })
         .collect::<Vec<_>>();
@@ -532,7 +536,7 @@ fn test_type_file_folder_filters() {
         .filter(|&i| {
             cache
                 .node_path(i)
-                .map(|p| p.starts_with(tmp.path()))
+                .map(|p| p.starts_with(&root))
                 .unwrap_or_default()
         })
         .collect::<Vec<_>>();
@@ -1366,7 +1370,9 @@ fn test_type_file_basic() {
     fs::write(tmp.path().join("file.txt"), b"x").unwrap();
     fs::create_dir(tmp.path().join("folder")).unwrap();
 
-    let mut cache = SearchCache::walk_fs(tmp.path());
+    // `/var`, which holds the temporary folder, is a symlink: as an ancestor in the
+    // index it would count as a file.
+    let mut cache = SearchCache::walk_fs(&tmp.path().canonicalize().unwrap());
 
     let results = cache.search("type:file").unwrap();
     assert_eq!(results.len(), 1);
@@ -1681,4 +1687,46 @@ fn apps_and_document_packages_match_like_files() {
         names.sort();
         assert_eq!(names, expected, "{query}");
     }
+}
+
+#[test]
+fn symlinks_match_like_files_before_and_after_their_metadata_is_read() {
+    let tmp = TempDir::new("symlink_filters").unwrap();
+    fs::write(tmp.path().join("notes.txt"), b"x").unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("notes.txt"), tmp.path().join("link.txt")).unwrap();
+    fs::create_dir(tmp.path().join("folder.txt")).unwrap();
+    let mut cache = SearchCache::walk_fs(tmp.path());
+    let names = |cache: &mut SearchCache, query: &str| {
+        let mut names: Vec<_> = cache
+            .search(query)
+            .unwrap()
+            .into_iter()
+            .map(|index| node_name(cache, index))
+            .collect();
+        names.sort();
+        names
+    };
+    let expected = |cache: &mut SearchCache| {
+        assert_eq!(names(cache, "ext:txt"), ["link.txt", "notes.txt"]);
+        assert_eq!(names(cache, "file:.txt"), ["link.txt", "notes.txt"]);
+        assert_eq!(names(cache, "folder:.txt"), ["folder.txt"]);
+    };
+    // Scans read the type of folders only; the symlink counts as a file.
+    expected(&mut cache);
+    let pending = cache.pending_metadata_ids();
+    let read: Vec<_> = cache
+        .pending_metadata_jobs(&pending)
+        .into_iter()
+        .map(|(identity, path)| {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            (identity, SlabNodeMetadataCompact::some(metadata.into()))
+        })
+        .collect();
+    assert!(cache.store_indexed_metadata(&read));
+    let link = cache.search("link.txt").unwrap()[0];
+    assert_eq!(
+        cache.file_nodes[link].file_type_hint(),
+        NodeFileType::Symlink
+    );
+    expected(&mut cache);
 }

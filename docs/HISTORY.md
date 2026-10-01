@@ -640,6 +640,53 @@ cancellation test excluded), the engine and bridge tests also under Guard Malloc
 and `cargo fmt --check` passed; and the self, sort, selection, feature, live, tab,
 terminal, and trash checks passed.
 
+## Dropped events and small fixes — 0.1.81
+
+Measured on this Mac while it was busy (load average 20–50): changing 5,000–10,000
+files within a fraction of a second, such as `chmod -R` or appending to each file, made
+macOS drop events on their way to the app (`UserDropped`). For 10,000 files changed in
+0.16 s, 6,100–7,700 events arrived and the rest were dropped; 20,000 files created over
+1.3 s lost none. Each drop meant a full rescan of `/`. The dispatch queue's priority
+(default or user-interactive) and the stream latency (0.1 or 1 s) made no difference.
+macOS's event history still held the dropped events: watching again from the last event
+delivered before the first drop replayed the rest, with no further drops, covering all
+10,000 or 50,000 changed files.
+
+The bridge now replays from the last applied event when events are dropped
+(`HandleFSEError::Dropped`, `replay_dropped`), instead of rescanning; a replay that drops
+events again before applying any, or eight replays before the history finishes, still
+rescans, as do `KernelDropped`, a new history, and changes to the root. With
+`examples/drop_replay.rs`, appending to 10,000 files rescanned in every run with the
+replay disabled; with it, no run rescanned, the index showed all 10,000 new sizes, and
+polls spent 38–42 ms in total, the longest 3.4 ms. 20,000 files behaved the same.
+
+The 0.1.79 review's remaining candidates, checked:
+
+- Trash found the items inside a selected folder on the main thread, walking each
+  path's ancestors: 1.6 s for 100,000 selected items and 19 s for a million, before the
+  confirmation appeared. The engine now returns only the top-level items
+  (`cn_selection_top_paths`) using the index's parent links: 183 ms for a selection of
+  2,978,836 items in the 4.57-million-entry benchmark index, which kept 851.
+- Copy of 100,000 files spends 3 s writing the pasteboard; writing only file URLs or
+  the older filenames list took as long, so that cost is macOS's and is unchanged.
+- A rescan let the size and date backfill continue reading every pending file of the
+  index it replaces; it now stops.
+- Events for the checkpoint's folder were skipped by comparing paths as given, but
+  FSEvents reports resolved paths, so through a symlinked folder the app's own saves
+  were indexed and left the index unsaved after every save. Both spellings are compared
+  now. Only the folder and its files are skipped, not folders inside it: a check whose
+  index sat in the folder above the indexed one found that the earlier rule, once it
+  matched, hid every change.
+- Scans read the type of folders only, so a symlink counted as a file in `ext:` and
+  `file:` until the backfill read it, and then dropped out of the results. Symlinks and
+  other items now count as files in those filters throughout.
+- Not real here: FSEvents reported a folder's name as stored, NFC or NFD, when files
+  were written through the other spelling, so event paths match the index.
+
+New tests cover dropped events (replayed, replayed again after progress, rescanned when
+a replay stalls), top-level Trash paths, the backfill stopping, the symlinked checkpoint
+folder, and symlinks in filters; each failed against the old behavior.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

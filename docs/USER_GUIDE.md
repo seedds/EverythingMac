@@ -29,6 +29,7 @@ files by extension, and also folders that Finder shows as a single item: apps,
 installer packages, and document packages such as `.pages` or `.rtfd`. So `exe:`
 lists apps, including helper apps inside other apps, and `ext:app` finds every app.
 `file:` and `folder:` still go by what the item is on disk, so an app is a folder there.
+Symlinks and other items that are not folders count as files in these filters.
 
 Enter submits a search immediately. Typing uses a **100 ms debounce** by default;
 Settings → General → **Search delay** offers none, 100, and 300 ms, and is saved. Existing rows
@@ -185,7 +186,10 @@ events report as new or changed, such as a large folder moved into place, are re
 the background; searches continue meanwhile, and the results update when reading
 finishes. While the search window is hidden, minimized, on another Space, or covered by
 other windows, the index stays current, large changes included, but the displayed
-search is not repeated; it runs again as soon as the window is shown. Changes made
+search is not repeated; it runs again as soon as the window is shown. When thousands of
+files change at once, faster than macOS delivers their events, macOS drops some of them;
+EverythingMac then reads the dropped changes back from macOS's event history instead of
+rescanning the disk. Changes made
 since the last checkpoint are replayed from macOS filesystem events on the next launch.
 If macOS has discarded that event history meanwhile (it can after a disk repair or
 reinstall), or the index comes from another Mac, the changes cannot be replayed and

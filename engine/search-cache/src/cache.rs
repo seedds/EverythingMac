@@ -617,6 +617,11 @@ impl SearchCache {
         self.file_nodes.node_path(index)
     }
 
+    /// The folder that holds the node, or `None` for the top of the index.
+    pub fn node_parent(&self, index: SlabIndex) -> Option<SlabIndex> {
+        self.file_nodes.get(index).and_then(|node| node.parent())
+    }
+
     /// Locate the slab index for an absolute path when it belongs to the watch root.
     pub fn node_index_for_path(&self, path: &Path) -> Option<SlabIndex> {
         self.node_index_for_path_with_case(path, false)
@@ -1235,21 +1240,29 @@ impl SearchCache {
         let root = self.file_nodes.path().to_path_buf();
         // If rescan needed, early exit. Attribute changes of the root itself, such as
         // a touch or a Finder tag, are applied in place below instead.
+        let mut dropped = false;
         if events.iter().any(|event| {
             if event.flag.contains(EventFlag::HistoryDone) {
                 info!("History processing done: {:?}", event);
             }
-            if event.should_rescan(&root)
-                && !(event.path == root && in_place_kind(event.flag).is_some())
+            if !event.should_rescan(&root)
+                || (event.path == root && in_place_kind(event.flag).is_some())
             {
+                false
+            } else if is_replayable_drop(event.flag) {
+                info!("Events dropped: {:?}", event);
+                dropped = true;
+                false
+            } else {
                 info!("Event rescan: {:?}", event);
                 true
-            } else {
-                false
             }
         }) {
             self.rescan_count = self.rescan_count.saturating_add(1);
             return Err(HandleFSEError::Rescan);
+        }
+        if dropped {
+            return Err(HandleFSEError::Dropped);
         }
         // Attribute-only changes update indexed items in place: IDs stay valid and a
         // folder's subtree is not walked again. File-level events report changed
@@ -1487,6 +1500,16 @@ pub(crate) fn same_name_ignoring_case(a: &OsStr, b: &OsStr) -> bool {
 /// then be updated in place. Creation, removal, renames, clones, hard links and
 /// coalesced subtree changes are scanned instead, as is `ItemModified` on a
 /// folder, which the scan paths treat as covering its descendants.
+/// Events dropped only on their way to this process. The kernel dropping them,
+/// a new event history, or a change to the watched root itself means the history
+/// cannot replay what changed.
+fn is_replayable_drop(flag: EventFlag) -> bool {
+    flag.contains(EventFlag::UserDropped)
+        && !flag.intersects(
+            EventFlag::KernelDropped | EventFlag::RootChanged | EventFlag::EventIdsWrapped,
+        )
+}
+
 fn in_place_kind(flag: EventFlag) -> Option<NodeFileType> {
     const ATTRIBUTES: EventFlag = EventFlag::ItemInodeMetaMod
         .union(EventFlag::ItemFinderInfoMod)
@@ -1642,6 +1665,10 @@ fn has_selected_ancestor(path: &Path, selected: &HashSet<PathBuf>) -> bool {
 pub enum HandleFSEError {
     /// Full rescan is required.
     Rescan,
+    /// macOS dropped events on their way to this process, as it does when many
+    /// arrive at once, but kept them in the volume's event history. Watching again
+    /// from `last_event_id` replays them, this batch included, without a rescan.
+    Dropped,
 }
 
 /// Note: This function is expected to be called with WalkData which metadata is not fetched.
@@ -3935,21 +3962,25 @@ mod tests {
             fs::remove_file(&removed).unwrap();
             fs::write(temp_dir.path().join("unreported.txt"), "new").unwrap();
 
-            assert!(matches!(
-                cache.handle_fs_events(vec![
-                    FsEvent {
-                        path: removed,
-                        id: checkpoint + 1,
-                        flag: EventFlag::ItemRemoved | EventFlag::ItemIsFile
-                    },
-                    FsEvent {
-                        path: temp_dir.path().to_path_buf(),
-                        id: checkpoint + 2,
-                        flag
-                    },
-                ]),
-                Err(HandleFSEError::Rescan)
-            ));
+            let result = cache.handle_fs_events(vec![
+                FsEvent {
+                    path: removed,
+                    id: checkpoint + 1,
+                    flag: EventFlag::ItemRemoved | EventFlag::ItemIsFile,
+                },
+                FsEvent {
+                    path: temp_dir.path().to_path_buf(),
+                    id: checkpoint + 2,
+                    flag,
+                },
+            ]);
+            // Events dropped on their way to the app are replayed from the history;
+            // a rescan recovers them too.
+            if flag == EventFlag::UserDropped {
+                assert!(matches!(result, Err(HandleFSEError::Dropped)));
+            } else {
+                assert!(matches!(result, Err(HandleFSEError::Rescan)));
+            }
             assert_eq!(cache.last_event_id(), checkpoint);
 
             let (mut root, mut ignores, mut includes) = Default::default();
@@ -3976,6 +4007,61 @@ mod tests {
             assert!(restored.search("removed.txt").unwrap().is_empty());
             assert_eq!(restored.search("unreported.txt").unwrap().len(), 1);
         }
+    }
+
+    #[test]
+    fn events_dropped_on_their_way_are_replayed_and_lost_ones_rescan() {
+        let temp_dir = TempDir::new("dropped_events").unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let file = root.join("kept.txt");
+        fs::write(&file, "old").unwrap();
+        let mut cache = SearchCache::walk_fs(&root);
+        let checkpoint = cache.last_event_id();
+        let batch = |flag| {
+            vec![
+                FsEvent {
+                    path: file.clone(),
+                    id: checkpoint + 1,
+                    flag: EventFlag::ItemModified | EventFlag::ItemIsFile,
+                },
+                FsEvent {
+                    path: root.clone(),
+                    id: checkpoint + 2,
+                    flag,
+                },
+            ]
+        };
+        let drop = EventFlag::UserDropped | EventFlag::MustScanSubDirs;
+        assert!(matches!(
+            cache.plan_fs_events(batch(drop)),
+            Err(HandleFSEError::Dropped)
+        ));
+        // Nothing in the batch is applied; the replay delivers it again.
+        assert_eq!(cache.last_event_id(), checkpoint);
+        assert_eq!(cache.rescan_count(), 0);
+        for lost in [
+            drop | EventFlag::KernelDropped,
+            drop | EventFlag::RootChanged,
+            drop | EventFlag::EventIdsWrapped,
+            EventFlag::KernelDropped | EventFlag::MustScanSubDirs,
+        ] {
+            assert!(matches!(
+                cache.plan_fs_events(batch(lost)),
+                Err(HandleFSEError::Rescan)
+            ));
+        }
+        // A drop together with a change that needs a rescan rescans.
+        let mut mixed = batch(drop);
+        mixed.push(FsEvent {
+            path: root.clone(),
+            id: checkpoint + 3,
+            flag: EventFlag::ItemRemoved | EventFlag::ItemIsDir,
+        });
+        assert!(matches!(
+            cache.plan_fs_events(mixed),
+            Err(HandleFSEError::Rescan)
+        ));
+        assert_eq!(cache.last_event_id(), checkpoint);
     }
 
     #[test]

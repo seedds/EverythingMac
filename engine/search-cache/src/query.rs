@@ -598,9 +598,13 @@ impl SearchCache {
             }
         }
 
+        // Scans read the type of folders only, so anything else counts as a file
+        // until its metadata is read. Symlinks and other items still count as
+        // files then, so results do not change as sizes and dates are indexed.
+        let folders = file_type == NodeFileType::Dir;
         let file_nodes = &self.file_nodes;
         Ok(filter_nodes(nodes, token, |index| {
-            file_nodes[index].file_type_hint() == file_type
+            (file_nodes[index].file_type_hint() == NodeFileType::Dir) == folders
         }))
     }
 
@@ -647,7 +651,6 @@ impl SearchCache {
         filter_nodes(nodes, token, |index| {
             let node = &file_nodes[index];
             match node.file_type_hint() {
-                NodeFileType::File => listed(&extensions, node.name()),
                 // macOS sees a folder named only `.app` as a plain hidden folder.
                 NodeFileType::Dir => {
                     node.name()
@@ -655,7 +658,11 @@ impl SearchCache {
                         .is_some_and(|(stem, _)| !stem.is_empty())
                         && listed(&packages, node.name())
                 }
-                NodeFileType::Symlink | NodeFileType::Unknown => false,
+                // Symlinks and other items match by name like files, as they do
+                // before their metadata is read.
+                NodeFileType::File | NodeFileType::Symlink | NodeFileType::Unknown => {
+                    listed(&extensions, node.name())
+                }
             }
         })
     }
