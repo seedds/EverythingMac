@@ -742,6 +742,72 @@ mod tests {
     }
 
     #[test]
+    fn indexes_from_another_event_history_are_rebuilt() {
+        use everything_mac_sdk::{current_event_id, event_history_id};
+        use search_cache::{read_cache_from_file, write_cache_to_file};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        // An empty root has no pending file metadata, so nothing backfills.
+        let root = temp.path().join("files");
+        fs::create_dir(&root).unwrap();
+        let history = event_history_id(&root).unwrap();
+        let cache = SearchCache::walk_fs(&root);
+        assert_eq!(cache.event_history(), Some(history));
+        let index = temp.path().join("index.db");
+        cache.flush_to_file(&index).unwrap();
+        let scanned = read_cache_from_file(&index).unwrap();
+        assert_eq!(scanned.event_history, Some(history));
+        let ahead = current_event_id() + (1 << 40);
+        // Saved history and last event, and whether the index must be rebuilt.
+        for (saved, last_event_id, rebuilt) in [
+            (Some(history), scanned.last_event_id, false),
+            (None, scanned.last_event_id, false),
+            (Some(history ^ 1), scanned.last_event_id, true),
+            (None, ahead, true),
+        ] {
+            let mut storage = read_cache_from_file(&index).unwrap();
+            storage.event_history = saved;
+            storage.last_event_id = last_event_id;
+            let path = temp.path().join("case.db");
+            write_cache_to_file(&path, &storage).unwrap();
+            let path = CString::new(path.to_str().unwrap()).unwrap();
+            let case = format!("{saved:?} at {last_event_id}");
+            unsafe {
+                let mut engine = ptr::null_mut();
+                assert_eq!(
+                    reply(cn_engine_open(path.as_ptr(), &mut engine))["status"],
+                    "ok"
+                );
+                (*engine).0.lock().unwrap().dirty = false;
+                assert_eq!(
+                    reply(live::cn_watch(engine, true, path.as_ptr()))["status"],
+                    "ok"
+                );
+                let polled = reply(live::cn_poll(engine, 0, false));
+                assert_eq!(polled["needs_rescan"], rebuilt, "{case}");
+                let state = (*engine).0.lock().unwrap();
+                assert_eq!(state.watcher.is_none(), rebuilt, "{case}");
+                // An index saved before histories were recorded keeps the current one.
+                assert_eq!(state.dirty, !rebuilt && saved.is_none(), "{case}");
+                if !rebuilt {
+                    assert_eq!(state.cache.event_history(), Some(history), "{case}");
+                }
+                drop(state);
+                let saved = reply(live::cn_checkpoint(engine, true));
+                assert_eq!(saved["status"] == "ok", !rebuilt, "{case}: {saved}");
+                cn_engine_close(engine);
+            }
+            if !rebuilt {
+                let path = temp.path().join("case.db");
+                assert_eq!(
+                    read_cache_from_file(&path).unwrap().event_history,
+                    Some(history)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn removed_paths_leave_the_index_before_their_events() {
         use everything_mac_sdk::{EventFlag, FsEvent};
         let _lock = TEST_LOCK.lock().unwrap();

@@ -1,7 +1,7 @@
 //! Serialized engine operations; FSEvents callbacks only enqueue SDK events.
 use super::*;
 use crossbeam_channel::TryRecvError;
-use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent};
+use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent, current_event_id, event_history_id};
 use search_cache::{EventScan, HandleFSEError, NodeIdentity, ScannedEvents, WalkData};
 use std::{
     collections::HashSet,
@@ -89,6 +89,23 @@ fn watch(state: &mut State) {
         .root
         .canonicalize()
         .unwrap_or_else(|_| state.root.clone());
+    // FSEvents replays the changes since the index's last event, numbered in the
+    // volume's event history. If macOS has discarded that history since, as after
+    // a disk repair, those changes cannot be replayed: rebuild the index instead.
+    // An event newer than any on this Mac also means a different history.
+    let history = event_history_id(&state.event_root);
+    let saved = state.cache.event_history();
+    if (history.is_some() && saved.is_some() && history != saved)
+        || state.cache.last_event_id() > current_event_id()
+    {
+        stop_for_rescan(state);
+        return;
+    }
+    if history.is_some() && saved.is_none() {
+        // Indexes saved before 0.1.77 record no history; keep this one from now.
+        state.cache.set_event_history(history);
+        state.dirty = true;
+    }
     state.watcher = Some(
         EventWatcher::spawn(
             state.root.to_string_lossy().into_owned(),

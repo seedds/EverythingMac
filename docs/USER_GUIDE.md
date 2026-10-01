@@ -106,10 +106,11 @@ or date refresh at most every 10 seconds and once more when it finishes; other r
 stay in place. There is no sorting limit.
 Read-only snapshot mode does not start background indexing.
 
-Snapshot format v8 stores exclusion patterns and indexed metadata. Version 7 indexes
-remain readable and upgrade on the next checkpoint; older formats must be rebuilt.
-Older app versions cannot read v8 indexes. See [performance measurements](PERFORMANCE.md)
-for versioned search and sorting results.
+Snapshot format v9 stores exclusion patterns, indexed metadata, and which macOS
+file-event history the index has followed. Version 7 and 8 indexes remain readable and
+upgrade on the next checkpoint; older formats must be rebuilt. App versions before
+0.1.77 cannot read v9 indexes and rebuild them. See
+[performance measurements](PERFORMANCE.md) for versioned search and sorting results.
 
 ## Indexing and storage
 
@@ -173,7 +174,10 @@ the background; searches continue meanwhile, and the results update when reading
 finishes. While the search window is hidden, minimized, on another Space, or covered by
 other windows, the index stays current but the displayed search is not repeated; it
 runs again as soon as the window is shown. Changes made
-since the last checkpoint are replayed from macOS filesystem events on the next launch. Cancelling a scan retains the previous index. If macOS blocks
+since the last checkpoint are replayed from macOS filesystem events on the next launch.
+If macOS has discarded that event history meanwhile (it can after a disk repair or
+reinstall), or the index comes from another Mac, the changes cannot be replayed and
+EverythingMac rescans instead. Cancelling a scan retains the previous index. If macOS blocks
 a filesystem call, cancellation releases the native engine queue while at most one
 scan worker remains outstanding. Another scan must wait for that worker to finish.
 

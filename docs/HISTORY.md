@@ -518,6 +518,27 @@ items inside it. Recorded checks: 1,618 Rust tests passed (the system-wide
 cancellation test excluded), also under Guard Malloc; clippy passed; and the self,
 sort, selection, feature, live, tab, terminal, and trash checks passed.
 
+## File-event history resets — 0.1.77
+
+An index resumes from the last FSEvents event it applied, and FSEvents replays what
+changed since. Event IDs are only meaningful within one volume's event history,
+identified by the UUID of its event database; macOS starts a new history, with a new
+UUID, when it discards the old one, as after a disk repair. The index did not record
+which history its position belonged to, so after a reset the changes made meanwhile
+were never replayed and stayed missing until a manual rescan. Scans now record the
+root volume's history UUID (`everything_mac_sdk::event_history_id`), snapshot v9 saves
+it, and starting the watcher rescans instead when the UUID differs or the saved event
+ID is beyond the system's current one, which also covers an index copied from another
+Mac. v7 and v8 indexes stay readable, take the current UUID, and are rewritten at the
+next checkpoint. A real reset needs root and discards the Mac's own event history, so it
+was not reproduced; a new bridge test opens indexes saved with the same, no, and a
+different history, and with an event ID ahead of the system, and checks which are
+rebuilt and which keep their history when saved. On the 4.57-million-entry benchmark
+index, loading the v8 file (1.0–1.1 s) and a v9 copy took no longer than in 0.1.76.
+Recorded checks: 1,621 Rust tests passed (the system-wide cancellation test excluded),
+also under Guard Malloc; clippy passed; and the self, sort, selection, feature, live,
+tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

@@ -146,6 +146,16 @@ that only advanced the FSEvents position; quitting and switching indexes save th
 too, and later changes are replayed from FSEvents on the next launch. Sort orders are
 built on first use, so opening an index builds none and unsorted views never do.
 
+FSEvents numbers events within a history that each volume keeps, identified by the
+UUID of its event database (`everything_mac_sdk::event_history_id`). A scan records
+that UUID for its root's volume with the event ID it starts from, and snapshot v9
+saves both. When watching starts, `live::watch` compares the saved UUID with the
+volume's current one: macOS replaces it when it discards the history, after which the
+saved position replays nothing, so a different UUID, or a saved event ID beyond
+`FSEventsGetCurrentEventId`, asks for a rescan instead of starting the stream. Indexes
+from v7 and v8 have no UUID; they take the current one when watching starts and are
+rewritten at the next checkpoint.
+
 Access to the active engine is serialized on a background queue. Generation tags
 reject obsolete search/row responses. Cancellation does not require the engine
 lock. Scan preflight and traversal use a separate cancellable worker and a

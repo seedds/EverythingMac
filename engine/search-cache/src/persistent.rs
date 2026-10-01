@@ -14,7 +14,7 @@ use std::{
 use tracing::info;
 use typed_num::Num;
 
-const LSF_VERSION: i64 = 8;
+const LSF_VERSION: i64 = 9;
 
 /// A decoded index. Its items point at their names' keys in `name_index`, so an
 /// item must not outlive its name's key there.
@@ -24,6 +24,9 @@ pub struct PersistentStorage {
     pub exclusion_patterns: Vec<String>,
     /// The last event id of the cache.
     pub last_event_id: u64,
+    /// The FSEvents history `last_event_id` belongs to; see
+    /// `everything_mac_sdk::event_history_id`. `None` in indexes saved before v9.
+    pub event_history: Option<u128>,
     /// Root file path of the cache
     pub path: PathBuf,
     /// Ignore paths
@@ -47,6 +50,7 @@ pub(crate) struct PersistentStorageRef<'a> {
     pub version: Num<LSF_VERSION>,
     pub exclusion_patterns: &'a [String],
     pub last_event_id: u64,
+    pub event_history: Option<u128>,
     pub path: &'a Path,
     pub ignore_paths: &'a [PathBuf],
     pub include_paths: &'a [PathBuf],
@@ -54,6 +58,40 @@ pub(crate) struct PersistentStorageRef<'a> {
     pub slab: &'a ThinSlab<SlabNode>,
     pub name_index: &'a BTreeMap<Box<str>, SortedSlabIndices>,
     pub rescan_count: u64,
+}
+
+// v8 had no event history.
+#[derive(Serialize, Deserialize)]
+struct StorageV8 {
+    version: Num<8>,
+    exclusion_patterns: Vec<String>,
+    last_event_id: u64,
+    path: PathBuf,
+    ignore_paths: Vec<PathBuf>,
+    include_paths: Vec<PathBuf>,
+    slab_root: SlabIndex,
+    slab: ThinSlab<SlabNode>,
+    #[serde(deserialize_with = "names::decode_name_index")]
+    name_index: BTreeMap<Box<str>, SortedSlabIndices>,
+    rescan_count: u64,
+}
+
+impl From<StorageV8> for PersistentStorage {
+    fn from(old: StorageV8) -> Self {
+        Self {
+            version: Num,
+            exclusion_patterns: old.exclusion_patterns,
+            last_event_id: old.last_event_id,
+            event_history: None,
+            path: old.path,
+            ignore_paths: old.ignore_paths,
+            include_paths: old.include_paths,
+            slab_root: old.slab_root,
+            slab: old.slab,
+            name_index: old.name_index,
+            rescan_count: old.rescan_count,
+        }
+    }
 }
 
 // v7 retains its original field order for postcard compatibility.
@@ -86,27 +124,32 @@ pub fn read_cache_from_file(path: &Path) -> Result<PersistentStorage> {
     read_cache_with_format(path).map(|(storage, _)| storage)
 }
 
-/// Also reports whether the file uses the legacy v7 layout, which the next
-/// checkpoint should rewrite even when the index is otherwise unchanged.
+/// Also reports whether the file uses an earlier layout (v7 or v8), which the
+/// next checkpoint should rewrite even when the index is otherwise unchanged.
+/// Each attempt with the wrong version fails at the first byte.
 pub fn read_cache_with_format(path: &Path) -> Result<(PersistentStorage, bool)> {
     let (storage, legacy): (PersistentStorage, bool) = match decode_storage(path) {
         Ok(storage) => (storage, false),
         Err(current_error) => {
-            let old: LegacyStorage = decode_storage(path)
+            let storage = decode_storage::<StorageV8>(path)
+                .map(PersistentStorage::from)
+                .or_else(|_| {
+                    decode_storage::<LegacyStorage>(path).map(|old| PersistentStorage {
+                        version: Num,
+                        exclusion_patterns: vec![],
+                        last_event_id: old.last_event_id,
+                        event_history: None,
+                        path: old.path,
+                        ignore_paths: old.ignore_paths,
+                        include_paths: old.include_paths,
+                        slab_root: old.slab_root,
+                        slab: old.slab,
+                        name_index: old.name_index,
+                        rescan_count: old.rescan_count,
+                    })
+                })
                 .map_err(|_| current_error)
-                .context("Failed to decode index (supported formats: v7 and v8)")?;
-            let storage = PersistentStorage {
-                version: Num,
-                exclusion_patterns: vec![],
-                last_event_id: old.last_event_id,
-                path: old.path,
-                ignore_paths: old.ignore_paths,
-                include_paths: old.include_paths,
-                slab_root: old.slab_root,
-                slab: old.slab,
-                name_index: old.name_index,
-                rescan_count: old.rescan_count,
-            };
+                .context("Failed to decode index (supported formats: v7, v8, and v9)")?;
             (storage, true)
         }
     };
@@ -278,6 +321,41 @@ mod tests {
         assert_eq!(before, fs::read(&path).unwrap());
         write_cache_to_file(&path, &current).unwrap();
         assert!(decode_storage::<PersistentStorage>(&path).is_ok());
+        assert!(!read_cache_with_format(&path).unwrap().1);
+    }
+
+    #[test]
+    fn reads_v8_without_an_event_history_and_upgrades_on_checkpoint() {
+        let temp = tempdir::TempDir::new("v8-migration").unwrap();
+        fs::write(temp.path().join("kept.txt"), "data").unwrap();
+        let path = temp.path().join("v8.db");
+        SearchCache::walk_fs(temp.path())
+            .flush_to_file(&path)
+            .unwrap();
+        let current = read_cache_from_file(&path).unwrap();
+        assert!(current.event_history.is_some());
+        let last_event_id = current.last_event_id;
+        let old = StorageV8 {
+            version: Num,
+            exclusion_patterns: vec!["*.log".into()],
+            last_event_id,
+            path: current.path,
+            ignore_paths: current.ignore_paths,
+            include_paths: current.include_paths,
+            slab_root: current.slab_root,
+            slab: current.slab,
+            name_index: current.name_index,
+            rescan_count: current.rescan_count,
+        };
+        let encoded = postcard::to_stdvec(&old).unwrap();
+        fs::write(&path, zstd::encode_all(encoded.as_slice(), 1).unwrap()).unwrap();
+        let (current, legacy) = read_cache_with_format(&path).unwrap();
+        assert!(legacy);
+        assert_eq!(current.event_history, None);
+        assert_eq!(current.exclusion_patterns, ["*.log"]);
+        assert_eq!(current.last_event_id, last_event_id);
+        assert_eq!(current.slab.len(), old.slab.len());
+        write_cache_to_file(&path, &current).unwrap();
         assert!(!read_cache_with_format(&path).unwrap().1);
     }
 

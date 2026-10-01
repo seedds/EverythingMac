@@ -10,7 +10,7 @@ use crate::{
     query_preprocessor::{expand_query_home_dirs, strip_query_quotes},
 };
 use anyhow::{Context, Result, anyhow};
-use everything_mac_sdk::{EventFlag, FsEvent, ScanType, current_event_id};
+use everything_mac_sdk::{EventFlag, FsEvent, ScanType, current_event_id, event_history_id};
 use everything_mac_syntax::{Expr, Filter, FilterKind, Term, optimize_query, parse_query};
 use fswalk::{
     Node, NodeFileType, NodeMetadata, OtherVolumes, WalkData, walk_it, walk_it_without_root_chain,
@@ -53,6 +53,8 @@ pub struct SearchCache {
     pub(crate) file_nodes: FileNodes,
     pub(crate) sort_indexes: crate::sort_index::SortIndexes,
     last_event_id: u64,
+    /// The FSEvents history `last_event_id` belongs to; see `event_history`.
+    event_history: Option<u128>,
     rescan_count: u64,
     pub(crate) name_index: NameIndex,
     stop: &'static AtomicBool,
@@ -233,6 +235,7 @@ impl SearchCache {
             slab,
             name_index,
             last_event_id,
+            event_history,
             rescan_count,
         } = storage;
         let name_index = NameIndex::from_persistent(name_index);
@@ -241,7 +244,9 @@ impl SearchCache {
         let mut slab = FileNodes::new(path, ignore_paths, include_paths, slab, slab_root);
         slab.exclusions = exclusions;
         crate::changes::sort_children(&mut slab);
-        Self::new(slab, last_event_id, rescan_count, name_index, cancel)
+        let mut cache = Self::new(slab, last_event_id, rescan_count, name_index, cancel);
+        cache.event_history = event_history;
+        cache
     }
 
     /// Get the total number of files and directories in the cache.
@@ -315,6 +320,7 @@ impl SearchCache {
         }
 
         let last_event_id = current_event_id();
+        let event_history = event_history_id(walk_data.root_path);
         let (slab_root, slab, name_index) = walkfs_to_slab(walk_data)?;
         let mut slab = FileNodes::new(
             walk_data.root_path.to_path_buf(),
@@ -325,7 +331,9 @@ impl SearchCache {
         );
         slab.exclusions = walk_data.exclusions.clone();
         // metadata cache inits later
-        Some(Self::new(slab, last_event_id, 0, name_index, cancel))
+        let mut cache = Self::new(slab, last_event_id, 0, name_index, cancel);
+        cache.event_history = event_history;
+        Some(cache)
     }
 
     fn new(
@@ -339,6 +347,7 @@ impl SearchCache {
         Self {
             file_nodes: slab,
             last_event_id,
+            event_history: None,
             rescan_count,
             name_index,
             stop: cancel,
@@ -367,6 +376,7 @@ impl SearchCache {
                 SlabIndex::new(0),
             ),
             last_event_id: 0,
+            event_history: None,
             rescan_count: 0,
             name_index: NameIndex::default(),
             stop: cancel,
@@ -970,6 +980,7 @@ impl SearchCache {
             version: Num,
             exclusion_patterns: self.exclusion_patterns(),
             last_event_id: self.last_event_id,
+            event_history: self.event_history,
             path: self.file_nodes.path(),
             ignore_paths: self.file_nodes.ignore_paths(),
             include_paths: self.file_nodes.include_paths(),
@@ -985,6 +996,7 @@ impl SearchCache {
         let Self {
             file_nodes,
             last_event_id,
+            event_history,
             rescan_count,
             name_index,
             stop: _,
@@ -1005,6 +1017,7 @@ impl SearchCache {
                 slab,
                 name_index,
                 last_event_id,
+                event_history,
                 rescan_count,
             },
         )
@@ -1022,6 +1035,17 @@ impl SearchCache {
 
     pub fn last_event_id(&mut self) -> u64 {
         self.last_event_id
+    }
+
+    /// The FSEvents history that `last_event_id` counts in, recorded when the
+    /// index was scanned; see `everything_mac_sdk::event_history_id`. `None` for
+    /// an index saved before 0.1.77 until the watcher records the current one.
+    pub fn event_history(&self) -> Option<u128> {
+        self.event_history
+    }
+
+    pub fn set_event_history(&mut self, history: Option<u128>) {
+        self.event_history = history;
     }
 
     /// Whether events updated sizes or dates in place since the last call. Those
