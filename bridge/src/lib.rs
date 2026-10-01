@@ -50,7 +50,10 @@ struct State {
     metadata: metadata::Indexing,
     /// Folders an event batch changed, being walked without the engine lock.
     walk: Option<live::PendingWalk>,
-    /// Paths `cn_remove_paths` removed during that walk, removed again after it.
+    /// What that walk found, being applied over several polls.
+    applying: Option<search_cache::PendingChanges>,
+    /// Paths `cn_remove_paths` removed during that walk or before it was applied,
+    /// removed again after it.
     removed_during_walk: Vec<std::path::PathBuf>,
     /// Remove items on other volumes on the next poll; see `cn_watch`.
     prune_volumes: bool,
@@ -80,6 +83,7 @@ impl State {
             selection_generation: None,
             metadata: Default::default(),
             walk: None,
+            applying: None,
             removed_during_walk: vec![],
             prune_volumes: false,
         }
@@ -861,6 +865,89 @@ mod tests {
     }
 
     #[test]
+    fn large_walks_are_applied_over_several_polls() {
+        use everything_mac_sdk::{EventFlag, FsEvent};
+        let _lock = TEST_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let mut state = State::new(SearchCache::walk_fs(&root), root.clone());
+        let initial = state.cache.get_total_files();
+        let id = state.cache.last_event_id() + 1;
+        let folder = root.join("folder");
+        for d in 0..3 {
+            let dir = folder.join(format!("d{d}"));
+            fs::create_dir_all(&dir).unwrap();
+            for f in 0..2000 {
+                fs::write(dir.join(format!("f{f}.txt")), "").unwrap();
+            }
+        }
+        let flag = EventFlag::ItemCreated | EventFlag::ItemIsDir;
+        let scan = state
+            .cache
+            .plan_fs_events(vec![FsEvent {
+                path: folder.clone(),
+                id,
+                flag,
+            }])
+            .unwrap();
+        state.walk = Some(live::start_walk(scan));
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        let mut changed = false;
+        let step = |engine: &Engine, changed: &mut bool| {
+            let mut state = engine.0.lock().unwrap();
+            // Each call runs one step: the deadline has passed.
+            let wait = Instant::now() + Duration::from_secs(10);
+            live::finish_walk(&mut state, wait, Instant::now(), changed)
+        };
+        assert!(!step(&engine, &mut changed), "more steps remain");
+        {
+            let mut state = engine.0.lock().unwrap();
+            assert!(state.walk.is_none() && state.applying.is_some());
+            assert!(state.cache.node_index_for_path(&folder).is_some());
+            assert_ne!(state.cache.last_event_id(), id);
+        }
+        // The app trashes a file the walk read before it is applied.
+        let trashed = folder.join("d2/f5.txt");
+        fs::remove_file(&trashed).unwrap();
+        let paths = CString::new(json!([trashed]).to_string()).unwrap();
+        unsafe {
+            assert_eq!(
+                reply(live::cn_remove_paths(&mut engine, paths.as_ptr()))["changed"],
+                false
+            );
+        }
+        let mut steps = 1;
+        while !step(&engine, &mut changed) {
+            steps += 1;
+            let state = engine.0.lock().unwrap();
+            // Searches run between steps on an index that is whole.
+            let found = state.cache.search_empty(CancellationToken::noop()).unwrap();
+            assert_eq!(found.len(), state.cache.get_total_files());
+            assert!(
+                found
+                    .iter()
+                    .all(|&index| state.cache.node_path(index).is_some())
+            );
+        }
+        assert!(changed && steps > 3, "applied in {steps} steps");
+        let polled = unsafe { reply(live::cn_poll(&mut engine, 0, false)) };
+        assert_eq!(polled["walking"], false);
+        assert_eq!(polled["applying"], false);
+        assert_eq!(polled["total"], initial + 1 + 3 + 6000 - 1);
+        let mut state = engine.0.lock().unwrap();
+        assert!(
+            state.cache.node_index_for_path(&trashed).is_none(),
+            "Removals made before the walk was applied are applied again"
+        );
+        assert_eq!(state.cache.last_event_id(), id);
+        assert!(state.events_dirty && state.applying.is_none());
+        for d in 0..3 {
+            let path = folder.join(format!("d{d}/f1999.txt"));
+            assert!(state.cache.node_index_for_path(&path).is_some());
+        }
+    }
+
+    #[test]
     fn closing_the_engine_does_not_wait_for_a_folder_walk() {
         use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent};
         let _lock = TEST_LOCK.lock().unwrap();
@@ -1204,19 +1291,18 @@ mod tests {
             {
                 let mut state = engine.0.lock().unwrap();
                 let id = state.cache.last_event_id() + 1;
-                let events = vec![
-                    FsEvent {
-                        path: a.clone(),
+                // Separate batches: one batch frees removed slots after adding.
+                for (path, id, flag) in [
+                    (&a, id, EventFlag::ItemRemoved),
+                    (&c, id + 1, EventFlag::ItemCreated),
+                ] {
+                    let events = vec![FsEvent {
+                        path: path.clone(),
                         id,
-                        flag: EventFlag::ItemRemoved | EventFlag::ItemIsFile,
-                    },
-                    FsEvent {
-                        path: c.clone(),
-                        id: id + 1,
-                        flag: EventFlag::ItemCreated | EventFlag::ItemIsFile,
-                    },
-                ];
-                state.cache.handle_fs_events(events).unwrap();
+                        flag: flag | EventFlag::ItemIsFile,
+                    }];
+                    state.cache.handle_fs_events(events).unwrap();
+                }
                 let c_id = state.cache.node_index_for_path(&c).unwrap();
                 assert_eq!(c_id, a_id, "the new file reuses the selected slot");
                 state.results = vec![c_id, b_id];

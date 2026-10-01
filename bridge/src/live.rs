@@ -101,13 +101,15 @@ fn watch(state: &mut State) {
     );
 }
 
-/// How long a poll waits for the walks it starts before leaving them to finish in
-/// the background, so that small changes still appear in the same poll.
-const WALK_WAIT: Duration = Duration::from_millis(50);
+/// How long a poll holds the engine for live updates: it waits this long for the
+/// walks it starts, so that small changes still appear in the same poll, and
+/// applies what walks found until then. Larger changes continue in the next
+/// polls, which the app sends soon after, so searches run in between.
+const POLL_TIME: Duration = Duration::from_millis(10);
 
 /// Walks of the folders an event batch changed, running without the engine lock.
-/// Later batches wait for them, since they may depend on the result. Dropping it
-/// cancels the walks.
+/// Later batches wait for them and for what they found to be applied, since they
+/// may depend on the result. Dropping it cancels the walks.
 pub(super) struct PendingWalk {
     result: mpsc::Receiver<Option<ScannedEvents>>,
     cancel: Arc<AtomicBool>,
@@ -135,7 +137,7 @@ static WALK_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
         .expect("create live walk pool")
 });
 
-fn start_walk(scan: EventScan) -> PendingWalk {
+pub(super) fn start_walk(scan: EventScan) -> PendingWalk {
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
     let (sender, result) = mpsc::sync_channel(1);
@@ -156,29 +158,44 @@ fn start_walk(scan: EventScan) -> PendingWalk {
     PendingWalk { result, cancel }
 }
 
-/// Applies the pending walk if it finishes by `deadline`. Returns whether no walk
-/// is left pending.
-fn finish_walk(state: &mut State, deadline: Instant, changed: &mut bool) -> bool {
-    let Some(walk) = &state.walk else {
-        return true;
-    };
-    let scanned = match walk
-        .result
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-    {
-        Ok(scanned) => scanned,
-        Err(mpsc::RecvTimeoutError::Timeout) => return false,
-        Err(mpsc::RecvTimeoutError::Disconnected) => None,
-    };
-    state.walk = None;
-    let Some(scanned) = scanned else {
-        // Only a panic ends a walk early; what it covered needs a full rescan.
-        state.watcher = None;
-        state.needs_rescan = true;
-        *changed = true;
-        return true;
-    };
-    apply_scanned(state, scanned, changed);
+/// Applies the pending walk until `deadline` if it finishes by `wait_until`.
+/// Returns whether no walk is left pending or partly applied.
+pub(super) fn finish_walk(
+    state: &mut State,
+    wait_until: Instant,
+    deadline: Instant,
+    changed: &mut bool,
+) -> bool {
+    if state.applying.is_none() {
+        let Some(walk) = &state.walk else {
+            return true;
+        };
+        let scanned = match walk
+            .result
+            .recv_timeout(wait_until.saturating_duration_since(Instant::now()))
+        {
+            Ok(scanned) => scanned,
+            Err(mpsc::RecvTimeoutError::Timeout) => return false,
+            Err(mpsc::RecvTimeoutError::Disconnected) => None,
+        };
+        state.walk = None;
+        let Some(scanned) = scanned else {
+            // Only a panic ends a walk early; what it covered needs a full rescan.
+            state.watcher = None;
+            state.needs_rescan = true;
+            *changed = true;
+            return true;
+        };
+        state.applying = Some(scanned.into_changes());
+    }
+    let changes = state.applying.as_mut().expect("set above");
+    let old_checkpoint = state.cache.last_event_id();
+    *changed |= state.cache.apply_changes(changes, Some(deadline));
+    state.events_dirty |= state.cache.last_event_id() != old_checkpoint;
+    if !changes.is_done() {
+        return false;
+    }
+    state.applying = None;
     // The walk may have read items that the app removed while it ran.
     let removed = std::mem::take(&mut state.removed_during_walk);
     if !removed.is_empty() {
@@ -357,6 +374,7 @@ pub unsafe extern "C" fn cn_poll(
         }
         let mut reply = json!({"status":"ok", "changed":changed, "needs_rescan":state.needs_rescan,
             "metadata_changed":metadata_changed, "watcher_stopped":watcher_stopped, "walking":walking,
+            "applying":state.applying.is_some(),
             "total":state.cache.get_total_files(), "processed_events":state.processed_events,
             "metadata_indexing":state.metadata.active()});
         // The event list is only for the visible Events tab, and only when it changed.
@@ -373,9 +391,10 @@ fn apply_events(state: &mut State, changed: &mut bool, watcher_stopped: &mut boo
     if std::mem::take(&mut state.prune_volumes) {
         *changed |= state.cache.remove_other_volumes();
     }
+    let started = Instant::now();
+    let deadline = started + POLL_TIME;
     // Walks started by earlier polls are not waited for.
-    let mut walking = !finish_walk(state, Instant::now(), changed);
-    let deadline = Instant::now() + WALK_WAIT;
+    let mut walking = !finish_walk(state, started, deadline, changed);
     for _ in 0..16 {
         if walking || state.needs_rescan {
             break;
@@ -415,7 +434,7 @@ fn apply_events(state: &mut State, changed: &mut bool, watcher_stopped: &mut boo
             }
             Ok(scan) => {
                 state.walk = Some(start_walk(scan));
-                walking = !finish_walk(state, deadline, changed);
+                walking = !finish_walk(state, deadline, deadline, changed);
             }
             Err(HandleFSEError::Rescan) => {
                 state.watcher = None;
@@ -444,6 +463,7 @@ pub(super) fn contain<T>(state: &mut State, change: impl FnOnce(&mut State) -> T
 fn stop_for_rescan(state: &mut State) {
     state.watcher = None;
     state.walk = None;
+    state.applying = None;
     state.needs_rescan = true;
 }
 
@@ -461,8 +481,9 @@ pub unsafe extern "C" fn cn_remove_paths(engine: *mut Engine, paths: *const c_ch
             .0
             .lock()
             .map_err(|_| "Engine faulted; reopen index")?;
-        // A folder walk that is still running may have read these paths already.
-        if state.walk.is_some() {
+        // A folder walk that is still running or being applied may have read
+        // these paths already.
+        if state.walk.is_some() || state.applying.is_some() {
             state.removed_during_walk.extend(paths.iter().cloned());
         }
         let changed = contain(&mut state, |state| remove_paths(state, paths)).unwrap_or(true);

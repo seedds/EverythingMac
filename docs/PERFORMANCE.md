@@ -4,10 +4,10 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.74 studies cover live updates,
+These are workstation measurements. The 0.1.60–0.1.75 studies cover live updates,
 parallel name matching, large selections, saving and startup memory, F8, rescans and
-folder walks, idle work, filters, index checks, reading sizes and dates, full scans, and
-memory for names;
+folder walks, idle work, filters, index checks, reading sizes and dates, full scans,
+memory for names, and pauses during large changes;
 the other matching study covers the 0.1.55 changes, and the versioned sorting studies
 cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
@@ -16,6 +16,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Large changes, 0.1.75](#large-changes-0175) | While large changes were applied, a search waited at most 11–16 ms instead of up to 54–219 ms. 10,000 files created in a folder of 100,000 were indexed in 2.5–4.1 s instead of 15.4 s, during which 0.1.74 kept the engine busy; a rescan of an unchanged 200,000-file folder took 5 ms of engine time instead of 225–236 ms and kept every item's ID. |
 | [Names, 0.1.74](#names-0174) | Names of files that come and go no longer accumulate: 100,000 new names moved into a live index and out again kept 4.6 MiB each time, and now nothing measurable. Opening 4,573,469 entries took 1.25–1.28 s and 159 MiB of heap instead of 1.73–1.76 s and 221 MiB, a scan of `/` peaked at 785–789 MiB instead of 964–966 MiB, and adding a 200,000-file folder held the engine for 59–60 ms instead of 84–91 ms. |
 | [Full scans, 0.1.73](#full-scans-0173) | A full scan of `/` with 5.08 million entries took 10.6–10.8 s instead of 15.1–16.1 s, and 10.5 s instead of 16.2–16.3 s with four exclusion patterns. Its peak memory fell from 981–983 MiB to 930–932 MiB, and the scanned index holds 133 MiB of heap instead of 163 MiB. |
 | [Reading sizes and dates, 0.1.72](#reading-sizes-and-dates-0172) | After a scan, reading the sizes and dates of 3,710,341 files took 18.1–20.7 s instead of 39.6–43.3 s, with identical values. Searches during the pass took a median 3.3 ms, against 3.1 ms before. |
@@ -36,6 +37,70 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Large changes (0.1.75)
+
+Measured on 2026-10-01 on the same Apple M4 Pro. Builds alternated, and each run
+started once the Mac was idle: the installed app, which watches `/`, catches up on every
+file these runs create.
+
+`live_walk` uses real FSEvents in a temporary index. It moves a folder of 200,000 files
+in, creates 10,000 files in an indexed folder of 100,000, and moves the first folder out
+again, polling as 0.1.75 does: 5 ms after a reply that reports a walk being applied,
+50 ms after one that reports a walk still reading folders, and otherwise every 100 ms.
+The app polls every 500 ms when nothing is pending, so 0.1.74 applied a finished walk
+later in the app than here. Runs in which FSEvents dropped events and asked for a full
+rescan, two of 0.1.74's and three of 0.1.75's on a Mac busy with earlier runs, are left
+out.
+
+| Measurement | 0.1.74 | 0.1.75 |
+| --- | ---: | ---: |
+| 200,000-file folder moved in: longest poll | 54–55 ms | 11.6–12.6 ms |
+| The same, until indexed | 525–570 ms | 512–753 ms |
+| 10,000 files created in a folder of 100,000: longest poll | 101–110 ms | 10.5–15.7 ms |
+| The same, until indexed | 15.4 s | 2.5–4.1 s |
+| 200,000-file folder moved out: longest poll | 193–219 ms | 10.9–14.5 ms |
+| The same, until removed | 319–399 ms | 332–394 ms |
+
+The longest poll is the longest a search or row load waited on the app's serial engine
+queue. `apply_timing` times the engine alone, applying changes already read from disk:
+
+| Applying | 0.1.74 | 0.1.75 |
+| --- | ---: | ---: |
+| A 200,000-file folder moved in | 52.8–56.4 ms | 45.1–46.0 ms |
+| A rescan of that folder, unchanged | 225–236 ms | 4.7–5.0 ms |
+| 10,000 files created in a folder of 100,000, one event each | 9.8–9.9 s | 3.8–4.0 ms |
+| The 200,000-file folder moved out | 163–176 ms | 48.8–49.6 ms |
+
+**Finding items by name.** A folder's children were a list in the order they were
+added, and each changed path was found by comparing its name with every child of its
+folder. Creating 10,000 files in a folder of 100,000 compared names about a billion
+times, in polls of about 100 ms each for 15 s. Children are now kept in name order, so
+a path is found by binary search, and a batch's changes to one folder are merged into
+its children in one pass.
+
+**Merging walks.** A walked path replaced its indexed item: everything under it was
+removed and added again, with new IDs, even when nothing had changed, as when FSEvents
+asks for a folder to be rescanned after coalescing its events. The walk is now merged:
+unchanged items keep their nodes, items whose size or dates changed are updated in
+place and reported as `metadata_changed`, which keeps row IDs, and only items that
+appeared or disappeared are added or removed.
+
+**Steps.** Adding or removing a large folder still costs about 45–50 ms of engine time,
+but it is now applied in steps of at most 4,096 items or one folder's children, each
+leaving the index whole. A poll applies steps for up to 10 ms, and the app polls again
+5 ms later, so searches queued meanwhile run in between. A poll also waits at most 10 ms
+for the walks it starts, instead of 50 ms.
+
+**Removing.** Removing a name's items looked the name up three times in random order.
+It now looks names up twice, in name order, and skips the search by path when a name
+has a single item: removing 200,000 items took 49 ms instead of 163–176 ms.
+
+**Opening.** Indexes saved by earlier versions are put in name order as they open. The
+4,573,469-entry snapshot had 49 of its 706,648 folders out of order; checking every
+folder in parallel takes about 9 ms, and opening took 1.27–1.47 s in both builds on this
+busy day. The 14 queries of the [names study](#names-0174) returned identical order and
+set checksums.
 
 ## Names (0.1.74)
 

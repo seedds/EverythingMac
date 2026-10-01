@@ -58,6 +58,14 @@ impl SortedSlabIndices {
 
     /// Removes one ID found by path; the node must still be in the slab.
     fn remove_by_path(&mut self, index: SlabIndex, slab: &FileNodes) -> bool {
+        // Most names belong to one item.
+        if let [only] = self.indices[..] {
+            if only != index {
+                return false;
+            }
+            self.indices.clear();
+            return true;
+        }
         let mut target = Vec::new();
         if slab.path_chain(index, &mut target).is_some()
             && let Ok(pos) = self.position(&target, slab)
@@ -300,27 +308,33 @@ impl NameIndex {
     }
 
     /// Removes IDs sharing `name` while their nodes are still in the slab; returns
-    /// how many were present. Deleting a subtree updates each name's postings once
-    /// instead of scanning them for every removed file. The name stays until
-    /// `remove_unused`.
-    pub fn remove_indices(&mut self, name: &str, ids: &[SlabIndex], slab: &FileNodes) -> usize {
+    /// how many were present, and whether no item has the name any more. Deleting
+    /// a subtree updates each name's postings once instead of scanning them for
+    /// every removed file. The name stays until `remove_unused`.
+    pub fn remove_indices(
+        &mut self,
+        name: &str,
+        ids: &[SlabIndex],
+        slab: &FileNodes,
+    ) -> (usize, bool) {
         let Some(indices) = self.map.get_mut(name) else {
-            return 0;
+            return (0, false);
         };
-        match ids {
+        let count = match ids {
             [index] => usize::from(indices.remove_by_path(*index, slab)),
             _ => indices.remove_many(ids),
-        }
+        };
+        (count, indices.is_empty())
     }
 
-    /// Frees `name` if no item has it any more. Called once the removed items are
-    /// out of the slab: until then, finding postings by path reads their names.
+    /// Frees `name`, which `remove_indices` left without items. Called once the
+    /// removed items are out of the slab: until then, finding postings by path
+    /// reads their names.
     pub(crate) fn remove_unused(&mut self, name: &str) {
-        if self.map.get(name).is_some_and(SortedSlabIndices::is_empty) {
-            // `name` may be the key's own text; it is not read once found.
-            self.map.remove(name);
-            self.names_changed();
-        }
+        // `name` may be the key's own text; it is not read once found.
+        let removed = self.map.remove(name);
+        debug_assert!(removed.is_some_and(|indices| indices.is_empty()));
+        self.names_changed();
     }
 
     pub(crate) fn map(&self) -> &BTreeMap<Box<str>, SortedSlabIndices> {

@@ -24,7 +24,6 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
-use thin_vec::ThinVec;
 use tracing::{debug, info};
 use typed_num::Num;
 use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick, is_nfd_quick};
@@ -58,11 +57,11 @@ pub struct SearchCache {
     pub(crate) name_index: NameIndex,
     stop: &'static AtomicBool,
     /// Set when events updated an item's metadata in place; see `take_metadata_changed`.
-    metadata_changed: bool,
+    pub(crate) metadata_changed: bool,
     /// Set when a size or date filter read metadata; see `take_metadata_loaded`.
     pub(crate) metadata_loaded: bool,
     /// Per-slot counters bumped when a node is removed; in memory only.
-    slot_generations: Vec<u32>,
+    pub(crate) slot_generations: Vec<u32>,
     instance: u64,
 }
 
@@ -241,6 +240,7 @@ impl SearchCache {
             .expect("validated snapshot patterns");
         let mut slab = FileNodes::new(path, ignore_paths, include_paths, slab, slab_root);
         slab.exclusions = exclusions;
+        crate::changes::sort_children(&mut slab);
         Self::new(slab, last_event_id, rescan_count, name_index, cancel)
     }
 
@@ -622,14 +622,33 @@ impl SearchCache {
         };
         let mut current = self.file_nodes.root();
         for segment in path {
-            let next = self.file_nodes[current]
-                .children
-                .iter()
-                .find_map(|&child| {
-                    let name = self.file_nodes[child].name();
-                    path_segment_matches(name, segment, case_insensitive).then_some(child)
-                })?;
-            current = next;
+            // Children are in name order, so the exact spelling is found at once.
+            let exact = segment
+                .to_str()
+                .and_then(|segment| self.child_named(current, segment));
+            current = match exact {
+                Some(child) => child,
+                // Another spelling can match only ignoring case or normalization.
+                None if case_insensitive || !segment.is_ascii() => self.file_nodes[current]
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|&child| {
+                        let name = self.file_nodes[child].name();
+                        path_segment_matches(name, segment, case_insensitive)
+                    })?,
+                None => return None,
+            };
+        }
+        Some(current)
+    }
+
+    /// The node at `path`, spelled exactly as indexed.
+    pub(crate) fn find_exact_path(&self, path: &Path) -> Option<SlabIndex> {
+        let path = path.strip_prefix("/").ok()?;
+        let mut current = self.file_nodes.root();
+        for name in path {
+            current = self.child_named(current, &name.to_string_lossy())?;
         }
         Some(current)
     }
@@ -711,21 +730,23 @@ impl SearchCache {
         Some(())
     }
 
-    fn push_node(
+    /// Adds a node to the slab and the name index. The caller lists it among its
+    /// parent's children.
+    pub(crate) fn push_node(
         &mut self,
         parent: Option<SlabIndex>,
-        name: &str,
+        name: impl AsRef<str> + Into<Box<str>>,
         metadata: SlabNodeMetadataCompact,
     ) -> SlabIndex {
         // The node points at its name's key in the name index.
-        let index = match self.name_index.postings_of(name) {
+        let index = match self.name_index.postings_of(name.as_ref()) {
             Some((key, postings)) => {
                 let index = self.file_nodes.insert(SlabNode::new(parent, key, metadata));
                 postings.insert(index, &self.file_nodes);
                 index
             }
             None => {
-                let key: Box<str> = Box::from(name);
+                let key: Box<str> = name.into();
                 let text = unsafe { std::str::from_raw_parts(key.as_ptr(), key.len()) };
                 let index = self
                     .file_nodes
@@ -740,27 +761,13 @@ impl SearchCache {
 
     /// Removes a node by path and its children recursively.
     fn remove_node_path(&mut self, path: &Path) -> Option<SlabIndex> {
-        let Ok(path) = path.strip_prefix("/") else {
-            return None;
-        };
-        let mut current = self.file_nodes.root();
-        for name in path {
-            if let Some(&index) = self.file_nodes[current]
-                .children
-                .iter()
-                .find(|&&x| self.file_nodes[x].name() == name)
-            {
-                current = index;
-            } else {
-                return None;
-            }
-        }
+        let current = self.find_exact_path(path)?;
         self.remove_node(current);
         Some(current)
     }
 
     // Create node chain of specific path
-    fn create_node_chain(&mut self, path: &Path) -> SlabIndex {
+    pub(crate) fn create_node_chain(&mut self, path: &Path) -> SlabIndex {
         let path = path
             .strip_prefix("/")
             .expect("create_node_chain only accepts absolute path");
@@ -768,11 +775,8 @@ impl SearchCache {
         let mut current_path = PathBuf::from("/");
         for name in path {
             current_path.push(name);
-            current = if let Some(&index) = self.file_nodes[current]
-                .children
-                .iter()
-                .find(|&&x| self.file_nodes[x].name() == name)
-            {
+            let name = name.to_string_lossy();
+            current = if let Some(index) = self.child_named(current, &name) {
                 index
             } else {
                 let metadata = std::fs::symlink_metadata(&current_path)
@@ -780,21 +784,20 @@ impl SearchCache {
                     .ok();
                 let index = self.push_node(
                     Some(current),
-                    &name.to_string_lossy(),
+                    name,
                     match metadata {
                         Some(metadata) => SlabNodeMetadataCompact::some(metadata),
                         None => SlabNodeMetadataCompact::unaccessible(),
                     },
                 );
-                // A new ID cannot already be a child; skip `add_children`'s scan.
-                self.file_nodes[current].children.push(index);
+                self.insert_child(current, index);
                 index
             };
         }
         current
     }
 
-    /// Walks `path` again and replaces its node; returns the new node's index.
+    /// Walks `path` again and applies what it found; returns the path's node.
     /// - If path is not under the watch root, None is returned.
     /// - Procedure contains metadata fetching, if metadata fetching failed, None is returned.
     #[cfg(test)]
@@ -803,7 +806,19 @@ impl SearchCache {
         let scanned = self
             .scan_config()
             .scan(path.to_path_buf(), &move || stop.load(Ordering::Relaxed))?;
-        self.apply_scanned_path(scanned)
+        let ScanOutcome::Walked { path: walked, .. } = &scanned.outcome else {
+            self.apply_fs_events(ScannedEvents {
+                paths: vec![scanned],
+                max_event_id: None,
+            });
+            return None;
+        };
+        let walked = walked.clone();
+        self.apply_fs_events(ScannedEvents {
+            paths: vec![scanned],
+            max_event_id: None,
+        });
+        self.find_exact_path(&walked)
     }
 
     /// Copies what walks of event paths need, so that they can run without the cache.
@@ -815,52 +830,6 @@ impl SearchCache {
             exclusions: self.file_nodes.exclusions.clone(),
             volumes: None,
         }
-    }
-
-    /// Replaces the node at a scanned path with what the scan found.
-    fn apply_scanned_path(&mut self, scanned: ScannedPath) -> Option<SlabIndex> {
-        let (path, respelled, node) = match scanned.outcome {
-            ScanOutcome::Missing => {
-                self.remove_node_path(&scanned.requested);
-                return None;
-            }
-            ScanOutcome::Ignored(path) => {
-                self.remove_node_path(&path);
-                return None;
-            }
-            ScanOutcome::Walked {
-                path,
-                respelled,
-                node,
-            } => (path, respelled, node),
-        };
-        let parent_path = path.parent().expect(
-            "scan_path_recursive doesn't expected to scan root(should be filtered outside)",
-        );
-        // Ensure node of the path parent is existed
-        let parent = self.create_node_chain(parent_path);
-        // Remove the old node, and siblings whose spelling no longer exists.
-        let name = path.file_name();
-        let stale: Vec<SlabIndex> = self.file_nodes[parent]
-            .children
-            .iter()
-            .copied()
-            .filter(|&child| {
-                let child_name = OsStr::new(self.file_nodes[child].name());
-                Some(child_name) == name
-                    || (respelled
-                        && name.is_some_and(|name| same_name_ignoring_case(child_name, name))
-                        && on_disk_name(&parent_path.join(child_name)).as_deref()
-                            != Some(child_name))
-            })
-            .collect();
-        for old_node in stale {
-            self.remove_node(old_node);
-        }
-        let node = self.create_node_slab_update_name_index(Some(parent), node);
-        // A new ID cannot already be a child; skip `add_children`'s scan.
-        self.file_nodes[parent].children.push(node);
-        Some(node)
     }
 
     // `Self::scan_path_nonrecursive`function returns index of the constructed node.
@@ -928,7 +897,7 @@ impl SearchCache {
     fn remove_node(&mut self, index: SlabIndex) {
         // Remove parent reference, make whole subtree unreachable.
         if let Some(parent) = self.file_nodes[index].parent() {
-            self.file_nodes[parent].children.retain(|&x| x != index);
+            self.detach_child(parent, index);
         }
         let mut removed = vec![];
         let mut stack = vec![index];
@@ -936,41 +905,30 @@ impl SearchCache {
             stack.extend_from_slice(&self.file_nodes[current].children);
             removed.push(current);
         }
-        // Postings are located by path, so update them while the nodes still exist,
-        // once per name rather than once per removed file.
-        let mut by_name: hashbrown::HashMap<&'static str, Vec<SlabIndex>> =
-            hashbrown::HashMap::new();
-        for &id in &removed {
-            by_name
-                .entry(self.file_nodes[id].name())
-                .or_default()
-                .push(id);
-        }
-        for (name, ids) in &by_name {
-            let count = self.name_index.remove_indices(name, ids, &self.file_nodes);
-            assert_eq!(count, ids.len(), "inconsistent name index and node");
-        }
-        for id in removed {
-            self.file_nodes.try_remove(id);
-            self.sort_indexes.changed(id);
-            // A later node in this slot must not match identities of this one.
-            let slot = id.get();
-            if slot >= self.slot_generations.len() {
-                self.slot_generations.resize(slot + 1, 0);
-            }
-            self.slot_generations[slot] = self.slot_generations[slot].wrapping_add(1);
-        }
-        // Free the names no node has any more only now that the removed nodes are
-        // gone: finding their postings by path read the names of their folders.
-        for name in by_name.into_keys() {
-            self.name_index.remove_unused(name);
-        }
+        self.remove_nodes(removed);
     }
 
-    /// Checks that each node points at its name's key in the name index, and that
-    /// each key has nodes, so no removed name is left.
+    /// Checks that the index is whole: every node is under the root once, with its
+    /// folder's children in name order; each node points at its name's key in the
+    /// name index; and each key has nodes, so no removed name is left.
     #[cfg(test)]
-    pub(crate) fn assert_names_owned(&self) {
+    pub(crate) fn assert_whole(&self) {
+        let mut reached = 1;
+        let mut stack = vec![self.file_nodes.root()];
+        while let Some(index) = stack.pop() {
+            let children = &self.file_nodes[index].children;
+            assert!(
+                children.is_sorted_by_key(|&child| self.file_nodes[child].name()),
+                "children of {:?} are out of order",
+                self.node_path(index)
+            );
+            for &child in children {
+                assert_eq!(self.file_nodes[child].parent(), Some(index));
+                reached += 1;
+                stack.push(child);
+            }
+        }
+        assert_eq!(reached, self.file_nodes.len(), "items outside the tree");
         let mut listed = 0;
         for (name, indices) in self.name_index.map() {
             assert!(!indices.is_empty(), "{name:?} is kept without items");
@@ -1053,7 +1011,7 @@ impl SearchCache {
         .context("Write cache to file failed.")
     }
 
-    fn update_last_event_id(&mut self, event_id: u64) {
+    pub(crate) fn update_last_event_id(&mut self, event_id: u64) {
         if event_id <= self.last_event_id {
             debug!("last_event_id {} |< {event_id}", self.last_event_id);
         } else {
@@ -1283,20 +1241,11 @@ impl SearchCache {
     }
 
     /// Applies what an `EventScan` read from disk. Returns whether indexed items changed.
+    /// Items whose metadata alone changed are updated in place; see
+    /// `take_metadata_changed`. To apply large changes in steps, use
+    /// `ScannedEvents::into_changes` and `apply_changes`.
     pub fn apply_fs_events(&mut self, scanned: ScannedEvents) -> bool {
-        let mut changed = false;
-        for scanned_path in scanned.paths {
-            let existed = self.node_index_for_path(&scanned_path.requested).is_some();
-            let folder = self.apply_scanned_path(scanned_path);
-            changed |= existed || folder.is_some();
-            if folder.is_some() {
-                info!("Node changed: {folder:?}");
-            }
-        }
-        if let Some(max_event_id) = scanned.max_event_id {
-            self.update_last_event_id(max_event_id);
-        }
-        changed
+        self.apply_changes(&mut scanned.into_changes(), None)
     }
 
     /// Removes items on other volumes, which scans now skip, from an index saved
@@ -1360,8 +1309,8 @@ impl EventScan {
 
 /// What an `EventScan` found on disk, for `SearchCache::apply_fs_events`.
 pub struct ScannedEvents {
-    paths: Vec<ScannedPath>,
-    max_event_id: Option<u64>,
+    pub(crate) paths: Vec<ScannedPath>,
+    pub(crate) max_event_id: Option<u64>,
 }
 
 struct ScanConfig {
@@ -1373,13 +1322,13 @@ struct ScanConfig {
     volumes: Option<OtherVolumes>,
 }
 
-struct ScannedPath {
+pub(crate) struct ScannedPath {
     /// The path an event named.
-    requested: PathBuf,
-    outcome: ScanOutcome,
+    pub(crate) requested: PathBuf,
+    pub(crate) outcome: ScanOutcome,
 }
 
-enum ScanOutcome {
+pub(crate) enum ScanOutcome {
     Missing,
     /// The path, as spelled on disk, is ignored, excluded or on another volume.
     Ignored(PathBuf),
@@ -1442,7 +1391,7 @@ impl ScanConfig {
 /// The item's name as stored on disk, which on case-insensitive volumes can differ
 /// from `path`'s last component by case or Unicode normalization. A final symlink
 /// is not followed.
-fn on_disk_name(path: &Path) -> Option<std::ffi::OsString> {
+pub(crate) fn on_disk_name(path: &Path) -> Option<std::ffi::OsString> {
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
     #[repr(C, align(8))]
     struct Reply([u8; 4096]);
@@ -1481,7 +1430,7 @@ fn on_disk_name(path: &Path) -> Option<std::ffi::OsString> {
 }
 
 /// Whether two names differ at most by case or Unicode normalization.
-fn same_name_ignoring_case(a: &OsStr, b: &OsStr) -> bool {
+pub(crate) fn same_name_ignoring_case(a: &OsStr, b: &OsStr) -> bool {
     match (a.to_str(), b.to_str()) {
         (Some(a), Some(b)) => a
             .nfc()
@@ -1682,31 +1631,6 @@ fn construct_node_slab(
         .map(|node| construct_node_slab(Some(index), node, slab, postings, names))
         .collect();
     index
-}
-
-impl SearchCache {
-    /// ATTENTION: This function doesn't remove existing node, you should remove it
-    /// before creating the new subtree, or the old subtree nodes will be dangling.
-    ///
-    /// ATTENTION1: This function should only called with Node fetched with metadata.
-    fn create_node_slab_update_name_index(
-        &mut self,
-        parent: Option<SlabIndex>,
-        node: Node,
-    ) -> SlabIndex {
-        let metadata = match node.metadata {
-            Some(metadata) => SlabNodeMetadataCompact::some(metadata),
-            // This function should only be called with Node fetched with metadata
-            None => SlabNodeMetadataCompact::unaccessible(),
-        };
-        let index = self.push_node(parent, &node.name, metadata);
-        self.file_nodes[index].children = node
-            .children
-            .into_iter()
-            .map(|node| self.create_node_slab_update_name_index(Some(index), node))
-            .collect::<ThinVec<_>>();
-        index
-    }
 }
 
 fn require_folder_expr(expr: Expr) -> Expr {
@@ -3464,7 +3388,7 @@ mod tests {
         let file = root.join("file.txt");
         fs::write(&file, b"before").unwrap();
         let mut cache = SearchCache::walk_fs_with_ignore(root, std::slice::from_ref(&ignored));
-        let mut send = |path: PathBuf, flag| {
+        let send = |cache: &mut SearchCache, path: PathBuf, flag| {
             let id = cache.last_event_id() + 1;
             let changed = cache
                 .handle_fs_events(vec![FsEvent { path, id, flag }])
@@ -3472,14 +3396,28 @@ mod tests {
             assert_eq!(cache.last_event_id(), id);
             changed
         };
-        assert!(!send(root.to_path_buf(), EventFlag::HistoryDone));
+        assert!(!send(
+            &mut cache,
+            root.to_path_buf(),
+            EventFlag::HistoryDone
+        ));
         fs::write(ignored.join("log.txt"), b"noise").unwrap();
-        assert!(!send(ignored.join("log.txt"), EventFlag::ItemCreated));
-        assert!(!send(root.join("never-indexed"), EventFlag::ItemRemoved));
+        assert!(!send(
+            &mut cache,
+            ignored.join("log.txt"),
+            EventFlag::ItemCreated
+        ));
+        assert!(!send(
+            &mut cache,
+            root.join("never-indexed"),
+            EventFlag::ItemRemoved
+        ));
+        // A rewritten file keeps its node; only its size and dates change.
         fs::write(&file, b"after").unwrap();
-        assert!(send(file.clone(), EventFlag::ItemModified));
+        assert!(!send(&mut cache, file.clone(), EventFlag::ItemModified));
+        assert!(cache.take_metadata_changed());
         fs::remove_file(&file).unwrap();
-        assert!(send(file, EventFlag::ItemRemoved));
+        assert!(send(&mut cache, file, EventFlag::ItemRemoved));
         assert!(cache.search("file.txt").unwrap().is_empty());
     }
 

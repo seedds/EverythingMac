@@ -90,7 +90,8 @@ Rust owns the full result-ID vector and the selection. A selection is a list of
 node identities: a slab index plus a per-slot generation that `remove_node` bumps, so
 a reused slot never matches an earlier identity, together with the cache instance
 they belong to. Selections of up to 4,096 items also keep their paths, so their
-files stay selected after a live update re-creates their folder's nodes. Swift keeps
+files stay selected after a live update removes and re-adds their nodes, as when a
+file is deleted and created again in separate event batches. Swift keeps
 at most 1,024 row models around the viewport, plus bounded selection samples.
 Explicit actions resolve every selected path; an open Quick Look panel resolves at
 most 1,000.
@@ -98,17 +99,32 @@ most 1,000.
 Live updates distinguish two kinds of change. Events that only change an existing
 item's attributes (file edits; permission, extended-attribute, and Finder-info
 changes on a file or folder) update its metadata in place and keep its ID.
-Creations, removals, renames, and coalesced subtree changes remove and walk the
-path again. `cn_poll` reports the first kind as `metadata_changed`, which keeps row
-IDs valid: Swift refreshes the visible rows and re-sorts only when the view sorts or
-filters by size or date. It reports the second kind as `changed`, which invalidates
-row IDs and makes Swift repeat the search. Files the app itself moves to the Trash
+Creations, removals, renames, and coalesced subtree changes walk the path again,
+and the walk is merged into the index: unchanged items keep their nodes and IDs,
+items whose sizes or dates changed are updated in place, and only items that appeared
+or disappeared are added or removed. `cn_poll` reports in-place updates as
+`metadata_changed`, which keeps row IDs valid: Swift refreshes the visible rows and
+re-sorts only when the view sorts or filters by size or date. It reports added or
+removed items, and items whose type changed, as `changed`, which invalidates row IDs
+and makes Swift repeat the search. Files the app itself moves to the Trash
 leave the index at once through `cn_remove_paths`, followed by an immediate refresh;
 their FSEvents arrive later and change nothing. Name matching scans live names in the
 name index in parallel key ranges.
 
+Walks run on a pool without the engine lock, and what they find is applied in steps
+(`search_cache::PendingChanges`). Each step updates one folder's children, or adds or
+removes up to 4,096 items of a folder moved in or out, and leaves the index whole: every
+item is under the root and in the name index, so searches can run between steps. A
+poll waits up to 10 ms for the walks it starts and applies steps until then; the rest
+waits for the next polls, which Swift sends 5 ms after a reply that reports `applying`,
+or 50 ms after one that reports `walking` while walks are still reading folders.
+Later event batches wait until a walk is applied, and paths the app removes meanwhile
+are removed again afterwards. Each folder's children are kept in name order, so a
+path is found by binary search at each level; indexes saved by earlier versions are
+put in order as they open.
+
 Each distinct name is stored once, as a key of the name index, and every item with
-that name points at the key's text. `remove_node` frees a name once the last item
+that name points at the key's text. `remove_nodes` frees a name once the last item
 with it is out of the slab (not before: finding postings by path reads the names of
 removed folders), so names of files that come and go do not accumulate. Walks and
 index loads share names through a temporary set until the name index takes them
@@ -233,16 +249,25 @@ compares `idleSearchMS` with `searchMS` and `pageMS` during the rescan; each sea
 timed from submission until its rows are drawn. It reads the whole monitored root, so
 a rescan of `/` takes as long as a normal rebuild.
 
-To time how long live updates hold the engine while a large folder is moved into a
-watched index, using real FSEvents in a temporary folder:
+To time how long live updates hold the engine while large changes happen in a watched
+index, using real FSEvents in a temporary folder:
 
 ```bash
-cargo run --release -p everything-mac-native-prototype --example live_walk -- 200000
+cargo run --release -p everything-mac-native-prototype --example live_walk -- 200000 100000 10000
 ```
 
+It moves a folder of 200,000 files in, creates 10,000 files in an indexed folder of
+100,000, and moves the first folder out again, polling as the app does. For each,
 `longest_poll_ms` is the longest `cn_poll` call, which is the longest a search or row
 load waits on the app's serial engine queue; `indexed_after_ms` is the time from the
-move until the index contains every file.
+change until the index matches it.
+
+To time the engine's part alone, applying already walked changes without FSEvents
+or polls, including a rescan of an unchanged folder:
+
+```bash
+cargo run --release -p search-cache --example apply_timing -- 200000 100000 10000 3
+```
 
 To time queries in the engine against a copy of an index, or against a fresh walk of a
 folder whose sizes and dates are not read yet:

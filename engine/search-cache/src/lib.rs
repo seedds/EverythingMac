@@ -1,5 +1,6 @@
 #![feature(str_from_raw_parts)]
 mod cache;
+mod changes;
 mod file_nodes;
 mod highlight;
 mod metadata_cache;
@@ -17,6 +18,7 @@ mod sort_index;
 mod type_and_size;
 
 pub use cache::*;
+pub use changes::PendingChanges;
 pub use file_nodes::*;
 pub use fswalk::WalkData;
 pub use metadata_cache::*;

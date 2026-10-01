@@ -86,6 +86,15 @@ extension Model {
         }
         let walking = reply.walking == true
         if self.walking != walking { self.walking = walking }
+        // Each poll applies part of a large change; poll again soon so it finishes
+        // quickly. Searches queued meanwhile still run between polls. Until a walk
+        // has read its folders, poll less often.
+        if walking {
+          let delay = reply.applying == true ? 5 : 50
+          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) { [weak self] in
+            self?.poll()
+          }
+        }
         var status = "\(reply.total ?? 0) indexed · \(processed) events"
         if walking { status += " · Updating changed folders…" }
         if reply.metadata_indexing == true {

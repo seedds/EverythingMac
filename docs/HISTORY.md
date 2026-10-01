@@ -473,6 +473,35 @@ Rust tests passed (the system-wide cancellation test excluded), also under Guard
 clippy passed; and the self, sort, selection, feature, live, tab, terminal, and trash
 checks passed.
 
+## Shorter pauses during large changes — 0.1.75
+
+Live updates held the engine, and so every search and row load, while they applied a
+walk: 55 ms for a 200,000-file folder moved in, about 200 ms for one moved out, and
+about 240 ms to rescan an unchanged folder of that size, which was removed and added
+again. Each changed path was found by comparing its name with every child of its folder,
+so 10,000 files created in a folder of 100,000 kept the engine busy for 15 s in polls of
+about 100 ms.
+
+Each folder's children are now kept in name order, so paths are found by binary search;
+indexes saved by earlier versions are put in order as they open. A walked path is
+merged into the index: unchanged items keep their nodes and IDs, changed sizes and dates
+are updated in place, and a batch's changes to a folder are merged into its children in
+one pass. Changes are applied in steps (`PendingChanges`) of one folder's children or
+up to 4,096 items, each leaving the index whole; a poll applies steps for up to 10 ms,
+reports `applying`, and the app polls again 5 ms later. Removals look each name up twice
+instead of three times. While those changes were applied, searches waited at most
+11–16 ms instead of up to 54–219 ms, and the 10,000 files were indexed in 2.5–4.1 s
+instead of 15.4 s; see [Performance](PERFORMANCE.md#large-changes-0175). The
+`live_walk` example now times all three changes and prints the events behind any rescan
+FSEvents asks for, and `apply_timing` times the engine alone. New tests apply large
+changes one step at a time with removals by the app in between, merge rescans of
+changed and unchanged folders, and put older indexes in order; the random-change test
+also rewrites files, reports changes as folder rescans, and applies some in steps,
+checking after each step that the index is whole. Recorded checks: 1,616 Rust tests
+passed (the system-wide cancellation test excluded), also under Guard Malloc; clippy
+passed; and the self, sort, selection, feature, live, tab, terminal, and trash checks
+passed, the live check's Quick Look step after one retry.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

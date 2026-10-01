@@ -73,7 +73,8 @@ lazily into a bounded cache. Search results never generate content thumbnails; Q
 
 Selecting all results stays fast even across millions of files, and the selection
 stays in place through searches and live updates. When a live update scans a folder
-again, selections of up to 4,096 items keep their files selected. An action run right
+again, files still in it stay selected however many are selected, and selections of
+up to 4,096 items also keep files that were removed and added again. An action run right
 after clicking waits for that selection instead of reporting that it is loading.
 
 Scrolling loads filenames and paths directly from the index. Size and dates load

@@ -33,6 +33,7 @@ struct Reply: Decodable {
   let watcher_stopped: Bool?
   let metadata_indexing: Bool?
   let walking: Bool?
+  let applying: Bool?
   let processed_events: UInt64?
   let events: [FileEvent]?
   let paths: [String]?

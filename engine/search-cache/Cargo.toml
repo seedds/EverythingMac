@@ -31,6 +31,8 @@ unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempdir = "0.3"
+tempfile = "3"
+serde_json = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]

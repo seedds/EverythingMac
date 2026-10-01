@@ -301,9 +301,12 @@ fn tree_paths(root: &std::path::Path) -> Vec<PathBuf> {
     paths
 }
 
-/// Random creations, removals, renames (including case-only ones) and moves, with
-/// names shared by many items and names used once. After each change, every item
-/// must point at its name's key and no name of a removed item may stay.
+/// Random creations, removals, rewrites, renames (including case-only ones) and
+/// moves, with names shared by many items and names used once. Some are reported
+/// as a rescan of a folder above them, as FSEvents does when it coalesces events,
+/// and some are applied one step at a time. After each step the index must be
+/// whole: every item must point at its name's key and no name of a removed item
+/// may stay.
 #[test]
 fn live_changes_keep_each_name_with_its_items() {
     let tmp = TempDir::new("owned_names").unwrap();
@@ -313,7 +316,7 @@ fn live_changes_keep_each_name_with_its_items() {
         fs::write(root.join(file), b"x").unwrap();
     }
     let mut cache = SearchCache::walk_fs(&root);
-    cache.assert_names_owned();
+    cache.assert_whole();
     let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
     let mut next = move |below: usize| {
         seed ^= seed << 13;
@@ -333,7 +336,7 @@ fn live_changes_keep_each_name_with_its_items() {
             format!("unique-{step}")
         };
         let mut changed = Vec::new();
-        match next(5) {
+        match next(6) {
             0 | 1 => {
                 let target = dirs[next(dirs.len())].join(&name);
                 if !target.exists() {
@@ -370,6 +373,14 @@ fn live_changes_keep_each_name_with_its_items() {
                     changed.push((to, EventFlag::ItemRenamed));
                 }
             }
+            4 if !paths.is_empty() => {
+                // Rewrites a file with another size.
+                let target = &paths[next(paths.len())];
+                if target.is_file() {
+                    fs::write(target, vec![b'y'; next(100)]).unwrap();
+                    changed.push((target.clone(), EventFlag::ItemModified));
+                }
+            }
             _ if !paths.is_empty() => {
                 // Moves an item into another folder that is not inside it.
                 let from = &paths[next(paths.len())];
@@ -383,6 +394,20 @@ fn live_changes_keep_each_name_with_its_items() {
             }
             _ => {}
         }
+        // A rescan of the folder holding every changed path, unless that is the
+        // root, whose rescan is a full one.
+        let mut folder = changed.first().and_then(|(path, _)| path.parent());
+        while let Some(dir) = folder
+            && !changed.iter().all(|(path, _)| path.starts_with(dir))
+        {
+            folder = dir.parent();
+        }
+        if let Some(folder) = folder
+            && folder != root
+            && next(3) == 0
+        {
+            changed = vec![(folder.to_path_buf(), EventFlag::MustScanSubDirs)];
+        }
         let id = cache.last_event_id() + 1;
         let events = changed
             .into_iter()
@@ -393,8 +418,21 @@ fn live_changes_keep_each_name_with_its_items() {
                 flag,
             })
             .collect();
-        cache.handle_fs_events(events).unwrap();
-        cache.assert_names_owned();
+        if next(2) == 0 {
+            cache.handle_fs_events(events).unwrap();
+        } else {
+            let scanned = cache
+                .plan_fs_events(events)
+                .unwrap()
+                .scan(|| false)
+                .unwrap();
+            let mut changes = scanned.into_changes();
+            while !changes.is_done() {
+                cache.apply_changes(&mut changes, Some(std::time::Instant::now()));
+                cache.assert_whole();
+            }
+        }
+        cache.assert_whole();
         if step % 50 == 49 {
             let mut indexed: Vec<PathBuf> = cache
                 .search_empty(CancellationToken::noop())
