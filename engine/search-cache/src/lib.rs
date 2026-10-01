@@ -5,6 +5,7 @@ mod highlight;
 mod metadata_cache;
 mod mounts;
 mod name_index;
+mod names;
 mod node_set;
 mod persistent;
 mod query;

@@ -4,9 +4,10 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.73 studies cover live updates,
+These are workstation measurements. The 0.1.60–0.1.74 studies cover live updates,
 parallel name matching, large selections, saving and startup memory, F8, rescans and
-folder walks, idle work, filters, index checks, reading sizes and dates, and full scans;
+folder walks, idle work, filters, index checks, reading sizes and dates, full scans, and
+memory for names;
 the other matching study covers the 0.1.55 changes, and the versioned sorting studies
 cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
@@ -15,6 +16,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Names, 0.1.74](#names-0174) | Names of files that come and go no longer accumulate: 100,000 new names moved into a live index and out again kept 4.6 MiB each time, and now nothing measurable. Opening 4,573,469 entries took 1.25–1.28 s and 159 MiB of heap instead of 1.73–1.76 s and 221 MiB, a scan of `/` peaked at 785–789 MiB instead of 964–966 MiB, and adding a 200,000-file folder held the engine for 59–60 ms instead of 84–91 ms. |
 | [Full scans, 0.1.73](#full-scans-0173) | A full scan of `/` with 5.08 million entries took 10.6–10.8 s instead of 15.1–16.1 s, and 10.5 s instead of 16.2–16.3 s with four exclusion patterns. Its peak memory fell from 981–983 MiB to 930–932 MiB, and the scanned index holds 133 MiB of heap instead of 163 MiB. |
 | [Reading sizes and dates, 0.1.72](#reading-sizes-and-dates-0172) | After a scan, reading the sizes and dates of 3,710,341 files took 18.1–20.7 s instead of 39.6–43.3 s, with identical values. Searches during the pass took a median 3.3 ms, against 3.1 ms before. |
 | [Checking saved indexes, 0.1.71](#checking-saved-indexes-0171) | Checking a saved index's checksum and structure adds 103–113 ms (4.4–4.8%) to opening 4,573,469 entries. A damaged copy fails in 0–2.1 s, where 0.1.70 could use more than 11 GB of memory and 100 TB of address space on one bad number. |
@@ -35,6 +37,68 @@ apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
 
+## Names (0.1.74)
+
+Measured on 2026-10-01 on the same Apple M4 Pro. Builds alternated.
+
+Until 0.1.74, every name an index had seen stayed in a process-wide pool until the app
+quit, including names of files that were later deleted. Build folders, caches, and
+temporary files keep producing names that never return. On this Mac, the previous 24
+hours of FSEvents history listed 377,965 created names that the 4,573,469-entry snapshot
+did not have, and 255,529 of them no longer existed; that day included this study's own
+benchmarks and test runs.
+
+| Measurement | 0.1.73 | 0.1.74 |
+| --- | ---: | ---: |
+| Heap kept after 100,000 newly named files come and go (`name_churn`) | 4.6 MiB each time | under 0.05 MiB after five times |
+| Opening 4,573,469 entries | 1.73–1.76 s | 1.25–1.28 s |
+| Heap the opened index holds | 221 MiB | 159 MiB |
+| Peak memory while opening (physical footprint) | 265–268 MiB | 258–259 MiB |
+| Full scan of `/` (5,278,139–5,278,152 entries) | 10.8–11.1 s | 10.6–10.8 s |
+| User CPU of a scan | 4.2–4.3 s | 3.9–4.0 s |
+| Peak memory during a scan | 964–966 MiB | 785–789 MiB |
+| Heap the first scan in a process adds | 230 MiB | 186 MiB |
+| Adding a 200,000-file folder moved in (`live_walk`), longest poll | 84–91 ms | 59–60 ms |
+| The same, until indexed | 350–355 ms | 320–328 ms |
+
+With 20,000 names each time, the heap kept leveled off at 0.11–0.21 MiB after four
+times and stayed there through twenty; the event log and other bounded buffers account
+for it.
+
+Each distinct name is now stored once, as a key of the name index, and every item with
+that name points at the key's text. When a removal leaves a name with no items, the name
+is freed. This happens only after the removed items have left the slab, because removing
+an item's posting finds it by path, which reads the names of its folders. The pool was
+also a second sorted set of every name next to the name index: 21 MiB of tree nodes for
+the snapshot's 1,190,666 names, beside their 38 MiB of text, which is now held once.
+
+**Opening.** Each item's name was decoded into a new string and looked up in the pool's
+B-tree under a lock; then the name index was rebuilt one key at a time, which leaves its
+B-tree nodes about half full. Now items share names through a hash set while decoding,
+with no allocation for a name seen before, and the decoded name index takes the set's
+copies and keeps its bulk-built nodes. The structure check compares each item's name
+address with its key's.
+
+**Scans.** The index is now built by consuming the walked tree: each walked name becomes
+the stored copy or is freed at once, and each walked folder's list is freed once its
+items are added. This lowered the scan's peak by 170–180 MiB. The 0.1.73 figure for the
+index's heap (136 MiB on this disk) was measured by closing the index and left out the
+names; the heap a first scan adds, 230 MiB, includes them.
+
+**Live updates.** Adding an item looks its name up in the name index once, or twice for
+a new name. Before, it looked the name up in the pool and then once or twice in the
+name index.
+
+The 14 queries of the [filters study](#filters-and-combined-queries-0170) and others
+(`a`, `!a`, `a b|c`, `src=rs`, `Users=json`, `regex:`, `size:`, `file:dm:thisyear`, and
+so on) returned identical order and set checksums on the snapshot, in the same times or
+slightly less. The index file format is unchanged.
+
+Every engine and bridge test also passed under Guard Malloc, which gives each allocation
+its own pages and unmaps them when it is freed, so reading a freed name crashes. A build
+that freed names as soon as their postings emptied crashed within the first tests.
+AddressSanitizer deadlocked while starting on this macOS.
+
 ## Full scans (0.1.73)
 
 Measured on 2026-10-01 on the same Apple M4 Pro with the `scan_timing` example, which
@@ -51,6 +115,10 @@ build had warmed the filesystem caches.
 | Peak memory (physical footprint) | 981–983 MiB | 930–932 MiB |
 | Heap memory the scanned index holds | 163 MiB | 133 MiB |
 | Indexing a 200,000-file folder moved in (`live_walk`) | 454–546 ms | 339–344 ms |
+
+The index heap is what closing the index freed. Until 0.1.74, names stayed in a pool
+for the whole process, so these figures leave them out; see
+[Names, 0.1.74](#names-0174).
 
 A scan walks the folders, then builds the index from the walked tree.
 

@@ -283,3 +283,128 @@ fn decoded_snapshot_constructor_matches_validated_loader() {
         .is_err()
     );
 }
+
+/// Every path under `root`, depth first.
+fn tree_paths(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path.clone());
+            }
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths
+}
+
+/// Random creations, removals, renames (including case-only ones) and moves, with
+/// names shared by many items and names used once. After each change, every item
+/// must point at its name's key and no name of a removed item may stay.
+#[test]
+fn live_changes_keep_each_name_with_its_items() {
+    let tmp = TempDir::new("owned_names").unwrap();
+    let root = tmp.path().canonicalize().unwrap().join("root");
+    fs::create_dir_all(root.join("a/b")).unwrap();
+    for file in ["same", "a/same", "a/b/same", "a/one"] {
+        fs::write(root.join(file), b"x").unwrap();
+    }
+    let mut cache = SearchCache::walk_fs(&root);
+    cache.assert_names_owned();
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = move |below: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % below as u64) as usize
+    };
+    let shared = ["same", "Same", "index.js", "lib"];
+    for step in 0..300 {
+        let paths = tree_paths(&root);
+        let dirs: Vec<PathBuf> = std::iter::once(root.clone())
+            .chain(paths.iter().filter(|path| path.is_dir()).cloned())
+            .collect();
+        let name = if next(2) == 0 {
+            shared[next(shared.len())].to_string()
+        } else {
+            format!("unique-{step}")
+        };
+        let mut changed = Vec::new();
+        match next(5) {
+            0 | 1 => {
+                let target = dirs[next(dirs.len())].join(&name);
+                if !target.exists() {
+                    if next(3) == 0 {
+                        fs::create_dir_all(target.join("inner")).unwrap();
+                        fs::write(target.join("inner/same"), b"x").unwrap();
+                        fs::write(target.join(format!("file-{step}")), b"x").unwrap();
+                    } else {
+                        fs::write(&target, b"x").unwrap();
+                    }
+                    changed.push((target, EventFlag::ItemCreated));
+                }
+            }
+            2 if !paths.is_empty() => {
+                let target = &paths[next(paths.len())];
+                if target.is_dir() {
+                    fs::remove_dir_all(target).unwrap();
+                } else {
+                    fs::remove_file(target).unwrap();
+                }
+                changed.push((target.clone(), EventFlag::ItemRemoved));
+            }
+            3 if !paths.is_empty() => {
+                // Renames within the folder, possibly changing only the case.
+                let from = &paths[next(paths.len())];
+                let to = from.with_file_name(&name);
+                if !to.exists()
+                    || to
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&from.to_string_lossy())
+                {
+                    fs::rename(from, &to).unwrap();
+                    changed.push((from.clone(), EventFlag::ItemRenamed));
+                    changed.push((to, EventFlag::ItemRenamed));
+                }
+            }
+            _ if !paths.is_empty() => {
+                // Moves an item into another folder that is not inside it.
+                let from = &paths[next(paths.len())];
+                let into = &dirs[next(dirs.len())];
+                let to = into.join(from.file_name().unwrap());
+                if !into.starts_with(from) && !to.exists() {
+                    fs::rename(from, &to).unwrap();
+                    changed.push((from.clone(), EventFlag::ItemRenamed));
+                    changed.push((to, EventFlag::ItemRenamed));
+                }
+            }
+            _ => {}
+        }
+        let id = cache.last_event_id() + 1;
+        let events = changed
+            .into_iter()
+            .enumerate()
+            .map(|(i, (path, flag))| FsEvent {
+                path,
+                id: id + i as u64,
+                flag,
+            })
+            .collect();
+        cache.handle_fs_events(events).unwrap();
+        cache.assert_names_owned();
+        if step % 50 == 49 {
+            let mut indexed: Vec<PathBuf> = cache
+                .search_empty(CancellationToken::noop())
+                .unwrap()
+                .into_iter()
+                .filter_map(|index| cache.node_path(index))
+                .filter(|path| path.starts_with(&root) && *path != root)
+                .collect();
+            indexed.sort();
+            assert_eq!(indexed, tree_paths(&root), "step {step}");
+        }
+    }
+}

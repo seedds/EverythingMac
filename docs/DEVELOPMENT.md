@@ -74,7 +74,7 @@ you launch when also using the Homebrew installation; their version and signatur
 | `bridge/src/` | Rust static library, saved-index loading, search, selection, and live indexing. |
 | `engine/search-cache/` | In-memory index: slab nodes, name index, query evaluation, sort orders, live event handling, and snapshot persistence. |
 | `engine/everything-mac-sdk/` | FSEvents stream ownership and event classification. |
-| `engine/fswalk/`, `engine/namepool/`, `engine/slab-mmap/` | Parallel filesystem walk with exclusions, interned names, and the memory-mapped node slab. |
+| `engine/fswalk/`, `engine/slab-mmap/` | Parallel filesystem walk with exclusions, and the memory-mapped node slab. |
 | `engine/everything-mac-syntax/`, `engine/query-segmentation/` | Query parsing, optimization, and path-segment splitting. |
 | `run.sh` | Release build, app assembly, signing, and launch. |
 | `scripts/package-native.sh` | Local DMG creation. |
@@ -105,8 +105,14 @@ filters by size or date. It reports the second kind as `changed`, which invalida
 row IDs and makes Swift repeat the search. Files the app itself moves to the Trash
 leave the index at once through `cn_remove_paths`, followed by an immediate refresh;
 their FSEvents arrive later and change nothing. Name matching scans live names in the
-name index in parallel key ranges; the process-wide name pool is only used to
-intern names.
+name index in parallel key ranges.
+
+Each distinct name is stored once, as a key of the name index, and every item with
+that name points at the key's text. `remove_node` frees a name once the last item
+with it is out of the slab (not before: finding postings by path reads the names of
+removed folders), so names of files that come and go do not accumulate. Walks and
+index loads share names through a temporary set until the name index takes them
+over; the structure check on load compares each item's name address with its key's.
 
 Checkpoints are written to a temporary file, synced to disk, and then renamed over
 the index, so a failed save leaves the previous index intact. They are serialized
@@ -276,6 +282,17 @@ The first scan warms the filesystem caches; each line gives `scan_s`, the CPU ti
 `peak_footprint_mib` (the process's peak memory as Activity Monitor counts it), and
 `index_heap_mib`, the heap memory the scanned index held. Arguments after the repeat
 count are exclusion patterns.
+
+To check that files coming and going leave no memory behind, as build and cache
+folders do, in a temporary folder:
+
+```bash
+cargo run --release -p everything-mac-native-prototype --example name_churn -- 100000 5
+```
+
+Each round moves a folder of 100,000 newly named files into a watched index and out
+again. `kept_since_round_0_mib` is the heap memory still in use since the first
+round, which should stay near zero.
 
 To measure what the app costs while nobody types, and per arrow key:
 

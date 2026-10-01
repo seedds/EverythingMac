@@ -1,7 +1,10 @@
 //! Times full scans through `cn_scan`, as the app runs them. The scope defaults to
 //! the app's default, `/` with nothing ignored; PATTERNS are exclusion patterns,
 //! one per argument. The first scan warms the filesystem caches. `index_heap_mib`
-//! is the heap memory the scanned index held, freed when it was closed.
+//! is the heap memory the scanned index held, freed when it was closed, and
+//! `heap_growth_mib` the heap memory in use after the scan that was not before it.
+//! (Before 0.1.74 names were kept for the whole process, so closing an index did not
+//! free them, and only the first scan in a process grew the heap by them.)
 //! Usage: scan_timing [ROOT] [REPEATS] [PATTERN...]
 // Links the bridge, whose C functions are declared below.
 use everything_mac_native_prototype as _;
@@ -80,6 +83,7 @@ fn main() {
         let request = unsafe { cn_scan_request_new() };
         let mut engine = std::ptr::null_mut();
         let before = usage();
+        let heap_before = heap_in_use();
         let started = Instant::now();
         let scanned = unsafe {
             reply(cn_scan(
@@ -110,6 +114,7 @@ fn main() {
                 "cpu_sys_s": after.1 - before.1,
                 "peak_footprint_mib": after.2,
                 "index_heap_mib": released,
+                "heap_growth_mib": held - heap_before,
             })
         );
     }

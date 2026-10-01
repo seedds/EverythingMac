@@ -1,4 +1,4 @@
-use crate::{NAME_POOL, OptionSlabIndex, SlabIndex, State, StateTypeSize};
+use crate::{OptionSlabIndex, SlabIndex, State, StateTypeSize, names::DecodeName};
 use fswalk::NodeFileType;
 use serde::{
     Deserialize, Serialize,
@@ -50,16 +50,14 @@ impl<'de> serde::de::Deserialize<'de> for NameAndParent {
             where
                 A: SeqAccess<'de>,
             {
-                let name: String = seq
-                    .next_element()?
+                let name = seq
+                    .next_element_seed(DecodeName)?
                     .ok_or_else(|| de::Error::invalid_length(0, &self))?;
                 let parent: OptionSlabIndex = seq
                     .next_element()?
                     .ok_or_else(|| de::Error::invalid_length(1, &self))?;
 
-                let name_in_pool = NAME_POOL.push(&name);
-
-                Ok(NameAndParent::new(name_in_pool, parent))
+                Ok(NameAndParent::new(name, parent))
             }
         }
 

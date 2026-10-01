@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 fswalk = { path = "../fswalk" }
-namepool = { path = "../namepool" }
 everything-mac-sdk = { path = "../everything-mac-sdk" }
 everything-mac-syntax = { path = "../everything-mac-syntax" }
 query-segmentation = { path = "../query-segmentation" }

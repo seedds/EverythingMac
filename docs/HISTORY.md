@@ -450,6 +450,29 @@ open handle and grouping names in a hash map were measured and not adopted. The
 tests passed (the system-wide cancellation test excluded), clippy passed, and the self,
 sort, selection, feature, live, tab, terminal, and trash checks passed.
 
+## Names freed with their files — 0.1.74
+
+Every name an index had seen stayed in a process-wide pool until the app quit, so a
+running app grew with each new file name, about 4.6 MiB per 100,000, even after the
+files were deleted. Each distinct name is now stored once, as a key of the name index,
+with items pointing at it, and is freed when the last item with that name is removed:
+after the removed items leave the slab, since finding their postings reads their folders'
+names. The pool crate, whose own search functions had been unused since 0.1.61, was
+removed.
+
+Loading shares names through a hash set while decoding and keeps the decoded name
+index's bulk-built B-tree, and scans consume the walked tree as they build the index.
+Opening 4,573,469 entries took 1.25–1.28 s and 159 MiB instead of 1.73–1.76 s and
+221 MiB, a scan's peak memory fell by about 175 MiB, and adding a 200,000-file folder
+held the engine for 59–60 ms instead of 84–91 ms; see
+[Performance](PERFORMANCE.md#names-0174). The `name_churn` example measures the memory
+kept after files come and go, and `scan_timing` also reports the heap a scan adds. A new
+test applies random creations, removals, renames, and moves and checks after each that
+every item points at its name's key and no unused name is left. Recorded checks: 1,612
+Rust tests passed (the system-wide cancellation test excluded), also under Guard Malloc;
+clippy passed; and the self, sort, selection, feature, live, tab, terminal, and trash
+checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

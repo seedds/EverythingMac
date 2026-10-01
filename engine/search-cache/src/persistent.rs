@@ -1,4 +1,6 @@
-use crate::{SlabIndex, SlabNode, ThinSlab, name_index::SortedSlabIndices, node_set::NodeSet};
+use crate::{
+    SlabIndex, SlabNode, ThinSlab, name_index::SortedSlabIndices, names, node_set::NodeSet,
+};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,6 +16,8 @@ use typed_num::Num;
 
 const LSF_VERSION: i64 = 8;
 
+/// A decoded index. Its items point at their names' keys in `name_index`, so an
+/// item must not outlive its name's key there.
 #[derive(Serialize, Deserialize)]
 pub struct PersistentStorage {
     pub version: Num<LSF_VERSION>,
@@ -29,6 +33,7 @@ pub struct PersistentStorage {
     /// Root index of the slab
     pub slab_root: SlabIndex,
     pub slab: ThinSlab<SlabNode>,
+    #[serde(deserialize_with = "names::decode_name_index")]
     pub name_index: BTreeMap<Box<str>, SortedSlabIndices>,
     /// The number of rescans emitted before this snapshot.
     pub rescan_count: u64,
@@ -47,7 +52,7 @@ pub(crate) struct PersistentStorageRef<'a> {
     pub include_paths: &'a [PathBuf],
     pub slab_root: SlabIndex,
     pub slab: &'a ThinSlab<SlabNode>,
-    pub name_index: &'a BTreeMap<&'static str, SortedSlabIndices>,
+    pub name_index: &'a BTreeMap<Box<str>, SortedSlabIndices>,
     pub rescan_count: u64,
 }
 
@@ -61,6 +66,7 @@ struct LegacyStorage {
     include_paths: Vec<PathBuf>,
     slab_root: SlabIndex,
     slab: ThinSlab<SlabNode>,
+    #[serde(deserialize_with = "names::decode_name_index")]
     name_index: BTreeMap<Box<str>, SortedSlabIndices>,
     rescan_count: u64,
 }
@@ -70,7 +76,7 @@ fn decode_storage<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let input = File::open(path).context("Failed to open cache file")?;
     let input = zstd::Decoder::new(input).context("Failed to create cache decoder")?;
     let mut input = BufReader::new(input);
-    let storage = postcard::from_io((&mut input, &mut bytes))?.0;
+    let storage = names::decoding(|| postcard::from_io((&mut input, &mut bytes)))?.0;
     // zstd checks the frame's checksum only at its end, after the last value.
     io::copy(&mut input, &mut io::sink()).context("The index file is damaged or incomplete")?;
     Ok(storage)
@@ -159,8 +165,10 @@ impl PersistentStorage {
                 let node = slab.get(index).with_context(|| {
                     format!("the name index lists missing item {}", index.get())
                 })?;
+                // Each item points at its name's key; comparing addresses reads
+                // no name an item might point at after a damaged decode.
                 ensure!(
-                    node.name() == &**name,
+                    node.name().as_ptr() == name.as_ptr() && node.name().len() == name.len(),
                     "item {} is indexed under another name",
                     index.get()
                 );

@@ -2,6 +2,7 @@ use crate::{
     FileNodes, NameIndex, SearchOptions, SearchResultNode, SlabIndex, SlabNode,
     SlabNodeMetadataCompact, State, ThinSlab,
     highlight::derive_highlight_terms,
+    names::Names,
     node_set::NodeSet,
     persistent::{
         PersistentStorage, PersistentStorageRef, read_cache_from_file, write_cache_to_file,
@@ -15,16 +16,12 @@ use fswalk::{
     Node, NodeFileType, NodeMetadata, OtherVolumes, WalkData, walk_it, walk_it_without_root_chain,
 };
 use hashbrown::HashSet;
-use namepool::NamePool;
 use search_cancel::CancellationToken;
 use std::{
     ffi::OsStr,
     io::ErrorKind,
     path::{Path, PathBuf},
-    sync::{
-        LazyLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 use thin_vec::ThinVec;
@@ -239,8 +236,7 @@ impl SearchCache {
             last_event_id,
             rescan_count,
         } = storage;
-        // name pool construction speed is fast enough that caching it doesn't worth it.
-        let name_index = NameIndex::construct_name_pool(name_index);
+        let name_index = NameIndex::from_persistent(name_index);
         let exclusions = fswalk::Exclusions::compile(&path, &exclusion_patterns)
             .expect("validated snapshot patterns");
         let mut slab = FileNodes::new(path, ignore_paths, include_paths, slab, slab_root);
@@ -305,9 +301,9 @@ impl SearchCache {
             let walked = walk_data.num_files.load(Ordering::Relaxed)
                 + walk_data.num_dirs.load(Ordering::Relaxed);
             let mut postings = Vec::with_capacity(walked + 64);
-            let slab_root = construct_node_slab(None, &node, &mut slab, &mut postings);
-            drop(node);
-            let name_index = NameIndex::from_path_order(postings, &slab);
+            let mut names = Names::default();
+            let slab_root = construct_node_slab(None, node, &mut slab, &mut postings, &mut names);
+            let name_index = NameIndex::from_path_order(postings, &slab, names);
             info!(
                 "Slab & NameIndex construction time: {:?}, slab root: {:?}, slab len: {:?}",
                 slab_time.elapsed(),
@@ -715,10 +711,29 @@ impl SearchCache {
         Some(())
     }
 
-    fn push_node(&mut self, node: SlabNode) -> SlabIndex {
-        let name = node.name();
-        let index = self.file_nodes.insert(node);
-        self.name_index.add_index(name, index, &self.file_nodes);
+    fn push_node(
+        &mut self,
+        parent: Option<SlabIndex>,
+        name: &str,
+        metadata: SlabNodeMetadataCompact,
+    ) -> SlabIndex {
+        // The node points at its name's key in the name index.
+        let index = match self.name_index.postings_of(name) {
+            Some((key, postings)) => {
+                let index = self.file_nodes.insert(SlabNode::new(parent, key, metadata));
+                postings.insert(index, &self.file_nodes);
+                index
+            }
+            None => {
+                let key: Box<str> = Box::from(name);
+                let text = unsafe { std::str::from_raw_parts(key.as_ptr(), key.len()) };
+                let index = self
+                    .file_nodes
+                    .insert(SlabNode::new(parent, text, metadata));
+                self.name_index.add_name(key, index);
+                index
+            }
+        };
         self.sort_indexes.changed(index);
         index
     }
@@ -763,16 +778,14 @@ impl SearchCache {
                 let metadata = std::fs::symlink_metadata(&current_path)
                     .map(NodeMetadata::from)
                     .ok();
-                let name = NAME_POOL.push(name.to_string_lossy().as_ref());
-                let node = SlabNode::new(
+                let index = self.push_node(
                     Some(current),
-                    name,
+                    &name.to_string_lossy(),
                     match metadata {
                         Some(metadata) => SlabNodeMetadataCompact::some(metadata),
                         None => SlabNodeMetadataCompact::unaccessible(),
                     },
                 );
-                let index = self.push_node(node);
                 // A new ID cannot already be a child; skip `add_children`'s scan.
                 self.file_nodes[current].children.push(index);
                 index
@@ -844,7 +857,7 @@ impl SearchCache {
         for old_node in stale {
             self.remove_node(old_node);
         }
-        let node = self.create_node_slab_update_name_index_and_name_pool(Some(parent), &node);
+        let node = self.create_node_slab_update_name_index(Some(parent), node);
         // A new ID cannot already be a child; skip `add_children`'s scan.
         self.file_nodes[parent].children.push(node);
         Some(node)
@@ -933,8 +946,8 @@ impl SearchCache {
                 .or_default()
                 .push(id);
         }
-        for (name, ids) in by_name {
-            let count = self.name_index.remove_indices(name, &ids, &self.file_nodes);
+        for (name, ids) in &by_name {
+            let count = self.name_index.remove_indices(name, ids, &self.file_nodes);
             assert_eq!(count, ids.len(), "inconsistent name index and node");
         }
         for id in removed {
@@ -947,6 +960,32 @@ impl SearchCache {
             }
             self.slot_generations[slot] = self.slot_generations[slot].wrapping_add(1);
         }
+        // Free the names no node has any more only now that the removed nodes are
+        // gone: finding their postings by path read the names of their folders.
+        for name in by_name.into_keys() {
+            self.name_index.remove_unused(name);
+        }
+    }
+
+    /// Checks that each node points at its name's key in the name index, and that
+    /// each key has nodes, so no removed name is left.
+    #[cfg(test)]
+    pub(crate) fn assert_names_owned(&self) {
+        let mut listed = 0;
+        for (name, indices) in self.name_index.map() {
+            assert!(!indices.is_empty(), "{name:?} is kept without items");
+            for &index in indices.iter() {
+                let own = self.file_nodes[index].name();
+                assert_eq!(
+                    (own.as_ptr(), own.len()),
+                    (name.as_ptr(), name.len()),
+                    "item {} does not point at {name:?}",
+                    index.get()
+                );
+                listed += 1;
+            }
+        }
+        assert_eq!(listed, self.file_nodes.len());
     }
 
     /// The identity of an existing node; `None` if the slot is empty.
@@ -1615,27 +1654,32 @@ pub enum HandleFSEError {
 
 /// Note: This function is expected to be called with WalkData which metadata is not fetched.
 /// Adds `node` and its descendants to the slab, and the address of each one's
-/// interned name to `postings`.
+/// name, interned in `names`, to `postings`. The walked tree is freed as it goes.
 fn construct_node_slab(
     parent: Option<SlabIndex>,
-    node: &Node,
+    node: Node,
     slab: &mut ThinSlab<SlabNode>,
     postings: &mut Vec<(usize, SlabIndex)>,
+    names: &mut Names,
 ) -> SlabIndex {
-    let metadata = match node.metadata {
+    let Node {
+        children,
+        name,
+        metadata,
+    } = node;
+    let metadata = match metadata {
         Some(metadata) => SlabNodeMetadataCompact::some(metadata),
         None => SlabNodeMetadataCompact::none(),
     };
-    let name = NAME_POOL.push(&node.name);
+    let name = names.intern_owned(name);
     let slab_node = SlabNode::new(parent, name, metadata);
     let index = slab.insert(slab_node);
     // fswalk sorts each directory's children by name before we recurse, so this
     // preorder traversal visits nodes in lexicographic path order.
     postings.push((name.as_ptr() as usize, index));
-    slab[index].children = node
-        .children
-        .iter()
-        .map(|node| construct_node_slab(Some(index), node, slab, postings))
+    slab[index].children = children
+        .into_iter()
+        .map(|node| construct_node_slab(Some(index), node, slab, postings, names))
         .collect();
     index
 }
@@ -1645,29 +1689,25 @@ impl SearchCache {
     /// before creating the new subtree, or the old subtree nodes will be dangling.
     ///
     /// ATTENTION1: This function should only called with Node fetched with metadata.
-    fn create_node_slab_update_name_index_and_name_pool(
+    fn create_node_slab_update_name_index(
         &mut self,
         parent: Option<SlabIndex>,
-        node: &Node,
+        node: Node,
     ) -> SlabIndex {
         let metadata = match node.metadata {
             Some(metadata) => SlabNodeMetadataCompact::some(metadata),
             // This function should only be called with Node fetched with metadata
             None => SlabNodeMetadataCompact::unaccessible(),
         };
-        let name = NAME_POOL.push(&node.name);
-        let slab_node = SlabNode::new(parent, name, metadata);
-        let index = self.push_node(slab_node);
+        let index = self.push_node(parent, &node.name, metadata);
         self.file_nodes[index].children = node
             .children
-            .iter()
-            .map(|node| self.create_node_slab_update_name_index_and_name_pool(Some(index), node))
+            .into_iter()
+            .map(|node| self.create_node_slab_update_name_index(Some(index), node))
             .collect::<ThinVec<_>>();
         index
     }
 }
-
-pub static NAME_POOL: LazyLock<NamePool> = LazyLock::new(NamePool::new);
 
 fn require_folder_expr(expr: Expr) -> Expr {
     let folder_filter = Expr::Term(Term::Filter(Filter {
@@ -1877,10 +1917,15 @@ mod tests {
         make_node(name, vec![])
     }
 
+    /// A name for a node built by hand, kept for the rest of the tests.
+    fn leaked(name: &str) -> &'static str {
+        Box::leak(Box::from(name))
+    }
+
     fn push_child(slab: &mut ThinSlab<SlabNode>, parent: SlabIndex, name: &str) -> SlabIndex {
         let idx = slab.insert(SlabNode::new(
             Some(parent),
-            NAME_POOL.push(name),
+            leaked(name),
             SlabNodeMetadataCompact::none(),
         ));
         slab[parent].children.push(idx);
@@ -2644,7 +2689,7 @@ mod tests {
         let mut slab = ThinSlab::new();
         let root_idx = slab.insert(SlabNode::new(
             None,
-            NAME_POOL.push("root"),
+            leaked("root"),
             SlabNodeMetadataCompact::none(),
         ));
         let alpha = push_child(&mut slab, root_idx, "alpha");
@@ -2674,8 +2719,9 @@ mod tests {
         );
         let mut slab = ThinSlab::new();
         let mut postings = Vec::new();
-        let root = construct_node_slab(None, &tree, &mut slab, &mut postings);
-        let name_index = NameIndex::from_path_order(postings, &slab);
+        let mut names = Names::default();
+        let root = construct_node_slab(None, tree, &mut slab, &mut postings, &mut names);
+        let name_index = NameIndex::from_path_order(postings, &slab, names);
         let file_nodes = FileNodes::new(
             PathBuf::from("/virtual/root"),
             Vec::new(),

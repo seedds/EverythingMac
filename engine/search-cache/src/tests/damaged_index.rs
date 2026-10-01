@@ -98,7 +98,8 @@ fn damaged_structure_is_rejected() {
         (
             "the name index lists",
             Box::new(move |s| {
-                s.name_index.remove("beta");
+                // The item still points at the name, so keep its text allocated.
+                std::mem::forget(s.name_index.remove_entry("beta"));
             }),
         ),
     ];

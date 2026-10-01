@@ -1,4 +1,4 @@
-use crate::{FileNodes, NAME_POOL, SlabIndex, SlabNode, ThinSlab};
+use crate::{FileNodes, SlabIndex, SlabNode, ThinSlab, names::Names};
 use hashbrown::HashSet;
 use rayon::prelude::*;
 use search_cancel::CancellationToken;
@@ -6,12 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     ops::Bound::{Excluded, Included, Unbounded},
-    time::Instant,
 };
 use thin_vec::ThinVec;
-use tracing::info;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct SortedSlabIndices {
@@ -97,13 +95,16 @@ impl SortedSlabIndices {
     }
 }
 
-#[derive(Clone, Default)]
+/// Every item under its name, in path order. The keys own the names: each item
+/// points at its name's key, so a key is removed only once no item has its name
+/// (see `remove_unused`).
+#[derive(Default)]
 pub struct NameIndex {
-    map: BTreeMap<&'static str, SortedSlabIndices>,
+    map: BTreeMap<Box<str>, SortedSlabIndices>,
     /// Boundaries splitting `map` into ranges that `matching_nodes` scans in
-    /// parallel. The names come from the process-wide pool and stay valid. Stale
+    /// parallel. They are copies, so they outlive names that are removed. Stale
     /// boundaries still cover every name; they only unbalance the ranges.
-    splits: Vec<&'static str>,
+    splits: Vec<Box<str>>,
     /// `map.len()` when `splits` were chosen.
     splits_len: usize,
 }
@@ -113,7 +114,7 @@ impl NameIndex {
     pub(crate) fn refresh_splits(&mut self) {
         let parts = rayon::current_num_threads().max(1) * 4;
         let step = self.map.len().div_ceil(parts).max(1);
-        self.splits = self.map.keys().copied().skip(step).step_by(step).collect();
+        self.splits = self.map.keys().skip(step).step_by(step).cloned().collect();
         self.splits_len = self.map.len();
     }
 
@@ -125,8 +126,7 @@ impl NameIndex {
     }
 
     /// Postings of every name the matcher accepts, in name order. Ranges of names
-    /// are scanned in parallel, each with its own matcher from `matcher`; unlike the
-    /// process-wide name pool, only live names are visited.
+    /// are scanned in parallel, each with its own matcher from `matcher`.
     pub(crate) fn matching_nodes<M: FnMut(&str) -> bool>(
         &self,
         matcher: impl Fn() -> M + Sync,
@@ -137,11 +137,11 @@ impl NameIndex {
             .map(|part| {
                 let lower = part
                     .checked_sub(1)
-                    .map_or(Unbounded, |i| Included(self.splits[i]));
+                    .map_or(Unbounded, |i| Included(&*self.splits[i]));
                 let upper = self
                     .splits
                     .get(part)
-                    .map_or(Unbounded, |name| Excluded(*name));
+                    .map_or(Unbounded, |name| Excluded(&**name));
                 let mut matches = matcher();
                 let mut nodes = Vec::new();
                 for (i, (name, indices)) in self.map.range::<str, _>((lower, upper)).enumerate() {
@@ -214,12 +214,13 @@ impl NameIndex {
     }
 
     /// Builds the index from the address of every node's name, interned in
-    /// `NAME_POOL`, with the nodes in path order and numbered in that order, as a
-    /// new slab numbers them. Sorting and loading the map in bulk avoids a map
-    /// lookup for each node.
+    /// `names`, with the nodes in path order and numbered in that order, as a new
+    /// slab numbers them. Sorting and loading the map in bulk avoids a map lookup
+    /// for each node. The keys are the interned names, so the nodes point at them.
     pub(crate) fn from_path_order(
         mut postings: Vec<(usize, SlabIndex)>,
         slab: &ThinSlab<SlabNode>,
+        names: Names,
     ) -> Self {
         debug_assert!(postings.is_sorted_by_key(|&(_, index)| index));
         // Interned names are equal exactly when they share an address; only the empty
@@ -227,109 +228,115 @@ impl NameIndex {
         // nodes by number keeps them in path order, and sorting in place needs no
         // second buffer of every node.
         postings.par_sort_unstable();
+        let mut keys: Vec<Box<str>> = names.into_inner().into_iter().collect();
+        keys.par_sort_unstable_by_key(|name| name.as_ptr() as usize);
         let groups = postings.chunk_by(|a, b| a.0 == b.0);
-        let mut names = Vec::with_capacity(groups.clone().count());
-        names.extend(groups.map(|group| {
+        // Every interned name belongs to a node, so both are in address order.
+        assert_eq!(groups.clone().count(), keys.len());
+        let mut names = Vec::with_capacity(keys.len());
+        names.extend(groups.zip(keys).map(|(group, name)| {
+            assert_eq!(group[0].0, name.as_ptr() as usize);
             let indices = group.iter().map(|&(_, index)| index).collect();
-            (slab[group[0].1].name(), SortedSlabIndices { indices })
+            (name, SortedSlabIndices { indices })
         }));
         drop(postings);
-        names.par_sort_unstable_by(|a, b| a.0.cmp(b.0));
+        debug_assert!(names.iter().all(|(name, indices)| {
+            indices
+                .iter()
+                .all(|&index| slab[index].name().as_ptr() == name.as_ptr())
+        }));
+        names.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
         Self {
             map: names.into_iter().collect(),
             ..Self::default()
         }
     }
 
+    /// The key of an indexed name, for a new item to point at, and its postings.
+    /// The key's text stays at its address until `remove_unused` removes it.
+    pub(crate) fn postings_of(
+        &mut self,
+        name: &str,
+    ) -> Option<(&'static str, &mut SortedSlabIndices)> {
+        let (key, postings) = self
+            .map
+            .range_mut::<str, _>((Included(name), Included(name)))
+            .next()?;
+        let key = unsafe { std::str::from_raw_parts(key.as_ptr(), key.len()) };
+        Some((key, postings))
+    }
+
+    /// Adds a name that is not indexed yet with its first item, which points at
+    /// `name`'s text.
+    pub(crate) fn add_name(&mut self, name: Box<str>, index: SlabIndex) {
+        let previous = self.map.insert(name, SortedSlabIndices::new(index));
+        debug_assert!(previous.is_none());
+        self.names_changed();
+    }
+
     /// # Safety
     ///
     /// The index must be inserted with it's full path ordered.
-    pub unsafe fn add_index_ordered(&mut self, name: &str, index: SlabIndex) {
+    #[cfg(test)]
+    pub(crate) unsafe fn add_index_ordered(&mut self, name: &str, index: SlabIndex) {
         if let Some(existing) = self.map.get_mut(name) {
             unsafe {
                 existing.insert_ordered(index);
             }
         } else {
-            let interned = NAME_POOL.push(name);
-            self.map.insert(interned, SortedSlabIndices::new(index));
+            self.map
+                .insert(Box::from(name), SortedSlabIndices::new(index));
         }
     }
 
-    pub fn add_index(&mut self, name: &str, index: SlabIndex, slab: &FileNodes) {
-        if let Some(existing) = self.map.get_mut(name) {
-            existing.insert(index, slab);
-        } else {
-            let interned = NAME_POOL.push(name);
-            self.map.insert(interned, SortedSlabIndices::new(index));
-            self.names_changed();
+    /// Adds `index` under `name` in path order, as `SearchCache::push_node` does,
+    /// but without pointing the node at the key.
+    #[cfg(test)]
+    pub(crate) fn add_index(&mut self, name: &str, index: SlabIndex, slab: &FileNodes) {
+        match self.postings_of(name) {
+            Some((_, postings)) => postings.insert(index, slab),
+            None => self.add_name(Box::from(name), index),
         }
-    }
-
-    pub fn remove_index(&mut self, name: &str, index: SlabIndex) -> bool {
-        let Some(indices) = self.map.get_mut(name) else {
-            return false;
-        };
-        let removed = indices.remove(index);
-        if indices.is_empty() {
-            self.map.remove(name);
-            self.names_changed();
-        }
-        removed
     }
 
     /// Removes IDs sharing `name` while their nodes are still in the slab; returns
     /// how many were present. Deleting a subtree updates each name's postings once
-    /// instead of scanning them for every removed file.
+    /// instead of scanning them for every removed file. The name stays until
+    /// `remove_unused`.
     pub fn remove_indices(&mut self, name: &str, ids: &[SlabIndex], slab: &FileNodes) -> usize {
         let Some(indices) = self.map.get_mut(name) else {
             return 0;
         };
-        let removed = match ids {
+        match ids {
             [index] => usize::from(indices.remove_by_path(*index, slab)),
             _ => indices.remove_many(ids),
-        };
-        if indices.is_empty() {
+        }
+    }
+
+    /// Frees `name` if no item has it any more. Called once the removed items are
+    /// out of the slab: until then, finding postings by path reads their names.
+    pub(crate) fn remove_unused(&mut self, name: &str) {
+        if self.map.get(name).is_some_and(SortedSlabIndices::is_empty) {
+            // `name` may be the key's own text; it is not read once found.
             self.map.remove(name);
             self.names_changed();
         }
-        removed
     }
 
-    pub fn remove(&mut self, name: &str) -> Option<SortedSlabIndices> {
-        let removed = self.map.remove(name);
-        self.names_changed();
-        removed
-    }
-
-    pub(crate) fn map(&self) -> &BTreeMap<&'static str, SortedSlabIndices> {
+    pub(crate) fn map(&self) -> &BTreeMap<Box<str>, SortedSlabIndices> {
         &self.map
     }
 
     pub fn into_persistent(self) -> BTreeMap<Box<str>, SortedSlabIndices> {
         self.map
-            .into_iter()
-            .map(|(name, indices)| (name.to_string().into_boxed_str(), indices))
-            .collect()
     }
 
-    pub fn construct_name_pool(data: BTreeMap<Box<str>, SortedSlabIndices>) -> Self {
-        let name_pool_time = Instant::now();
-        let mut map = BTreeMap::new();
-        for (name, indices) in data {
-            let interned = NAME_POOL.push(&name);
-            map.insert(interned, indices);
-        }
-        info!(
-            "Name pool construction time: {:?}, count: {}",
-            name_pool_time.elapsed(),
-            NAME_POOL.len(),
-        );
-        let mut index = Self {
+    /// The name index of a decoded index, whose items point at its keys.
+    pub(crate) fn from_persistent(map: BTreeMap<Box<str>, SortedSlabIndices>) -> Self {
+        Self {
             map,
             ..Default::default()
-        };
-        index.refresh_splits();
-        index
+        }
     }
 }
 
