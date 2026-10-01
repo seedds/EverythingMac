@@ -281,6 +281,39 @@ final class FeatureCheck {
     loaded.shortcut = nil
     try loaded.save()
     try check(Preferences(fileURL: preferencesURL).shortcut == nil, "Disabled shortcut persists")
+    let unreadableFolder = temp.appendingPathComponent("unreadable")
+    try FileManager.default.createDirectory(at: unreadableFolder, withIntermediateDirectories: true)
+    let unreadableURL = unreadableFolder.appendingPathComponent("preferences.json")
+    try broken.write(to: unreadableURL)
+    let setAside = Preferences(fileURL: unreadableURL)
+    try check(
+      setAside.loadError?.contains("“preferences (unreadable).json”") == true
+        && (try? Data(contentsOf: unreadableFolder.appendingPathComponent(
+          "preferences (unreadable).json"))) == broken
+        && !FileManager.default.fileExists(atPath: unreadableURL.path),
+      "Unreadable preferences are reported and kept under another name")
+    try broken.write(to: unreadableURL)
+    try check(
+      Model(prefs: Preferences(fileURL: unreadableURL)).notices.first?.contains(
+        "“preferences (unreadable 2).json”") == true,
+      "Another unreadable file keeps the first and is shown once an index loads")
+    try setAside.save()
+    try check(
+      Preferences(fileURL: unreadableURL).loadError == nil,
+      "Preferences saved after an unreadable file read normally")
+    // A file that cannot be set aside, here because every name is taken, is never
+    // overwritten, although the folder is writable.
+    for attempt in 3...100 {
+      try Data().write(
+        to: unreadableFolder.appendingPathComponent("preferences (unreadable \(attempt)).json"))
+    }
+    try broken.write(to: unreadableURL)
+    let stuck = Preferences(fileURL: unreadableURL)
+    let stuckSaved = (try? stuck.save()) != nil
+    try check(
+      stuck.loadError?.contains("not saved") == true && !stuckSaved
+        && (try? Data(contentsOf: unreadableURL)) == broken,
+      "Unreadable preferences that cannot be moved are never overwritten")
     var registrations = 0
     var released = 0
     let manager = ActivationShortcutManager(
@@ -418,6 +451,21 @@ final class FeatureCheck {
     try await waitFor { rootField(in: settings.contentView)?.stringValue == self.model.prefs.root }
     try check(rootField(in: settings.contentView)?.stringValue == model.prefs.root,
       "Reopening Settings discards unsaved edits and reads current preferences")
+    // A scan that saves the folders as it resolved them, such as /private/tmp for
+    // /tmp, updates open Settings unless they were edited.
+    model.prefs.root = "/resolved-while-settings-open"
+    try await waitFor { rootField(in: settings.contentView)?.stringValue == self.model.prefs.root }
+    guard let openField = rootField(in: settings.contentView), settings.makeFirstResponder(openField),
+      let openEditor = settings.firstResponder as? NSTextView else {
+      throw messageError("Cannot focus Settings root field")
+    }
+    openEditor.selectAll(nil)
+    openEditor.insertText("/edited-in-settings", replacementRange: openEditor.selectedRange())
+    model.prefs.root = "/resolved-again"
+    try await Task.sleep(nanoseconds: 200_000_000)
+    try check(
+      rootField(in: settings.contentView)?.stringValue == "/edited-in-settings",
+      "Open Settings follow saved folders a scan rewrote, keeping edits")
     settings.performClose(nil)
     model.prefs.root = savedRoot
     try await checkRecorderAfterClosingSettings(settings, appMenu: appMenu, index: settingsIndex)

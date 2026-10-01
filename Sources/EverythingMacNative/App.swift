@@ -177,7 +177,7 @@ struct ContentView: View {
         Button { cn_cancel_scan() } label: { Image(systemName: "xmark.circle") }
           .help("Cancel scan").accessibilityLabel("Cancel scan")
       } else {
-        Button { model.scan(useCurrentConfig: true) } label: {
+        Button { model.rescan() } label: {
           Image(systemName: "arrow.clockwise")
         }
         .disabled(!canRescan)
@@ -367,6 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     if let error = migrationError {
       model.error = "Cannot migrate the existing index: \(error.localizedDescription). The original index has been preserved."
       model.status = "Index unavailable"
+      model.showNotices()
       return
     }
     if FileManager.default.fileExists(atPath: model.snapshot) || isolated {
@@ -581,7 +582,7 @@ struct EverythingMacApp: App {
           Toggle("Live Updates", isOn: liveUpdates).disabled(!model.ready || model.scanning)
         }
         Divider()
-        Button("Rescan") { model.scan(useCurrentConfig: true) }
+        Button("Rescan") { model.rescan() }
           .keyboardShortcut("r", modifiers: [.command, .option])
           .disabled(!(model.ready || model.needsIndex) || model.scanning || model.snapshotOnly)
         Button("Cancel Scan") { cn_cancel_scan() }.disabled(!model.scanning)

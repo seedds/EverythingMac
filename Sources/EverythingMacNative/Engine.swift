@@ -292,6 +292,8 @@ struct Sample: Codable {
   /// processed_events when `events` was last fetched; nil after an index swap.
   @ObservationIgnored var eventsFetchedAt: UInt64?
   @ObservationIgnored var saving = false
+  /// Startup messages, shown by `showNotices` once the first index is loaded or scanned.
+  @ObservationIgnored var notices: [String] = []
   /// Set when a scan fails or is cancelled, so an index that needs a rescan is not
   /// rescanned again on every poll; the Rescan command still runs, and a
   /// successful scan or opening an index clears it.
@@ -331,8 +333,9 @@ struct Sample: Codable {
     sortAscending = prefs.sortAscending
     debounce = prefs.debounce
     library.willRemoveHistory = { [weak self] state in self?.suppressHistoryRecording(state) }
-    // Surface library errors in the main window, including one from loading.
-    error = library.error
+    // Surface library errors in the main window, including one from loading, which
+    // is shown with unreadable preferences after the index loads.
+    notices = [prefs.loadError, library.error].compactMap { $0 }
     library.onError = { [weak self] in self?.error = $0 }
   }
   @ObservationIgnored var rows: [Int: Row] = [:]
@@ -434,8 +437,18 @@ struct Sample: Codable {
         self.status = "Loaded \(reply.total ?? 0) indexed entries in \(Int(self.loadedMS)) ms"
         self.inputAt = ProcessInfo.processInfo.systemUptime
         self.submit()
+        if !self.snapshotOnly && self.prefs.loadError != nil {
+          // Preferences that could not be read fell back to defaults; keep the
+          // folders of the index instead of rescanning with the default ones.
+          self.prefs.loadError = nil
+          self.saveLoadedScope()
+        }
         // The loaded index stays searchable while it is rebuilt for new settings.
-        if !self.snapshotOnly && self.scopeDiffersFromPreferences() { self.scan() }
+        if !self.snapshotOnly && self.scopeDiffersFromPreferences() {
+          self.scan()
+        } else {
+          self.showNotices()
+        }
       case .failure(let error):
         if let previous {
           self.snapshot = previous.snapshot
@@ -448,6 +461,7 @@ struct Sample: Codable {
           self.submit()
           self.error =
             "Cannot open \((path as NSString).lastPathComponent): \(error.localizedDescription). The current index is still loaded."
+          self.showNotices()
           return
         }
         if !self.snapshotOnly {
@@ -459,6 +473,7 @@ struct Sample: Codable {
         self.error =
           "Cannot load this snapshot: \(error.localizedDescription). Choose a compatible EverythingMac index; no scan will be started."
         self.status = "Index unavailable"
+        self.showNotices()
       }
     }
   }

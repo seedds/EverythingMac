@@ -1494,6 +1494,49 @@ mod tests {
     }
 
     #[test]
+    fn a_rescan_replaces_a_faulted_engine_without_its_selection() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.txt");
+        fs::write(&a, b"a").unwrap();
+        let cache = SearchCache::walk_fs(tmp.path());
+        let a_id = cache.node_index_for_path(&a).unwrap();
+        let mut state = State::new(cache, tmp.path().to_owned());
+        state.results = vec![a_id];
+        state.generation = 1;
+        let mut engine = Engine(Arc::new(Mutex::new(state)));
+        let ranges = CString::new("[[0,1]]").unwrap();
+        let cached = CString::new("null").unwrap();
+        unsafe {
+            let selected = reply(live::cn_select(
+                &mut engine,
+                1,
+                ranges.as_ptr(),
+                cached.as_ptr(),
+            ));
+            assert_eq!(selected["selection_count"], 1);
+            // Polls stop during a rescan, so nothing recovers the engine before the
+            // finished rescan replaces it.
+            let shared = engine.0.clone();
+            let _ = std::thread::spawn(move || {
+                let _state = shared.lock().unwrap();
+                panic!("a search panicked during the rescan");
+            })
+            .join();
+            assert!(engine.0.is_poisoned());
+            let replacement = State::new(SearchCache::walk_fs(tmp.path()), tmp.path().to_owned());
+            let mut replacement = Engine(Arc::new(Mutex::new(replacement)));
+            assert_eq!(
+                reply(live::cn_transfer_selection(&mut engine, &mut replacement))["status"],
+                "ok"
+            );
+            let transferred = reply(live::cn_selection_paths(&mut replacement, 0));
+            assert_eq!(transferred["status"], "ok");
+            assert_eq!(transferred["paths"], json!([]));
+        }
+    }
+
+    #[test]
     #[ignore = "set EVERYTHING_MAC_SELECTION_INDEX to a read-only snapshot for timing"]
     fn selection_refresh_probe() {
         let _lock = TEST_LOCK.lock().unwrap();

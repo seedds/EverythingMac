@@ -35,15 +35,51 @@ import UniformTypeIdentifiers
   @ObservationIgnored var tableColumns: [String: Double] = [:]
   let isolated: Bool
   let storageURL: URL
+  /// Why saved preferences could not be read; defaults are in use. Loading the
+  /// index then saves its folders instead of rescanning with the default ones.
+  @ObservationIgnored var loadError: String?
+  /// False when unreadable preferences could not be set aside, so saving never
+  /// overwrites them.
+  @ObservationIgnored private var writable = true
   init(isolated: Bool = false, fileURL: URL? = nil) {
     self.isolated = isolated
     storageURL = fileURL ?? URL(fileURLWithPath: Self.file)
     guard !isolated else { return }
-    if let data = try? Data(contentsOf: storageURL),
-      let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    {
+    do {
+      let data = try Data(contentsOf: storageURL)
+      guard let values = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw messageError("The file does not contain settings.")
+      }
       apply(values)
+    } catch let e as NSError
+      where e.domain == NSCocoaErrorDomain && e.code == NSFileReadNoSuchFileError
+    {
+      // A new installation starts with defaults.
+    } catch {
+      setAside(unreadable: error)
     }
+  }
+  /// Keeps unreadable preferences under another name for the user, instead of
+  /// replacing them with defaults on the next save.
+  private func setAside(unreadable error: Error) {
+    let base = storageURL.deletingPathExtension().lastPathComponent
+    for attempt in 1...100 {
+      let name = attempt == 1 ? "\(base) (unreadable).json" : "\(base) (unreadable \(attempt)).json"
+      do {
+        try FileManager.default.moveItem(
+          at: storageURL, to: storageURL.deletingLastPathComponent().appendingPathComponent(name))
+        loadError =
+          "Cannot read preferences: \(error.localizedDescription) Defaults are in use; the unreadable file was kept as “\(name)”."
+        return
+      } catch let e as NSError
+        where e.domain == NSCocoaErrorDomain && e.code == NSFileWriteFileExistsError
+      {
+        continue
+      } catch { break }
+    }
+    writable = false
+    loadError =
+      "Cannot read preferences: \(error.localizedDescription) Defaults are in use, and changes are not saved until the file is fixed or removed."
   }
   func apply(_ v: [String: Any]) {
     root = v["root"] as? String ?? root
@@ -79,6 +115,28 @@ import UniformTypeIdentifiers
       "sortKey": sortKey, "sortAscending": sortAscending,
     ]
   }
+  /// The settings that decide which folders the index holds.
+  struct Scope: Equatable {
+    var root: String
+    var ignores: String
+    var includes: String
+    var patterns: String
+  }
+  var scope: Scope {
+    get { Scope(root: root, ignores: ignores, includes: includes, patterns: patterns) }
+    set {
+      root = newValue.root
+      ignores = newValue.ignores
+      includes = newValue.includes
+      patterns = newValue.patterns
+    }
+  }
+  /// A Settings draft follows saved folders that a scan rewrote, such as `/tmp`
+  /// resolved to `/private/tmp`, unless the draft was edited since; otherwise
+  /// Apply & Rebuild would stay enabled and rescan on every press.
+  func followSavedScope(from old: Scope, to new: Scope) {
+    if scope == old { scope = new }
+  }
   /// Commits the index scope from a Settings draft. Other settings apply immediately
   /// through `update`, so the draft never overwrites them.
   func commit(_ draft: Preferences) throws {
@@ -106,6 +164,9 @@ import UniformTypeIdentifiers
     NSApp.appearance =
       theme == "system" ? nil : NSAppearance(named: theme == "dark" ? .darkAqua : .aqua)
     guard !isolated else { return }
+    guard writable else {
+      throw messageError("Preferences are not saved because the existing file could not be read.")
+    }
     try FileManager.default.createDirectory(
       at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys])
@@ -186,6 +247,7 @@ struct PreferencesView: View {
       privacy.tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
     }
     .frame(width: 560)
+    .onChange(of: prefs.scope) { old, new in draft.followSavedScope(from: old, to: new) }
   }
 
   /// Saves one General setting, reporting a failure instead of losing it silently.
@@ -274,10 +336,7 @@ struct PreferencesView: View {
     update { $0.terminal = url.path }
   }
 
-  private var scopeChanged: Bool {
-    draft.root != prefs.root || draft.ignores != prefs.ignores
-      || draft.includes != prefs.includes || draft.patterns != prefs.patterns
-  }
+  private var scopeChanged: Bool { draft.scope != prefs.scope }
   private var index: some View {
     Form {
       Section {
@@ -338,6 +397,8 @@ struct PreferencesView: View {
           Spacer()
           if model.scanning {
             Text("Finish or cancel the current scan first.").foregroundStyle(.secondary)
+          } else if !scopeChanged && model.savedScopeNotApplied {
+            Text("These folders are not scanned yet.").foregroundStyle(.secondary)
           }
           Button("Revert") { draft.apply(prefs.values) }.disabled(!scopeChanged)
           Button(model.snapshotOnly ? "Apply" : "Apply & Rebuild") {
@@ -347,7 +408,7 @@ struct PreferencesView: View {
             } catch { self.error = error.localizedDescription }
           }
           .keyboardShortcut(.defaultAction)
-          .disabled(model.scanning || !(scopeChanged || draft.patternLines != model.loadedPatterns))
+          .disabled(model.scanning || !model.scopeNeedsApply(draft))
         }
       } footer: { errorFooter.frame(maxWidth: .infinity, alignment: .leading) }
     }

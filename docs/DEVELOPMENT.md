@@ -94,7 +94,18 @@ or cancelled scan; opening an index or a successful scan clears both. A poll tha
 reports a needed rescan first searches the current index again, since polls stop
 during the rescan. Live Updates turned off in the Index menu stay off through scans
 (`liveUpdatesPausedByUser`). Error messages are cleared by searches the user starts and
-by a successful scan, not by background refreshes.
+by a successful scan, not by background refreshes. Startup messages (`notices`), such as
+unreadable preferences or an unreadable search library, are shown once the first index
+is loaded or scanned, since both clear earlier messages when they begin.
+
+The saved scope in `Preferences` can differ from the loaded one only until a scan applies
+it. Rescan (`rescan()`) and Settings apply saved folders that a cancelled or failed
+Apply & Rebuild left unapplied (`savedScopeNotApplied`), as the next launch does. A scan
+that applies saved folders writes them back as it resolved them, and Settings' draft
+follows those values unless it was edited (`followSavedScope`). Preferences that cannot
+be read are renamed with "(unreadable)" and set `loadError`; loading the index then
+saves its folders instead of rescanning with the defaults, and a file that cannot be
+renamed is never overwritten.
 
 Rust owns the full result-ID vector and the selection. A selection is a list of
 node identities: a slab index plus a per-slot generation that `remove_node` bumps, so

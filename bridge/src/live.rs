@@ -992,14 +992,26 @@ pub unsafe extern "C" fn cn_transfer_selection(from: *mut Engine, to: *mut Engin
         }
         if let Some(old) = unsafe { from.as_ref() } {
             let new = unsafe { to.as_ref() }.ok_or("No destination engine")?;
-            let mut old = old.0.lock().map_err(|_| "Old engine faulted")?;
             let mut new = new.0.lock().map_err(|_| "New engine faulted")?;
-            let paths: Vec<PathBuf> = (0..old.selection.len())
-                .filter_map(|entry| {
-                    resolve_selected(&old, entry)
-                        .and_then(|identity| old.cache.node_path(identity.index()))
-                })
-                .collect();
+            // A panic while the old engine was locked, such as in a search during the
+            // rescan, may have left its index inconsistent. The rescan replaces it, so
+            // keep the rescan and select nothing rather than discarding it.
+            let paths: Vec<PathBuf> = match old.0.lock() {
+                Ok(mut old) => {
+                    let paths = (0..old.selection.len())
+                        .filter_map(|entry| {
+                            resolve_selected(&old, entry)
+                                .and_then(|identity| old.cache.node_path(identity.index()))
+                        })
+                        .collect();
+                    old.selection.clear();
+                    old.selection_paths.clear();
+                    old.selection_positions.clear();
+                    old.selection_generation = None;
+                    paths
+                }
+                Err(_) => Vec::new(),
+            };
             new.selection.clear();
             new.selection_paths.clear();
             // Only files found in the new index stay selected.
@@ -1019,10 +1031,6 @@ pub unsafe extern "C" fn cn_transfer_selection(from: *mut Engine, to: *mut Engin
             new.selection_instance = new.cache.instance();
             new.selection_positions.clear();
             new.selection_generation = None;
-            old.selection.clear();
-            old.selection_paths.clear();
-            old.selection_positions.clear();
-            old.selection_generation = None;
         }
         Ok(json!({"status":"ok"}))
     })

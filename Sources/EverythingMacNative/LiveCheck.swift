@@ -119,10 +119,65 @@ final class LiveCheck {
     }
     checks.append("Cancelling the rebuild of a damaged index offers Rescan instead of waiting")
     (model.prefs.root, model.prefs.ignores, model.prefs.includes) = scope
-    model.scan(useCurrentConfig: true)
+    model.rescan()
     step = 46
     since = ProcessInfo.processInfo.systemUptime
   }
+  /// The folders the index held before step 10 simulated unreadable preferences.
+  var readableScope: Preferences.Scope?
+  let unreadableNotice = "Cannot read preferences: simulated."
+  /// Unreadable preferences fall back to defaults (step 48): loading the index saves
+  /// its folders instead of rescanning with the default root, and says why.
+  func unreadablePreferences() {
+    guard !model.scanning else {
+      finish("Unreadable preferences started a rescan with the default folders")
+      return
+    }
+    guard model.ready else { return }
+    guard model.prefs.loadError == nil, model.prefs.scope == readableScope,
+      model.error == unreadableNotice
+    else {
+      finish(
+        "Unreadable preferences left folders \(model.prefs.scope), error \(model.error ?? "none")")
+      return
+    }
+    checks.append("Unreadable preferences keep the index's folders and are reported")
+    model.error = nil
+    model.prefs.ignores = ""
+    model.prefs.includes = ""
+    model.query = "hidden"
+    model.load()
+    step = 11
+    since = ProcessInfo.processInfo.systemUptime
+  }
+  /// Cancels Apply & Rebuild of a large folder (step 49); Settings then offers to
+  /// apply the saved folders, and Rescan applies them (step 50).
+  func cancelledApply() {
+    if step == 49 {
+      guard model.scanning else { return }
+      cn_cancel_scan()
+      step = 50
+      return
+    }
+    guard !model.scanning, model.ready else { return }
+    let reopened = Preferences(isolated: true)
+    reopened.apply(model.prefs.values)
+    guard model.root == rebuildScope?.root, model.prefs.root == "/System/Library",
+      model.savedScopeNotApplied, model.scopeNeedsApply(reopened)
+    else {
+      finish(
+        "After a cancelled Apply & Rebuild: index \(model.root), saved \(model.prefs.root), not applied \(model.savedScopeNotApplied)"
+      )
+      return
+    }
+    checks.append("A cancelled Apply & Rebuild leaves its saved folders ready to apply")
+    model.rescan()
+    step = 51
+    since = ProcessInfo.processInfo.systemUptime
+  }
+  /// A Settings draft committed by Apply & Rebuild, and the folders it saved.
+  var appliedDraft: Preferences?
+  var appliedScope: Preferences.Scope?
   func next(_ description: String) {
     checks.append(description)
     step += 1
@@ -141,6 +196,14 @@ final class LiveCheck {
     }
     if step == 44 || step == 45 {
       cancelledRebuild()
+      return
+    }
+    if step == 48 {
+      unreadablePreferences()
+      return
+    }
+    if step == 49 || step == 50 {
+      cancelledApply()
       return
     }
     // Events has no Files table to acknowledge a background result draw.
@@ -245,6 +308,17 @@ final class LiveCheck {
           finish("A hidden window ran its search again")
           return
         }
+        // While a large change is applied in steps, a hidden window polls without
+        // waiting two seconds between steps.
+        guard !model.polling, !model.saving, !model.selectionLoading else { return }
+        model.walking = true
+        model.lastPoll = ProcessInfo.processInfo.systemUptime
+        model.poll()
+        guard model.polling else {
+          finish("A hidden window waited to apply the next step of a large change")
+          return
+        }
+        checks.append("A hidden window keeps applying a large change without waiting")
         searchWindow?.makeKeyAndOrderFront(nil)
         step = 41
         since = ProcessInfo.processInfo.systemUptime
@@ -333,11 +407,15 @@ final class LiveCheck {
         }
       case 10:
         guard model.total > 0 else { return }
-        next("Checkpoint reload restores index")
-        model.prefs.ignores = ""
-        model.prefs.includes = ""
-        model.query = "hidden"
+        checks.append("Checkpoint reload restores index")
+        // Unreadable preferences leave default folders, as Preferences.init does.
+        readableScope = model.prefs.scope
+        model.prefs.scope = Preferences.Scope(root: "/", ignores: "", includes: "", patterns: "")
+        model.prefs.loadError = unreadableNotice
+        model.notices = [unreadableNotice]
         model.load()
+        step = 48
+        since = ProcessInfo.processInfo.systemUptime
       case 11:
         guard model.total == 1 else { return }
         next("Saved scope mismatch triggers index rebuild on load")
@@ -381,6 +459,47 @@ final class LiveCheck {
         model.liveUpdatesPausedByUser = false
         model.live = true
         model.setLive()
+        // Apply & Rebuild with a large folder, cancelled in steps 49 and 50.
+        let draft = Preferences(isolated: true)
+        draft.apply(model.prefs.values)
+        draft.root = "/System/Library"
+        try model.savePreferences(draft)
+        step = 49
+        since = ProcessInfo.processInfo.systemUptime
+      case 51:
+        guard model.root == "/System/Library" else {
+          finish("Rescan did not apply folders saved by a cancelled Apply & Rebuild: \(model.root)")
+          return
+        }
+        checks.append("Rescan applies folders saved by a cancelled Apply & Rebuild")
+        // Apply & Rebuild the fixture under an unresolved spelling (/var for /private/var).
+        let draft = Preferences(isolated: true)
+        draft.apply(model.prefs.values)
+        draft.root = root.path
+        guard draft.root != rebuildScope?.root else {
+          finish("The fixture folder has no unresolved spelling to apply")
+          return
+        }
+        try model.savePreferences(draft)
+        appliedDraft = draft
+        appliedScope = model.prefs.scope
+        step = 52
+        since = ProcessInfo.processInfo.systemUptime
+      case 52:
+        guard model.root == rebuildScope?.root, model.total == 1 else { return }
+        guard let draft = appliedDraft, let applied = appliedScope,
+          model.prefs.root == model.root, model.scopeNeedsApply(draft)
+        else {
+          finish("A rebuild did not save the folders it resolved: \(model.prefs.root)")
+          return
+        }
+        // What Settings does when the saved folders change while it is open.
+        draft.followSavedScope(from: applied, to: model.prefs.scope)
+        guard !model.scopeNeedsApply(draft) else {
+          finish("Apply & Rebuild stays enabled after a rebuild resolved its folders")
+          return
+        }
+        checks.append("Settings follow folders a rebuild resolved, so Apply & Rebuild does not repeat")
         let trash = root.appendingPathComponent("trash-fixture-" + UUID().uuidString)
         try Data("recoverable".utf8).write(to: trash)
         var resulting: NSURL?

@@ -602,6 +602,44 @@ through a background refresh; each failed against the old behavior. Recorded che
 bridge tests also under Guard Malloc; clippy and `cargo fmt --check` passed; and the
 self, sort, selection, feature, live, tab, terminal, and trash checks passed.
 
+## Settings and recovery — 0.1.80
+
+The next round fixed the medium candidates from the 0.1.79 review that concern settings
+and recovery, each confirmed in the code first:
+
+- A cancelled or failed Apply & Rebuild saved the new folders but left the index on the
+  old ones; Rescan scanned the old ones, and Settings showed the new ones with Apply &
+  Rebuild disabled, until a relaunch applied them. Rescan now applies saved folders that
+  no scan has applied, and Settings says they are not scanned yet and keeps Apply &
+  Rebuild enabled. Rescan after a cancelled or failed first scan at launch also uses the
+  saved include and ignore paths and exclusion patterns now; it had scanned the saved
+  root without any of them.
+- After Apply & Rebuild with a folder that resolves to another path, such as `/tmp`, the
+  scan saved the resolved path while Settings kept the typed one, so Apply & Rebuild stayed
+  enabled and each press scanned again. Settings now follows saved folders that a scan
+  rewrote, unless they were edited since.
+- An unreadable `preferences.json` was silently replaced by defaults; their root `/`
+  differed from the index, so the app rescanned the whole disk and then overwrote the
+  file. It is now renamed and reported, and the index's folders are saved instead of
+  rescanning. A file that cannot be renamed is never overwritten. Startup messages,
+  including an unreadable search library's, were also cleared by loading the index; they
+  are now shown once it has loaded.
+- A search that panicked during a rescan left the old engine faulted, and moving the
+  selection to the new index then failed, discarding the finished rescan. A faulted old
+  engine now gives up only its selection.
+- While the search window was hidden, the quick follow-up polls that apply a large change
+  in short steps were held to one poll every two seconds, so a large change could take
+  minutes to finish. Hidden windows now poll at the shown rate while a change is applied.
+
+New app check steps cancel an Apply & Rebuild and rescan, apply a root under another
+spelling, change the saved root while Settings is open, load an index with unreadable
+preferences, poll from a hidden window during a large change, and rename or protect
+unreadable preferences files; a new bridge test replaces a faulted engine. Each failed
+against the old behavior. Recorded checks: 1,625 Rust tests passed (the system-wide
+cancellation test excluded), the engine and bridge tests also under Guard Malloc; clippy
+and `cargo fmt --check` passed; and the self, sort, selection, feature, live, tab,
+terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

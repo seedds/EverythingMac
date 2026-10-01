@@ -54,10 +54,11 @@ extension Model {
     guard ready, !snapshotOnly, !closed, !searching, !scanning, !polling, !saving,
       !selectionLoading
     else { return }
-    // Poll less often while the search window is hidden.
+    // Poll less often while the search window is hidden, except while a large
+    // change is applied in steps: each poll applies only one short step.
     let now = ProcessInfo.processInfo.systemUptime
     let shown = searchWindowShown
-    guard shown || now - lastPoll >= 2 else { return }
+    guard shown || walking || now - lastPoll >= 2 else { return }
     lastPoll = now
     polling = true
     let epoch = indexEpoch
@@ -243,6 +244,11 @@ extension Model {
     guard !automaticRescanPaused else { return }
     scan(useCurrentConfig: true)
   }
+  /// The Rescan command. It also applies folders saved in Settings that no scan has
+  /// applied yet, such as after Apply & Rebuild was cancelled, as the next launch would.
+  func rescan() {
+    scan(useCurrentConfig: !scopeDiffersFromPreferences())
+  }
   func scan(useCurrentConfig: Bool = false) {
     guard !scanning, !snapshotOnly, !closed else { return }
     let epoch = indexEpoch
@@ -282,6 +288,7 @@ extension Model {
             self.status = "Scan cancelled; no index"
             self.error = "The scan was cancelled, so there is no index yet. Choose Rescan to build it."
           }
+          self.showNotices()
           return
         }
         self.automaticRescanPaused = false
@@ -296,14 +303,7 @@ extension Model {
         self.loadedIgnores = reply.ignores ?? ignores
         self.loadedIncludes = reply.includes ?? includes
         self.loadedPatterns = reply.exclusion_patterns ?? patterns
-        if !useCurrentConfig {
-          self.prefs.root = self.root
-          self.prefs.ignores = self.loadedIgnores.filter { $0 != "/System/Volumes/Data" }.joined(
-            separator: "\n")
-          self.prefs.includes = self.loadedIncludes.joined(separator: "\n")
-          self.prefs.patterns = self.loadedPatterns.joined(separator: "\n")
-          do { try self.prefs.save() } catch { self.error = error.localizedDescription }
-        }
+        if !useCurrentConfig { self.saveLoadedScope() }
         self.ready = true
         self.live = !self.liveUpdatesPausedByUser
         self.snapshot = self.checkpointPath
@@ -320,6 +320,7 @@ extension Model {
         if self.debounceWork == nil {
           self.submit(background: !self.searching || self.searchIsBackground)
         }
+        self.showNotices()
       case .failure(let e):
         self.indexStatus = previousIndexStatus
         self.indexedCount = previousCount
@@ -328,8 +329,34 @@ extension Model {
         self.status = self.ready ? "Scan failed; previous index retained" : "Scan failed; no index"
         self.needsIndex = !self.ready
         self.automaticRescanPaused = true
+        self.showNotices()
       }
     }
+  }
+  /// Saves the folders the loaded index was built with as the preferences, as the
+  /// scan resolved them.
+  func saveLoadedScope() {
+    prefs.root = root
+    prefs.ignores = loadedIgnores.filter { $0 != "/System/Volumes/Data" }.joined(separator: "\n")
+    prefs.includes = loadedIncludes.joined(separator: "\n")
+    prefs.patterns = loadedPatterns.joined(separator: "\n")
+    do { try prefs.save() } catch { self.error = error.localizedDescription }
+  }
+  /// Saved folders that the loaded index does not use yet, because the scan that
+  /// would apply them was cancelled or failed.
+  var savedScopeNotApplied: Bool {
+    ready && !snapshotOnly && !scanning && scopeDiffersFromPreferences()
+  }
+  /// Whether Apply & Rebuild has anything to apply for this Settings draft.
+  func scopeNeedsApply(_ draft: Preferences) -> Bool {
+    draft.scope != prefs.scope || draft.patternLines != loadedPatterns || savedScopeNotApplied
+  }
+  /// Shows messages from startup, such as unreadable preferences, once the index is
+  /// loaded or scanned; both clear earlier messages when they begin.
+  func showNotices() {
+    guard !notices.isEmpty else { return }
+    error = ([error].compactMap { $0 } + notices).joined(separator: " ")
+    notices.removeAll()
   }
   func savePreferences(_ draft: Preferences) throws {
     guard !scanning else { throw messageError("Finish or cancel the current scan before saving preferences.") }
@@ -338,11 +365,7 @@ extension Model {
   }
   func applyPreferences() {
     guard !snapshotOnly else { return }
-    let ignores = Set(Preferences.paths(prefs.ignores) + ["/System/Volumes/Data"])
-    if root != Preferences.normalized(prefs.root) || ignores != Set(loadedIgnores)
-      || Set(Preferences.paths(prefs.includes)) != Set(loadedIncludes)
-      || prefs.patternLines != loadedPatterns
-    {
+    if scopeDiffersFromPreferences() {
       scan()
     } else {
       submit(background: true)

@@ -120,7 +120,9 @@ Settings opens in its own window, so you can continue using search. It has three
 - **General**: activation shortcut, search delay, appearance, menu bar icon, and the
   F9 terminal app (**Choose…** / **Reset**). These apply immediately.
 - **Index**: index file and status, monitor root (**Choose…**), include/ignore paths, and exclude patterns. Edits apply only
-  with **Apply & Rebuild**; **Revert** or closing the window discards them.
+  with **Apply & Rebuild**; **Revert** or closing the window discards them. After a
+  rebuild, the fields show the folders as the scan resolved them, such as `/private/tmp`
+  for `/tmp`.
 - **Privacy**: a link to Full Disk Access in System Settings.
 
 Normal launch loads EverythingMac's saved index when one exists. Otherwise it
@@ -151,13 +153,18 @@ Native data is stored separately:
 
 The original Cardinal index and preferences are not overwritten.
 
+If `preferences.json` cannot be read, EverythingMac says so, renames it to
+`preferences (unreadable).json`, and uses default settings. The saved index keeps its
+folders, which become the new preferences, so the defaults do not start a rescan of `/`.
+If the file cannot be renamed, settings changes are not saved until it is fixed or removed.
+
 Existing EverythingMac installations migrate the old index filename to
 `everything-mac.db` on normal startup. Read-only snapshot and diagnostic runs can
 still open the old filename without changing it. An existing `everything-mac.db`
 takes precedence; migration failures preserve the old file and stop startup scanning.
 
 Choose a monitored root in **Settings → Index**, and use the bottom rescan button or
-**Index → Rescan** to rebuild the current scope. Searching, scrolling, and file actions
+**Index → Rescan** to rebuild it with the saved scope. Searching, scrolling, and file actions
 keep working on the current index during a rescan, and the new index replaces it when
 the scan finishes. **File → Open Index…** opens another
 saved index read-only; **Index → Enable Live Updates** makes it live. A live index is
@@ -177,8 +184,8 @@ The app processes filesystem events and writes checkpoints while idle, at most e
 events report as new or changed, such as a large folder moved into place, are read in
 the background; searches continue meanwhile, and the results update when reading
 finishes. While the search window is hidden, minimized, on another Space, or covered by
-other windows, the index stays current but the displayed search is not repeated; it
-runs again as soon as the window is shown. Changes made
+other windows, the index stays current, large changes included, but the displayed
+search is not repeated; it runs again as soon as the window is shown. Changes made
 since the last checkpoint are replayed from macOS filesystem events on the next launch.
 If macOS has discarded that event history meanwhile (it can after a disk repair or
 reinstall), or the index comes from another Mac, the changes cannot be replayed and
@@ -204,7 +211,9 @@ directory trees, and still apply inside explicit Include paths. Absolute paths b
 in Include/Ignore paths. No patterns are enabled by default.
 
 **Apply & Rebuild** validates the rules and rebuilds the index. A cancelled or failed
-rebuild retains the previous index and its rules. Exclusions survive checkpoint reloads
+rebuild retains the previous index and its rules. The new settings stay saved, and
+Settings shows "These folders are not scanned yet"; **Apply & Rebuild** or **Rescan**
+applies them, as the next launch would. Exclusions survive checkpoint reloads
 and apply to live filesystem updates.
 
 ### Search library and help
