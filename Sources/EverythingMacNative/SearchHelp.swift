@@ -51,7 +51,7 @@ enum SearchHelp {
       "Category shortcuts", "audio:, video:, doc: and exe: are category shortcuts.", "doc: report"),
     .init(
       "Size",
-      "size: compares logical file size with >, >=, <, <= or a range. This differs from the Size on disk column.",
+      "size: compares logical file size with >, >=, <, <= or a range. The Size column shows size on disk instead.",
       "size:>1MB"),
     .init(
       "Modified date",

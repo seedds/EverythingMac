@@ -687,6 +687,14 @@ New tests cover dropped events (replayed, replayed again after progress, rescann
 a replay stalls), top-level Trash paths, the backfill stopping, the symlinked checkpoint
 folder, and symlinks in filters; each failed against the old behavior.
 
+## Size column name — 0.1.82
+
+The results column introduced in 0.1.52 as "Size on disk" is now titled "Size". Its
+contents and sorting are unchanged: allocated bytes, not logical size. The search help
+for `size:` still notes that the filter compares logical size, which differs from the
+column. The saved-index self-check now expects the new title. Column identifiers were
+already `Size`, so saved widths and sort order carry over.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

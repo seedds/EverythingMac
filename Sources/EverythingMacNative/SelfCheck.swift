@@ -131,11 +131,11 @@ final class SelfCheck {
     else { return "Rendered filename belongs to an older query" }
     if step == 9, row.metadata_loaded {
       guard let column = table.tableColumns.firstIndex(where: { $0.identifier.rawValue == "Size" }),
-        table.tableColumns[column].title == "Size on disk",
+        table.tableColumns[column].title == "Size",
         let sizeCell = table.view(atColumn: column, row: 0, makeIfNecessary: false) as? NSTableCellView,
         let bytes = row.allocated_size,
         sizeCell.textField?.stringValue == ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-      else { return "Size on disk column does not render allocated bytes" }
+      else { return "Size column does not render allocated bytes" }
     }
     return nil
   }

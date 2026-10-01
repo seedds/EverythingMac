@@ -94,7 +94,7 @@ struct ResultsTable: NSViewRepresentable {
     table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
     for (name, width) in Self.columns {
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(name))
-      column.title = name == "Name" ? "Filename" : name == "Size" ? "Size on disk" : name
+      column.title = name == "Name" ? "Filename" : name
       column.width = model.prefs.tableColumns[name] ?? width
       table.addTableColumn(column)
     }
