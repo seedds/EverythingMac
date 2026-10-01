@@ -16,6 +16,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Compared with Cardinal 0.1.23](#compared-with-cardinal-0123) | On the same Mac and the same 5.83 million entries, EverythingMac 0.1.81's engine scanned `/` in 13.2 s instead of 16.2 s, opened its saved index in 1.68 s instead of 3.56 s, and answered six searches 2.4–63 times faster; saving took 0.84 s instead of 0.68 s, and memory and index size were about the same. |
 | [Event log, 0.1.78](#event-log-0178) | Keeping the Events tab's list took 0.02–0.6 ms of engine time per 20,000 file events instead of 5.1–5.3 ms; listing its 500 entries while the tab is open takes 0.17 ms instead of 0.13 ms. |
 | [Large changes, 0.1.75](#large-changes-0175) | While large changes were applied, a search waited at most 11–16 ms instead of up to 54–219 ms. 10,000 files created in a folder of 100,000 were indexed in 2.5–4.1 s instead of 15.4 s, during which 0.1.74 kept the engine busy; a rescan of an unchanged 200,000-file folder took 5 ms of engine time instead of 225–236 ms and kept every item's ID. |
 | [Names, 0.1.74](#names-0174) | Names of files that come and go no longer accumulate: 100,000 new names moved into a live index and out again kept 4.6 MiB each time, and now nothing measurable. Opening 4,573,469 entries took 1.25–1.28 s and 159 MiB of heap instead of 1.73–1.76 s and 221 MiB, a scan of `/` peaked at 785–789 MiB instead of 964–966 MiB, and adding a 200,000-file folder held the engine for 59–60 ms instead of 84–91 ms. |
@@ -38,6 +39,63 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Compared with Cardinal 0.1.23
+
+Measured on 2026-10-01 on an Apple M4 Pro (14 cores, 48 GiB RAM) with macOS 27.0.1,
+while other work kept the load average at 31–44. Both engines indexed the same scope:
+`/` without `/System/Volumes/Data` and without the other mounted volumes, which
+EverythingMac skips and Cardinal 0.1.23 walks into, so Cardinal was given their mount
+points as ignore paths. That is 5.83 million entries for both.
+
+The comparison times the search engines, not the apps' interfaces:
+- **Cardinal:** 0.1.23, from tag `v0.1.23` of
+  [cardisoft/cardinal](https://github.com/cardisoft/cardinal), its latest release.
+- **EverythingMac:** 0.1.81.
+- **Builds:** both are default release builds on the same pinned toolchain
+  (`nightly-2025-12-11`), Cardinal with the dependency versions its app locks.
+- **Scans:** each engine scans as its app does. Cardinal walks on rayon's global pool
+  (14 threads), and EverythingMac on up to six threads, skipping other volumes.
+
+`scripts/compare-cardinal/cardinal_timing.rs` and `engine/search-cache/examples/compare_timing.rs`
+are the same program for each engine:
+- **Scan:** walks the scope and saves the index.
+- **Open:** opens that index in a new process.
+- **Search:** runs case-insensitive searches. Each search is warmed up once, then timed over seven runs.
+
+Every operation runs as its own process, under `/usr/bin/time -l` for peak memory.
+Three rounds alternated which engine went first, after one unrecorded scan each to warm
+the filesystem caches. The table gives the median of the three rounds and their range.
+For searches, each round's figure is the median of its seven runs.
+
+| Operation | Cardinal 0.1.23 | EverythingMac 0.1.81 | Ratio |
+| --- | --- | --- | --- |
+| Full scan | 16.2 s (15.2–18.2) | 13.2 s (13.0–14.1) | 1.2× faster |
+| Scan and save, peak memory | 1,593 MiB (1,592–1,601) | 1,557 MiB (1,556–1,558) | about the same |
+| Saving the index | 681 ms (649–696) | 840 ms (809–854) | 1.2× slower |
+| Index file size | 77.8 MiB | 78.0 MiB | about the same |
+| Opening the saved index | 3,556 ms (3,524–3,569) | 1,684 ms (1,651–1,691) | 2.1× faster |
+| Opening, peak memory | 587 MiB (575–642) | 603 MiB (603–604) | about the same |
+| Search `report` (3,352 results) | 47.3 ms (46.6–48.2) | 7.4 ms (7.2–23.0) | 6.4× faster |
+| Search `e` (4,156,083 results) | 307 ms (307–308) | 4.9 ms (3.3–5.9) | 63× faster |
+| Search `*.swift` (8,130 results) | 58.3 ms (57.9–59.0) | 10.1 ms (9.9–10.8) | 5.8× faster |
+| Search `ext:pdf` (3,021 results) | 217 ms (215–218) | 5.4 ms (3.6–6.9) | 40× faster |
+| Search `infolder:/Applications plist` (6,509 results) | 56.1 ms (53.0–56.6) | 12.6 ms (12.6–12.7) | 4.4× faster |
+| Empty search (every entry) | 29.5 ms (26.9–31.1) | 12.4 ms (6.4–13.4) | 2.4× faster |
+
+Notes on the results:
+- **Counts:** files changed between scans. Cardinal's indexes held 5,826,829–5,826,877
+  entries and EverythingMac's 5,826,877–5,826,879, and result counts from each engine's
+  last index differed by at most 32 (for `e`).
+- **Saving:** EverythingMac's index also records the volume's event history and a
+  checksum that opening verifies. Its sizes and dates, read later in the background, were
+  not part of either saved index.
+- **Load:** EverythingMac's searches use several threads, so the other work on the Mac
+  widened their ranges more than Cardinal's.
+
+Reproduce with `scripts/compare-cardinal/run.sh [ROUNDS] [SEARCH_RUNS]`, here `3 7`. It
+clones Cardinal 0.1.23 into `build/`, builds both programs, and writes the raw results to
+`build/compare-cardinal/results.jsonl`.
 
 ## Event log (0.1.78)
 

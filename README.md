@@ -27,6 +27,28 @@ See the [versioned performance report](docs/PERFORMANCE.md) for measured latency
 startup costs, memory use, and comparison limits. Its historical results are not
 a benchmark of the latest release.
 
+## Speed compared with Cardinal
+
+Cardinal 0.1.23 and EverythingMac 0.1.81 were timed on the same Mac, indexing the same
+5.83 million files and folders. The table compares the search engines, not the apps'
+interfaces, and gives the median of three alternating rounds. The Mac was busy at the
+time (load average 31–44). The [method and full results](docs/PERFORMANCE.md#compared-with-cardinal-0123)
+are in the performance report.
+
+| Operation | Cardinal 0.1.23 | EverythingMac 0.1.81 | Faster by |
+| --- | ---: | ---: | ---: |
+| Full scan of `/` | 16.2 s | 13.2 s | 1.2× |
+| Opening the saved index | 3.56 s | 1.68 s | 2.1× |
+| Search `report` | 47.3 ms | 7.4 ms | 6.4× |
+| Search `e` (4.2 million matches) | 307 ms | 4.9 ms | 63× |
+| Search `*.swift` | 58.3 ms | 10.1 ms | 5.8× |
+| Search `ext:pdf` | 217 ms | 5.4 ms | 40× |
+| Search `infolder:/Applications plist` | 56.1 ms | 12.6 ms | 4.4× |
+| Empty search (all 5.83 million) | 29.5 ms | 12.4 ms | 2.4× |
+
+Peak memory and index size are about the same. Saving the index takes 0.84 s instead
+of 0.68 s; EverythingMac's index also carries a checksum that opening verifies.
+
 ## Install
 
 ```sh
