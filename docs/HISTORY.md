@@ -502,6 +502,22 @@ passed (the system-wide cancellation test excluded), also under Guard Malloc; cl
 passed; and the self, sort, selection, feature, live, tab, terminal, and trash checks
 passed, the live check's Quick Look step after one retry.
 
+## Apps in category filters — 0.1.76
+
+`exe:` and `type:app` listed `.app` among their extensions but matched files only, and
+apps are folders, so `exe:safari` found nothing; `doc:` likewise missed `.rtfd`
+documents. Extension filters (`ext:`, `type:`, and the category shortcuts) now also
+match folders whose extension Launch Services registers as a package type, which
+Finder shows as one item, asking once per extension. A folder named only `.app` is a
+plain hidden folder to macOS and does not match. On the 4.57-million-entry benchmark
+index, `exe:` gained 1,210 apps (`safari exe:` 0 → 4) and `doc:` 99 `.rtfd` packages;
+the other measured queries returned identical results, within 0.3 ms of 0.1.75. The
+unused `metadata_cache` module was deleted, and a live-update test that counted its
+temporary folder whenever the folder's random name contained "oo" now counts only the
+items inside it. Recorded checks: 1,618 Rust tests passed (the system-wide
+cancellation test excluded), also under Guard Malloc; clippy passed; and the self,
+sort, selection, feature, live, tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

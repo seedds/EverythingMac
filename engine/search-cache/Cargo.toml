@@ -28,6 +28,16 @@ jiff = "0.2"
 rayon = "1.9"
 slab-mmap = { path = "../slab-mmap" }
 unicode-normalization = "0.1"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "CFString",
+] }
+objc2-core-services = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "LaunchServices",
+  "UTCoreTypes",
+  "UTType",
+] }
 
 [dev-dependencies]
 tempdir = "0.3"

@@ -39,10 +39,13 @@ enum SearchHelp {
       "The regex: prefix uses a regular expression. Case sensitivity follows Aa.", "regex:^report"),
     .init("Files and folders", "file: returns files; folder: returns directories.", "file: report"),
     .init("Folders only", "Find directory names.", "folder: project"),
-    .init("Extensions", "ext: accepts a semicolon-separated list of extensions.", "ext:pdf;txt"),
+    .init(
+      "Extensions",
+      "ext: accepts a semicolon-separated list of extensions. Apps and document packages match too, so ext:app finds apps.",
+      "ext:pdf;txt"),
     .init(
       "File categories",
-      "type:picture, type:video, type:audio, type:document and type:executable match known filename extensions.",
+      "type:picture, type:video, type:audio, type:document and type:executable match known filename extensions, including apps, installers and document packages such as .pages.",
       "type:document"),
     .init(
       "Category shortcuts", "audio:, video:, doc: and exe: are category shortcuts.", "doc: report"),

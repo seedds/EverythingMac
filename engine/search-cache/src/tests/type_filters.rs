@@ -1619,3 +1619,66 @@ fn extension_filters_match_files_ignoring_case_with_or_without_a_base() {
         assert_eq!(names, expected, "{query}");
     }
 }
+
+#[test]
+fn apps_and_document_packages_match_like_files() {
+    let tmp = TempDir::new("package_filters").unwrap();
+    for folder in [
+        "Calculator.app/Contents/MacOS",
+        "Calculator.app/Contents/Helpers/Helper.app",
+        ".Hidden.app",
+        "plain/.app",
+        "Installer.pkg",
+        "Report.pages",
+        "Notes.RTFD",
+        "Deck.key",
+        "Budget.numbers",
+        "chart.js",
+        "photos.png",
+        "node_modules/.bin",
+        "Kit.framework",
+    ] {
+        fs::create_dir_all(tmp.path().join(folder)).unwrap();
+    }
+    for file in [
+        "Calculator.app/Contents/MacOS/Calculator",
+        "tool.bin",
+        "notes.txt",
+    ] {
+        fs::write(tmp.path().join(file), b"x").unwrap();
+    }
+    let mut cache = SearchCache::walk_fs(tmp.path());
+    for (query, expected) in [
+        (
+            "exe:",
+            &[
+                ".Hidden.app",
+                "Calculator.app",
+                "Helper.app",
+                "Installer.pkg",
+                "tool.bin",
+            ][..],
+        ),
+        ("type:app Calc", &["Calculator.app"]),
+        ("ext:app", &[".Hidden.app", "Calculator.app", "Helper.app"]),
+        (
+            "ext:APP;txt",
+            &[".Hidden.app", "Calculator.app", "Helper.app", "notes.txt"],
+        ),
+        ("doc:", &["Notes.RTFD", "Report.pages", "notes.txt"]),
+        ("type:presentation", &["Deck.key"]),
+        ("type:spreadsheet", &["Budget.numbers"]),
+        ("infolder:Calculator.app exe:", &["Helper.app"]),
+        ("ext:js", &[]),
+        ("type:picture", &[]),
+        ("ext:framework", &[]),
+        ("file: Calc", &["Calculator"]),
+        ("folder: Calc", &["Calculator.app"]),
+    ] {
+        let query = query.replace("infolder:", &format!("infolder:{}/", tmp.path().display()));
+        let hits = cache.search(&query).unwrap();
+        let mut names: Vec<_> = hits.iter().map(|&hit| node_name(&cache, hit)).collect();
+        names.sort();
+        assert_eq!(names, expected, "{query}");
+    }
+}

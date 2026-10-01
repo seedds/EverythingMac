@@ -24,6 +24,12 @@ their contents or Finder tags. The supported filters are listed in **Help → Se
 Shortcuts**. Other text with a colon, such as `content:invoice` or `tag:work`, is
 matched against names like any other word.
 
+`ext:` and the category filters (`type:`, `audio:`, `video:`, `doc:`, `exe:`) match
+files by extension, and also folders that Finder shows as a single item: apps,
+installer packages, and document packages such as `.pages` or `.rtfd`. So `exe:`
+lists apps, including helper apps inside other apps, and `ext:app` finds every app.
+`file:` and `folder:` still go by what the item is on disk, so an app is a folder there.
+
 Enter submits a search immediately. Typing uses a **100 ms debounce** by default;
 Settings → General → **Search delay** offers none, 100, and 300 ms, and is saved. Existing rows
 remain visible while a replacement search runs.

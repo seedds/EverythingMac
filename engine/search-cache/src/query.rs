@@ -2,6 +2,7 @@ use crate::{
     SearchCache, SearchOptions, SegmentKind, SegmentMatcher, SegmentMatcherConcrete, SlabIndex,
     SlabNodeMetadataCompact, build_segment_matchers,
     node_set::{NodeSet, dedup_in_place},
+    packages::is_package_extension,
 };
 use anyhow::{Result, anyhow, bail};
 use everything_mac_syntax::{
@@ -613,33 +614,49 @@ impl SearchCache {
         if extensions.is_empty() {
             bail!("ext: requires non-empty extensions");
         }
-        Ok(self.filter_files_by_extension(base, &extensions, token))
+        Ok(self.filter_by_extension(base, &extensions, token))
     }
 
-    /// Files whose extension, ignoring ASCII case, is one of `extensions`. Without a
+    /// Items whose extension, ignoring ASCII case, is one of `extensions`: files,
+    /// and folders that macOS shows as a single item, such as apps. Without a
     /// base, only names with a listed extension are visited in the name index,
     /// in the same order as filtering every node.
-    fn filter_files_by_extension(
+    fn filter_by_extension(
         &self,
         base: Option<Vec<SlabIndex>>,
         extensions: &[impl AsRef<str> + Sync],
         token: CancellationToken,
     ) -> Option<Vec<SlabIndex>> {
-        let has_extension = |name: &str| {
-            extension_of(name).is_some_and(|ext| {
-                extensions
-                    .iter()
-                    .any(|listed| listed.as_ref().eq_ignore_ascii_case(ext))
-            })
+        let listed = |list: &[&str], name: &str| {
+            extension_of(name)
+                .is_some_and(|ext| list.iter().any(|listed| listed.eq_ignore_ascii_case(ext)))
         };
+        let extensions: Vec<&str> = extensions.iter().map(AsRef::as_ref).collect();
+        let packages: Vec<&str> = extensions
+            .iter()
+            .copied()
+            .filter(|ext| is_package_extension(ext))
+            .collect();
         let nodes = match base {
             Some(nodes) => nodes,
-            None => self.name_index.matching_nodes(|| has_extension, token)?,
+            None => self
+                .name_index
+                .matching_nodes(|| |name: &str| listed(&extensions, name), token)?,
         };
         let file_nodes = &self.file_nodes;
         filter_nodes(nodes, token, |index| {
             let node = &file_nodes[index];
-            node.file_type_hint() == NodeFileType::File && has_extension(node.name())
+            match node.file_type_hint() {
+                NodeFileType::File => listed(&extensions, node.name()),
+                // macOS sees a folder named only `.app` as a plain hidden folder.
+                NodeFileType::Dir => {
+                    node.name()
+                        .rsplit_once('.')
+                        .is_some_and(|(stem, _)| !stem.is_empty())
+                        && listed(&packages, node.name())
+                }
+                NodeFileType::Symlink | NodeFileType::Unknown => false,
+            }
         })
     }
 
@@ -801,7 +818,7 @@ impl SearchCache {
         if extensions.is_empty() {
             return Ok(Some(Vec::new()));
         }
-        Ok(self.filter_files_by_extension(base, extensions, token))
+        Ok(self.filter_by_extension(base, extensions, token))
     }
 
     fn evaluate_size_filter(

@@ -96,6 +96,13 @@ at most 1,024 row models around the viewport, plus bounded selection samples.
 Explicit actions resolve every selected path; an open Quick Look panel resolves at
 most 1,000.
 
+`ext:` and the type groups (`type:`, `audio:`, `video:`, `doc:`, `exe:`) match files
+by extension, and folders whose extension Launch Services registers as a package type,
+which Finder shows as one item: apps, installer packages, and document packages such
+as `.pages`. `search_cache::packages` asks once per extension (`UTTypeConformsTo`
+`com.apple.package`, the C API, since the engine calls no Objective-C) and keeps the
+answer, so package types an app installs later count after a relaunch.
+
 Live updates distinguish two kinds of change. Events that only change an existing
 item's attributes (file edits; permission, extended-attribute, and Finder-info
 changes on a file or folder) update its metadata in place and keep its ID.

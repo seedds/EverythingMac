@@ -1661,6 +1661,19 @@ mod tests {
             .count()
     }
 
+    /// How many items below `root` match `query`. The root and its ancestors are
+    /// left out: a temporary folder's random name can contain a short query.
+    fn matches_below(cache: &mut SearchCache, root: &Path, query: &str) -> usize {
+        let hits = cache.search(query).unwrap();
+        hits.into_iter()
+            .filter(|&hit| {
+                cache
+                    .node_path(hit)
+                    .is_some_and(|path| path.starts_with(root) && path != root)
+            })
+            .count()
+    }
+
     fn guard_indices(result: Result<SearchOutcome>) -> Vec<SlabIndex> {
         result
             .expect("search should succeed")
@@ -3999,7 +4012,7 @@ mod tests {
         assert_eq!(cache.search("good.rs").unwrap().len(), 1);
         assert_eq!(cache.search("foo").unwrap().len(), 2);
         assert_eq!(cache.search("oo.rs/").unwrap().len(), 2);
-        assert_eq!(cache.search("oo").unwrap().len(), 4);
+        assert_eq!(matches_below(&mut cache, temp_path, "oo"), 4);
 
         fs::remove_dir_all(temp_path.join("src")).expect("Failed to remove dir");
 
@@ -4042,7 +4055,7 @@ mod tests {
         assert_eq!(cache.search("good.rs").unwrap().len(), 1);
         assert_eq!(cache.search("foo").unwrap().len(), 2);
         assert_eq!(cache.search("oo.rs/").unwrap().len(), 2);
-        assert_eq!(cache.search("oo").unwrap().len(), 4);
+        assert_eq!(matches_below(&mut cache, temp_path, "oo"), 4);
 
         fs::remove_dir_all(temp_path.join("src")).expect("Failed to remove dir");
 
@@ -4062,7 +4075,7 @@ mod tests {
         assert_eq!(cache.search("foo").unwrap().len(), 1);
         assert_eq!(cache.search("/foo").unwrap().len(), 1);
         assert_eq!(cache.search("oo.rs/").unwrap().len(), 2);
-        assert_eq!(cache.search("oo").unwrap().len(), 2);
+        assert_eq!(matches_below(&mut cache, temp_path, "oo"), 2);
     }
 
     #[test]
