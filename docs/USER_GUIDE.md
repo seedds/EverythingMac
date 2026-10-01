@@ -162,10 +162,15 @@ keep working on the current index during a rescan, and the new index replaces it
 the scan finishes. **File → Open Index…** opens another
 saved index read-only; **Index → Enable Live Updates** makes it live. A live index is
 saved before switching, and if the chosen file cannot be opened the current index stays loaded. Pausing live
-updates lasts until the next launch. Include paths override ignored ancestors.
+updates lasts until the next launch, rescans included. Include paths override ignored ancestors.
 If the index cannot be updated, EverythingMac rescans automatically. When such a
 rescan fails or is cancelled, the status bar shows **Rescan needed** until you choose
-**Rescan**.
+**Rescan**. If the first scan, or the rebuild of an index that could not be read, is
+cancelled or fails, the status bar shows **No index** and **Rescan** builds one.
+Changing the attributes of the monitored root folder itself, such as its date,
+permissions, or a Finder tag, updates it in place; renaming, moving, or deleting it
+rescans. Messages about file actions, such as a partial move to the Trash, stay until
+you dismiss them or start a search.
 
 The app processes filesystem events and writes checkpoints while idle, at most every
 10 minutes (within about a minute of a new scan), and before quitting. Folders that
@@ -243,7 +248,9 @@ contents.
 
 EverythingMac needs its own filesystem permissions. For protected locations,
 enable it under **System Settings → Privacy & Security → Full Disk Access**, then
-relaunch. The app provides permission guidance and a link to System Settings.
+relaunch. The app provides permission guidance and a link to System Settings. Items
+inside folders the app cannot open are left out of the index, including when they
+change.
 
 If the activation shortcut is already registered by another app, EverythingMac reports
 the conflict. Record an alternative in Settings → General. A failed replacement keeps the working shortcut.

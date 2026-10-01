@@ -32,6 +32,7 @@ extension Model {
     }
     timer?.tolerance = 0.1
   }
+  static let watcherStopped = "Filesystem watcher stopped. Resume Live updates or rescan."
   func setLive() {
     guard ready, !snapshotOnly, !closed else { return }
     let enabled = live
@@ -43,6 +44,8 @@ extension Model {
       if case .failure(let e) = result {
         self.error = e.localizedDescription
         self.live = false
+      } else if self.live && self.error == Self.watcherStopped {
+        self.error = nil
       }
       self.indexStatus = self.live ? "Live updates · catching up…" : "Live updates paused"
     }
@@ -71,7 +74,7 @@ extension Model {
         self.live = false
       case .success(let reply):
         if reply.watcher_stopped == true {
-          self.error = "Filesystem watcher stopped. Resume Live updates or rescan."
+          self.error = Self.watcherStopped
           self.live = false
         }
         let processed = reply.processed_events ?? 0
@@ -106,7 +109,20 @@ extension Model {
           status += " · Rescan needed"
         }
         if self.indexStatus != status { self.indexStatus = status }
-        if reply.needs_rescan == true {
+        let rescanNeeded = reply.needs_rescan == true
+        if self.rescanNeeded != rescanNeeded { self.rescanNeeded = rescanNeeded }
+        if rescanNeeded {
+          // The change that needs a rescan also invalidated the displayed results.
+          // Polls stop during the rescan, so search the current index again now;
+          // it answers searches until the rescan replaces it.
+          if reply.changed == true && self.searchWindowShown && self.debounceWork == nil
+            && !self.searching
+          {
+            self.lastRefresh = ProcessInfo.processInfo.systemUptime
+            self.submit(background: true)
+          } else if reply.changed == true {
+            self.refreshPending = true
+          }
           self.rescanAutomatically()
           return
         }
@@ -256,11 +272,23 @@ extension Model {
           self.indexStatus = previousIndexStatus
           self.indexedCount = previousCount
           self.processedEventCount = previousEvents
-          self.status = "Scan cancelled; previous index retained"
           self.automaticRescanPaused = true
+          if self.ready {
+            self.status = "Scan cancelled; previous index retained"
+          } else {
+            // Nothing was loaded before this scan, such as on first launch or after
+            // a damaged index: offer Rescan instead of waiting for an index.
+            self.needsIndex = true
+            self.status = "Scan cancelled; no index"
+            self.error = "The scan was cancelled, so there is no index yet. Choose Rescan to build it."
+          }
           return
         }
         self.automaticRescanPaused = false
+        self.rescanNeeded = false
+        self.needsIndex = false
+        // Messages about the replaced index or its rebuild no longer apply.
+        self.error = nil
         // Replies about the replaced index no longer apply.
         self.indexEpoch &+= 1
         self.walking = false
@@ -277,7 +305,7 @@ extension Model {
           do { try self.prefs.save() } catch { self.error = error.localizedDescription }
         }
         self.ready = true
-        self.live = true
+        self.live = !self.liveUpdatesPausedByUser
         self.snapshot = self.checkpointPath
         self.snapshotDate = "Not saved yet"
         self.loadedMS = reply.load_ms ?? 0
@@ -297,7 +325,8 @@ extension Model {
         self.indexedCount = previousCount
         self.processedEventCount = previousEvents
         self.error = e.localizedDescription
-        self.status = "Scan failed; previous index retained"
+        self.status = self.ready ? "Scan failed; previous index retained" : "Scan failed; no index"
+        self.needsIndex = !self.ready
         self.automaticRescanPaused = true
       }
     }
@@ -444,6 +473,7 @@ extension Model {
     guard ready else { return }
     snapshotOnly = false
     live = true
+    liveUpdatesPausedByUser = false
     prefs.root = root
     prefs.ignores = loadedIgnores.joined(separator: "\n")
     prefs.includes = loadedIncludes.joined(separator: "\n")

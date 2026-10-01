@@ -5,7 +5,7 @@ struct LifecycleStatus: View {
   let hasError: Bool
   var paused = false
   let label: String
-  static let labels = ["Ready", "Initializing", "Updating", "Paused"]
+  static let labels = ["Ready", "Initializing", "Updating", "Paused", "No index", "Rescan needed"]
 
   var body: some View {
     HStack(spacing: 5) {

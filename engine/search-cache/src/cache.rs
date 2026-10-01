@@ -1232,12 +1232,16 @@ impl SearchCache {
     /// result to `apply_fs_events`.
     pub fn plan_fs_events(&mut self, events: Vec<FsEvent>) -> Result<EventScan, HandleFSEError> {
         let max_event_id = events.iter().map(|e| e.id).max();
-        // If rescan needed, early exit.
+        let root = self.file_nodes.path().to_path_buf();
+        // If rescan needed, early exit. Attribute changes of the root itself, such as
+        // a touch or a Finder tag, are applied in place below instead.
         if events.iter().any(|event| {
             if event.flag.contains(EventFlag::HistoryDone) {
                 info!("History processing done: {:?}", event);
             }
-            if event.should_rescan(self.file_nodes.path()) {
+            if event.should_rescan(&root)
+                && !(event.path == root && in_place_kind(event.flag).is_some())
+            {
                 info!("Event rescan: {:?}", event);
                 true
             } else {
@@ -1250,13 +1254,26 @@ impl SearchCache {
         // Attribute-only changes update indexed items in place: IDs stay valid and a
         // folder's subtree is not walked again. File-level events report changed
         // children separately, so these events never stand in for descendants.
+        let mut root_not_updated = false;
         let events: Vec<FsEvent> = events
             .into_iter()
             .filter(|event| {
-                !in_place_kind(event.flag)
-                    .is_some_and(|kind| self.update_metadata_in_place(&event.path, kind))
+                let Some(kind) = in_place_kind(event.flag) else {
+                    return true;
+                };
+                if self.update_metadata_in_place(&event.path, kind) {
+                    return false;
+                }
+                // Walking the root again would read everything; rescan instead.
+                root_not_updated |= event.path == root;
+                true
             })
             .collect();
+        if root_not_updated {
+            info!("Root attribute event not applied in place");
+            self.rescan_count = self.rescan_count.saturating_add(1);
+            return Err(HandleFSEError::Rescan);
+        }
         Ok(EventScan {
             paths: scan_paths(events),
             max_event_id,
@@ -1368,7 +1385,9 @@ impl ScanConfig {
     /// Returns `None` if cancelled.
     fn scan(&self, requested: PathBuf, cancel: &(impl Fn() -> bool + Sync)) -> Option<ScannedPath> {
         info!("Scanning path: {requested:?}");
-        if requested.symlink_metadata().err().map(|e| e.kind()) == Some(ErrorKind::NotFound) {
+        // A path that is gone, or below a folder that cannot be entered, is left out
+        // of the index, as a full scan could not list it either.
+        if requested.symlink_metadata().is_err() {
             return Some(ScannedPath {
                 requested,
                 outcome: ScanOutcome::Missing,
@@ -4100,6 +4119,89 @@ mod tests {
         assert_eq!(cache.search("/foo").unwrap().len(), 1);
         assert_eq!(cache.search("oo.rs/").unwrap().len(), 2);
         assert_eq!(matches_below(&mut cache, temp_path, "oo"), 2);
+    }
+
+    #[test]
+    fn attribute_changes_of_the_root_update_it_in_place() {
+        let temp_dir = TempDir::new("root_attributes").expect("Failed to create temp directory");
+        let root = temp_dir.path();
+        fs::write(root.join("kept.txt"), "kept").unwrap();
+        let mut cache = SearchCache::walk_fs(root);
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        fs::File::open(root)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let id = cache.last_event_id + 1;
+        let event = |flag| {
+            vec![FsEvent {
+                path: root.to_path_buf(),
+                id,
+                flag,
+            }]
+        };
+        for flag in [
+            EventFlag::ItemInodeMetaMod,
+            EventFlag::ItemXattrMod,
+            EventFlag::ItemFinderInfoMod,
+            EventFlag::ItemChangeOwner,
+        ] {
+            let handled = cache.handle_fs_events(event(flag | EventFlag::ItemIsDir));
+            assert!(matches!(handled, Ok(false)), "{flag:?}");
+        }
+        let root_node = &cache.file_nodes[cache.node_index_for_path(root).unwrap()];
+        let mtime = root_node.metadata.as_ref().and_then(|m| m.mtime());
+        assert_eq!(mtime.map(|t| t.get()), Some(1_000_000_000));
+        assert!(cache.take_metadata_changed());
+        assert_eq!(matches_below(&mut cache, root, "kept"), 1);
+        // Anything else on the root, or an attribute event it cannot take, rescans.
+        for flag in [
+            EventFlag::ItemRemoved | EventFlag::ItemIsDir,
+            EventFlag::ItemRenamed | EventFlag::ItemIsDir,
+            EventFlag::MustScanSubDirs | EventFlag::ItemIsDir,
+            EventFlag::ItemXattrMod | EventFlag::ItemIsFile,
+        ] {
+            let handled = cache.handle_fs_events(event(flag));
+            assert!(matches!(handled, Err(HandleFSEError::Rescan)), "{flag:?}");
+        }
+    }
+
+    #[test]
+    fn paths_in_folders_that_cannot_be_entered_are_not_indexed() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp_dir = TempDir::new("unreadable").expect("Failed to create temp directory");
+        let root = temp_dir.path();
+        let locked = root.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("secret.txt"), "s").unwrap();
+        let mut cache = SearchCache::walk_fs(root);
+        assert_eq!(matches_below(&mut cache, root, "secret"), 1);
+        fs::write(locked.join("new.txt"), "n").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let id = cache.last_event_id + 1;
+        let events = [
+            ("new.txt", EventFlag::ItemCreated | EventFlag::ItemIsFile),
+            (
+                "sub/deep.txt",
+                EventFlag::ItemCreated | EventFlag::ItemIsFile,
+            ),
+            ("secret.txt", EventFlag::ItemRemoved | EventFlag::ItemIsFile),
+        ];
+        let events = events
+            .into_iter()
+            .map(|(name, flag)| FsEvent {
+                path: locked.join(name),
+                id,
+                flag,
+            })
+            .collect();
+        let handled = cache.handle_fs_events(events);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(handled, Ok(true)));
+        for name in ["new", "sub", "deep", "secret"] {
+            assert_eq!(matches_below(&mut cache, root, name), 0, "{name}");
+        }
+        assert_eq!(matches_below(&mut cache, root, "locked"), 1);
     }
 
     #[test]

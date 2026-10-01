@@ -14,13 +14,17 @@ struct ContentView: View {
     model.activeTab == "files" ? $model.query : $model.eventFilter
   }
   private var busy: Bool {
-    model.searching || model.scanning || model.walking || (!model.ready && model.error == nil)
+    model.searching || model.scanning || model.walking
+      || (!model.ready && !model.needsIndex && model.error == nil)
   }
   private var lifecycle: String {
     model.scanning || model.walking ? "Updating"
-      : !model.ready ? "Initializing"
+      : !model.ready ? (model.needsIndex ? "No index" : "Initializing")
+      : model.rescanNeeded ? "Rescan needed"
       : !model.live && !model.snapshotOnly ? "Paused" : "Ready"
   }
+  /// Rescan builds an index when none could be loaded or built yet.
+  private var canRescan: Bool { (model.ready || model.needsIndex) && !model.snapshotOnly }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -163,7 +167,8 @@ struct ContentView: View {
   private func statusBar(showShortcuts: Bool) -> some View {
     HStack(spacing: 10) {
       LifecycleStatus(
-        busy: busy, hasError: model.error != nil, paused: lifecycle == "Paused", label: lifecycle
+        busy: busy, hasError: model.error != nil || model.needsIndex || model.rescanNeeded,
+        paused: lifecycle == "Paused", label: lifecycle
       ).help(indexDetails)
       ViewTabs(
         selection: $model.activeTab, files: model.indexedCount,
@@ -175,7 +180,7 @@ struct ContentView: View {
         Button { model.scan(useCurrentConfig: true) } label: {
           Image(systemName: "arrow.clockwise")
         }
-        .disabled(!model.ready || model.snapshotOnly)
+        .disabled(!canRescan)
         .help("Rescan").accessibilityLabel("Rescan")
       }
       Spacer(minLength: 4)
@@ -517,6 +522,7 @@ struct EverythingMacApp: App {
   private var liveUpdates: Binding<Bool> {
     Binding(get: { model.live }, set: { enabled in
       model.live = enabled
+      model.liveUpdatesPausedByUser = !enabled
       model.setLive()
     })
   }
@@ -577,7 +583,7 @@ struct EverythingMacApp: App {
         Divider()
         Button("Rescan") { model.scan(useCurrentConfig: true) }
           .keyboardShortcut("r", modifiers: [.command, .option])
-          .disabled(!model.ready || model.scanning || model.snapshotOnly)
+          .disabled(!(model.ready || model.needsIndex) || model.scanning || model.snapshotOnly)
         Button("Cancel Scan") { cn_cancel_scan() }.disabled(!model.scanning)
       }
       CommandGroup(replacing: .help) {

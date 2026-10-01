@@ -559,6 +559,49 @@ selection, feature, live, tab, terminal, and trash checks passed. With a video e
 keeping the load average near 38, the feature check timed out once after its last step
 and the live check's Quick Look step failed once; both passed three reruns.
 
+## Stuck states and lost messages — 0.1.79
+
+A fresh review of the code after the September 30 backlog was finished, in three parallel
+passes over the engine, the bridge, and the app, found nothing that loses events or
+damages a saved index; saving while changes are applied in steps keeps the earlier event
+position, and the replay converges. It found these, each confirmed in the code:
+
+- Cancelling the first scan, or the rebuild of an index that could not be read, left the
+  status bar on "Initializing" with Rescan disabled until a relaunch. The model now sets
+  `needsIndex`, shows **No index** with an explanation, and keeps Rescan available.
+- After a cancelled or failed scan, automatic rescans stayed paused for the session, and
+  "Rescan needed" appeared only in a tooltip while the status bar said "Ready". It is now
+  the status bar's label, and opening an index ends the pause.
+- A poll that reported a needed rescan returned before refreshing, so the displayed
+  results were invalid for the whole rescan; it now searches the current index again first.
+- Every search cleared the error banner, including background refreshes, so messages
+  such as a partial move to the Trash vanished within milliseconds. Only searches the user
+  starts, and a successful scan, clear it now; resuming Live Updates clears the watcher
+  message.
+- Every successful scan turned Live Updates back on, contrary to the user guide; a pause
+  from the Index menu now lasts through scans.
+- Any attribute change of the monitored root folder, such as a touch, a permission
+  change, or a Finder tag, forced a full rescan. These now update the root in place
+  (`plan_fs_events`), and an attribute event that cannot be applied still rescans
+  rather than walking the root. With real FSEvents, touching, `chmod`, and `xattr -w` on
+  a watched root reported `ItemInodeMetaMod`, `ItemChangeOwner`, and `ItemXattrMod`
+  events and no rescan.
+- An event path that could not be read for a reason other than not existing, such as a
+  file inside a folder the app cannot enter, was walked and indexed without metadata,
+  with any missing parent folders, and stayed until a full rescan. Any error reading the
+  path now counts as missing.
+
+Not real here: folder reads failing on the 256-descriptor limit apps get by default; a
+scan of `/` with that limit found the same 5,612,439 entries as without it. The other
+findings, such as a cancelled Apply & Rebuild leaving its scope unapplied, are recorded
+as candidates. New tests cover root attribute events and paths under a folder made
+unreadable, and new app check steps cancel the rebuild of a damaged index and then
+rescan, keep paused Live Updates paused through a rescan, and keep an action's message
+through a background refresh; each failed against the old behavior. Recorded checks:
+1,624 Rust tests passed (the system-wide cancellation test excluded), the engine and
+bridge tests also under Guard Malloc; clippy and `cargo fmt --check` passed; and the
+self, sort, selection, feature, live, tab, terminal, and trash checks passed.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

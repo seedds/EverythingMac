@@ -86,6 +86,16 @@ The search window forwards delegate callbacks to SwiftUI while intercepting clos
 to hide it; a responder adapter preserves Quick Look without a custom window class.
 The deployment target is macOS 14.
 
+The model's index state drives the status bar. `needsIndex` is set when the scan that
+would build the first index, or rebuild one that could not be read, is cancelled or
+fails, so Rescan stays available instead of a spinner. `rescanNeeded` follows poll
+replies and shows **Rescan needed** while automatic rescans are paused after a failed
+or cancelled scan; opening an index or a successful scan clears both. A poll that
+reports a needed rescan first searches the current index again, since polls stop
+during the rescan. Live Updates turned off in the Index menu stay off through scans
+(`liveUpdatesPausedByUser`). Error messages are cleared by searches the user starts and
+by a successful scan, not by background refreshes.
+
 Rust owns the full result-ID vector and the selection. A selection is a list of
 node identities: a slab index plus a per-slot generation that `remove_node` bumps, so
 a reused slot never matches an earlier identity, together with the cache instance
@@ -106,6 +116,11 @@ answer, so package types an app installs later count after a relaunch.
 Live updates distinguish two kinds of change. Events that only change an existing
 item's attributes (file edits; permission, extended-attribute, and Finder-info
 changes on a file or folder) update its metadata in place and keep its ID.
+Attribute changes of the root itself are also applied in place; any other event on the
+root asks for a full rescan, as does an attribute event that cannot be applied, since
+walking the root again would read everything. A path that cannot be read at all, being
+gone or under a folder that cannot be entered, counts as missing, as a full scan could
+not list it either.
 Creations, removals, renames, and coalesced subtree changes walk the path again,
 and the walk is merged into the index: unchanged items keep their nodes and IDs,
 items whose sizes or dates changed are updated in place, and only items that appeared

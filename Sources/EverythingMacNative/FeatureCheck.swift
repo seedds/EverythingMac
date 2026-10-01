@@ -366,6 +366,15 @@ final class FeatureCheck {
     model.error = nil
     try await checkHistoryNavigation()
     try await search("report")
+    // A message about an earlier action, such as a partial move to the Trash,
+    // survives background refreshes; a search the user starts clears it.
+    let actionMessage = "Moved 1 of 2 items to the Trash."
+    model.error = actionMessage
+    model.submit(background: true)
+    try await waitFor { !model.searching }
+    try check(model.error == actionMessage, "Background refresh keeps an earlier action's message")
+    try await search("report")
+    try check(model.error == nil, "A new search clears an earlier action's message")
     try checkRenameSelection(model.root + "/report.txt")
     try await checkInputMethodComposition()
     try model.library.save(name: "Report preset", state: state)

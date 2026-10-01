@@ -294,8 +294,15 @@ struct Sample: Codable {
   @ObservationIgnored var saving = false
   /// Set when a scan fails or is cancelled, so an index that needs a rescan is not
   /// rescanned again on every poll; the Rescan command still runs, and a
-  /// successful scan clears it.
+  /// successful scan or opening an index clears it.
   @ObservationIgnored var automaticRescanPaused = false
+  /// The engine reported that the index can no longer be kept current; shown in the
+  /// status bar while automatic rescans are paused.
+  var rescanNeeded = false
+  /// No index is loaded because the scan that would build it was cancelled or failed.
+  var needsIndex = false
+  /// The user turned Live Updates off; rescans keep them off until turned on again.
+  @ObservationIgnored var liveUpdatesPausedByUser = false
   @ObservationIgnored var refreshPending = false
   /// Sizes or dates changed since the displayed rows were loaded.
   @ObservationIgnored var visibleRowsStale = false
@@ -398,6 +405,10 @@ struct Sample: Codable {
     revision &+= 1
     status = "Loading snapshot…"
     error = nil
+    // Another index gets automatic rescans again.
+    automaticRescanPaused = false
+    rescanNeeded = false
+    needsIndex = false
     let path = snapshot
     let attributes = try? FileManager.default.attributesOfItem(atPath: path)
     snapshotDate = (attributes?[.modificationDate] as? Date)?.formatted() ?? "Unavailable"
@@ -483,7 +494,9 @@ struct Sample: Codable {
     let submittedState = currentSearchState
     searching = true
     searchIsBackground = background
-    if error != nil { error = nil }
+    // Background refreshes keep messages about earlier actions, such as a partial
+    // move to the Trash; the user dismisses them or starts a search.
+    if !background && error != nil { error = nil }
     pendingDraw = nil
     submittedAt = ProcessInfo.processInfo.systemUptime
     if inputAt == 0 { inputAt = submittedAt }

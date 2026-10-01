@@ -97,6 +97,32 @@ final class LiveCheck {
       }
     } catch { finish(error.localizedDescription) }
   }
+  /// The scope saved while a rebuild scans a large folder to be cancelled.
+  var rebuildScope: (root: String, ignores: String, includes: String)?
+  /// Cancels the rebuild of a damaged index (step 44), then expects no index, an
+  /// explanation, and Rescan available instead of a spinner (step 45).
+  func cancelledRebuild() {
+    if step == 44 {
+      guard model.scanning else { return }
+      cn_cancel_scan()
+      step = 45
+      return
+    }
+    guard !model.scanning else { return }
+    guard !model.ready, model.needsIndex, model.error?.contains("cancelled") == true,
+      let scope = rebuildScope
+    else {
+      finish(
+        "A cancelled rebuild left ready=\(model.ready), needsIndex=\(model.needsIndex), error=\(model.error ?? "none")"
+      )
+      return
+    }
+    checks.append("Cancelling the rebuild of a damaged index offers Rescan instead of waiting")
+    (model.prefs.root, model.prefs.ignores, model.prefs.includes) = scope
+    model.scan(useCurrentConfig: true)
+    step = 46
+    since = ProcessInfo.processInfo.systemUptime
+  }
   func next(_ description: String) {
     checks.append(description)
     step += 1
@@ -111,6 +137,10 @@ final class LiveCheck {
     if model.scanning, model.indexedCount > 0 { scanCounts.insert(model.indexedCount) }
     if ProcessInfo.processInfo.systemUptime - since > (tabCheck ? 8 : 25) {
       finish("Timeout at \(step): \(model.status); \(model.error ?? ""); tab=\(model.activeTab), selection=\(model.selectionCount), loading=\(model.selectionLoading), pendingDraw=\(String(describing: model.pendingDraw))")
+      return
+    }
+    if step == 44 || step == 45 {
+      cancelledRebuild()
       return
     }
     // Events has no Files table to acknowledge a background result draw.
@@ -322,6 +352,35 @@ final class LiveCheck {
       case 43:
         guard model.snapshot == model.checkpointPath, model.total == 1 else { return }
         checks.append("A damaged saved index is rebuilt instead of blocking the app")
+        // Rebuild it again, scanning a large folder long enough to cancel the scan.
+        rebuildScope = (model.prefs.root, model.prefs.ignores, model.prefs.includes)
+        model.prefs.root = "/System/Library"
+        model.prefs.ignores = ""
+        model.prefs.includes = ""
+        model.snapshot = directory.appendingPathComponent("damaged.db").path
+        model.load()
+        step = 44
+        since = ProcessInfo.processInfo.systemUptime
+      case 46:
+        guard model.snapshot == model.checkpointPath, model.total == 1 else { return }
+        checks.append("Rescan builds an index after its rebuild was cancelled")
+        // Live Updates paused from the Index menu stay paused through a rescan.
+        model.live = false
+        model.liveUpdatesPausedByUser = true
+        model.setLive()
+        model.scan(useCurrentConfig: true)
+        step = 47
+        since = ProcessInfo.processInfo.systemUptime
+      case 47:
+        guard model.snapshot == model.checkpointPath, model.total == 1 else { return }
+        guard !model.live else {
+          finish("A rescan turned paused Live Updates back on")
+          return
+        }
+        checks.append("Paused Live Updates stay paused through a rescan")
+        model.liveUpdatesPausedByUser = false
+        model.live = true
+        model.setLive()
         let trash = root.appendingPathComponent("trash-fixture-" + UUID().uuidString)
         try Data("recoverable".utf8).write(to: trash)
         var resulting: NSURL?
