@@ -130,6 +130,10 @@ are removed again afterwards. Each folder's children are kept in name order, so 
 path is found by binary search at each level; indexes saved by earlier versions are
 put in order as they open.
 
+The Events tab lists the newest 500 events. They are kept as they arrive (ID, path,
+flags, and the time their batch was applied) and formatted only when the tab asks for
+the list, so a batch copies at most its newest 500 events and formats none.
+
 Each distinct name is stored once, as a key of the name index, and every item with
 that name points at the key's text. `remove_nodes` frees a name once the last item
 with it is out of the slab (not before: finding postings by path reads the names of
@@ -277,7 +281,10 @@ It moves a folder of 200,000 files in, creates 10,000 files in an indexed folder
 100,000, and moves the first folder out again, polling as the app does. For each,
 `longest_poll_ms` is the longest `cn_poll` call, which is the longest a search or row
 load waits on the app's serial engine queue; `indexed_after_ms` is the time from the
-change until the index matches it.
+change until the index matches it; `busy_ms` adds up the time spent in polls, and
+`cpu_ms` is the process's CPU time after the change was made. Creating more than about
+10,000 files at once can make FSEvents drop events on a busy Mac, which the example
+reports as a rescan.
 
 To time the engine's part alone, applying already walked changes without FSEvents
 or polls, including a rescan of an unchanged folder:

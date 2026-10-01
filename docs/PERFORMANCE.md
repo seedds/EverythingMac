@@ -4,10 +4,10 @@
 
 ## Reading these results
 
-These are workstation measurements. The 0.1.60–0.1.75 studies cover live updates,
+These are workstation measurements. The 0.1.60–0.1.78 studies cover live updates,
 parallel name matching, large selections, saving and startup memory, F8, rescans and
 folder walks, idle work, filters, index checks, reading sizes and dates, full scans,
-memory for names, and pauses during large changes;
+memory for names, pauses during large changes, and the event log;
 the other matching study covers the 0.1.55 changes, and the versioned sorting studies
 cover historical releases.
 The sorting studies used an Apple M4 Pro (14 cores, 48 GiB RAM) on macOS 27.0.
@@ -16,6 +16,7 @@ An empty query can be faster than a filtered query because it avoids substring m
 
 | Study | What it establishes |
 | --- | --- |
+| [Event log, 0.1.78](#event-log-0178) | Keeping the Events tab's list took 0.02–0.6 ms of engine time per 20,000 file events instead of 5.1–5.3 ms; listing its 500 entries while the tab is open takes 0.17 ms instead of 0.13 ms. |
 | [Large changes, 0.1.75](#large-changes-0175) | While large changes were applied, a search waited at most 11–16 ms instead of up to 54–219 ms. 10,000 files created in a folder of 100,000 were indexed in 2.5–4.1 s instead of 15.4 s, during which 0.1.74 kept the engine busy; a rescan of an unchanged 200,000-file folder took 5 ms of engine time instead of 225–236 ms and kept every item's ID. |
 | [Names, 0.1.74](#names-0174) | Names of files that come and go no longer accumulate: 100,000 new names moved into a live index and out again kept 4.6 MiB each time, and now nothing measurable. Opening 4,573,469 entries took 1.25–1.28 s and 159 MiB of heap instead of 1.73–1.76 s and 221 MiB, a scan of `/` peaked at 785–789 MiB instead of 964–966 MiB, and adding a 200,000-file folder held the engine for 59–60 ms instead of 84–91 ms. |
 | [Full scans, 0.1.73](#full-scans-0173) | A full scan of `/` with 5.08 million entries took 10.6–10.8 s instead of 15.1–16.1 s, and 10.5 s instead of 16.2–16.3 s with four exclusion patterns. Its peak memory fell from 981–983 MiB to 930–932 MiB, and the scanned index holds 133 MiB of heap instead of 163 MiB. |
@@ -37,6 +38,31 @@ Version 0.1.42 removed the sorting cap. References to a 20,000-result cap below
 apply only to the historical versions. The 0.1.40 and 0.1.41 sorting studies use
 the same snapshot; the 0.1.39 study uses a different one. Do not calculate precise
 cross-snapshot speedup ratios. No Windows Everything baseline was measured.
+
+## Event log (0.1.78)
+
+Measured on 2026-10-01 on the same Apple M4 Pro, in one process with the 0.1.77 code
+copied beside the new one, alternating seven times; the Mac was busy with a video
+encode, which affects both equally. 20,000 file events with paths of about 55 bytes were logged
+in batches of the sizes shown, as FSEvents delivers them. The listing time is for the
+Events tab's 500 entries, built and encoded as JSON, which happens only while the tab
+is open and new events arrived.
+
+| Work | 0.1.77 | 0.1.78 |
+| --- | ---: | ---: |
+| Log 20,000 events, one per batch | 5.1–16.9 ms (median 5.2) | 0.6–1.2 ms (median 0.6) |
+| Log 20,000 events, 100 per batch | 5.2–5.6 ms | 0.3–0.5 ms |
+| Log 20,000 events, 1,000 per batch | 5.2–5.3 ms | 0.17–0.18 ms |
+| Log 20,000 events, 10,000 per batch | 5.1–5.3 ms | 0.02 ms |
+| List 500 entries for the Events tab | 0.13 ms | 0.17 ms |
+
+0.1.77 built a JSON entry, with formatted flags and its own timestamp, for every event,
+and dropped all but the newest 500. 0.1.78 copies only the newest 500 of each batch and
+formats them when they are listed. For scale, applying 20,000 file edits took the engine
+48–160 ms on the same busy Mac, mostly reading each file's size and date, so the log was
+about 3–10% of that work. End-to-end runs of `live_walk` were not usable here: with
+20,000 or more files created at once, FSEvents dropped events on this busy Mac and asked
+for a rescan in both versions.
 
 ## Large changes (0.1.75)
 

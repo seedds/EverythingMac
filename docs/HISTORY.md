@@ -539,6 +539,26 @@ Recorded checks: 1,621 Rust tests passed (the system-wide cancellation test excl
 also under Guard Malloc; clippy passed; and the self, sort, selection, feature, live,
 tab, terminal, and trash checks passed.
 
+## Event log — 0.1.78
+
+The Events tab lists the newest 500 file events. For every event, the engine built a
+JSON entry with its path, formatted flags, and a fresh timestamp, then dropped all but
+the newest 500, and each listing copied all 500 entries. Events are now kept raw
+(`live::LoggedEvent`): a batch copies only its newest 500, takes one timestamp, and
+entries are formatted only when the tab asks, exactly as before. Logging 20,000 events
+took 0.02–0.6 ms instead of 5.1–5.3 ms, depending on batch size; listing 500 for an
+open Events tab takes 0.17 ms instead of 0.13 ms; see
+[Performance](PERFORMANCE.md#event-log-0178). That is about 3–10% of the engine's work
+for the same events, so the gain is modest. `live_walk` now also reports the time spent
+in polls and the process's CPU time; end-to-end runs could not show the difference
+because FSEvents dropped events at 20,000 creations on a busy Mac. The last
+long-standing `cargo fmt` difference was in the code replaced. Recorded checks: 1,622
+Rust tests passed (the system-wide cancellation test excluded), the bridge tests also
+under Guard Malloc; clippy and `cargo fmt --check` passed; and the self, sort,
+selection, feature, live, tab, terminal, and trash checks passed. With a video encode
+keeping the load average near 38, the feature check timed out once after its last step
+and the live check's Quick Look step failed once; both passed three reruns.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain

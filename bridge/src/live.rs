@@ -4,12 +4,12 @@ use crossbeam_channel::TryRecvError;
 use everything_mac_sdk::{EventFlag, EventWatcher, FsEvent, current_event_id, event_history_id};
 use search_cache::{EventScan, HandleFSEError, NodeIdentity, ScannedEvents, WalkData};
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     fs,
     os::fd::AsRawFd,
     path::PathBuf,
     sync::{LazyLock, atomic::Ordering, mpsc},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 // A filesystem syscall can wait on a disconnected volume or an OS permission
@@ -396,10 +396,48 @@ pub unsafe extern "C" fn cn_poll(
             "metadata_indexing":state.metadata.active()});
         // The event list is only for the visible Events tab, and only when it changed.
         if include_events && state.processed_events != since_processed {
-            reply["events"] = json!(state.events);
+            reply["events"] = state.events.iter().map(LoggedEvent::to_json).collect();
         }
         Ok(reply)
     })
+}
+
+/// How many of the newest events the Events tab lists.
+const EVENT_LOG_LIMIT: usize = 500;
+
+/// An event as the Events tab lists it, kept raw until the tab asks for the list.
+pub(super) struct LoggedEvent {
+    pub(super) id: u64,
+    path: PathBuf,
+    flag: EventFlag,
+    /// When its batch was applied, in seconds since 1970.
+    time: f64,
+}
+
+impl LoggedEvent {
+    pub(super) fn to_json(&self) -> Value {
+        // FSEvents paths are raw bytes; serializing a non-UTF-8 Path would panic.
+        json!({"id":self.id, "path":self.path.to_string_lossy(), "flags":format!("{:?}", self.flag),
+            "time":self.time})
+    }
+}
+
+/// Puts a batch's events at the front of the log, newest first, keeping the
+/// newest `EVENT_LOG_LIMIT`. Events that would fall off at once are not copied.
+pub(super) fn log_events(log: &mut VecDeque<LoggedEvent>, events: &[FsEvent]) {
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    for event in &events[events.len().saturating_sub(EVENT_LOG_LIMIT)..] {
+        log.push_front(LoggedEvent {
+            id: event.id,
+            path: event.path.clone(),
+            flag: event.flag,
+            time,
+        });
+    }
+    log.truncate(EVENT_LOG_LIMIT);
 }
 
 /// Applies queued filesystem events to the index. Returns whether a folder walk is
@@ -427,21 +465,24 @@ fn apply_events(state: &mut State, changed: &mut bool, watcher_stopped: &mut boo
             }
             _ => break,
         };
-        let events: Vec<_> = events.into_iter().filter_map(|mut event| {
-            if let Some(parent) = state.checkpoint.as_ref().and_then(|p| p.parent())
-                && event.path.starts_with(parent) { return None; }
-            if state.event_root != state.root
-                && let Ok(suffix) = event.path.strip_prefix(&state.event_root) {
-                event.path = state.root.join(suffix);
-            }
-            state.processed_events += 1;
-            // FSEvents paths are raw bytes; serializing a non-UTF-8 Path would panic.
-            state.events.push_front(json!({"id":event.id, "path":event.path.to_string_lossy(),
-                "flags":format!("{:?}",event.flag),
-                "time":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()}));
-            state.events.truncate(500);
-            Some(event)
-        }).collect();
+        let events: Vec<_> = events
+            .into_iter()
+            .filter_map(|mut event| {
+                if let Some(parent) = state.checkpoint.as_ref().and_then(|p| p.parent())
+                    && event.path.starts_with(parent)
+                {
+                    return None;
+                }
+                if state.event_root != state.root
+                    && let Ok(suffix) = event.path.strip_prefix(&state.event_root)
+                {
+                    event.path = state.root.join(suffix);
+                }
+                Some(event)
+            })
+            .collect();
+        state.processed_events += events.len() as u64;
+        log_events(&mut state.events, &events);
         match state.cache.plan_fs_events(events) {
             // Without paths to read, applying only records the event position.
             Ok(scan) if scan.is_empty() => {

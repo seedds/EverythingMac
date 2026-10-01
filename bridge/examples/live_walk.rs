@@ -3,7 +3,8 @@
 //! longest time a search or row load waits. Polls follow the app after one that
 //! reports a walk: 5 ms later while it is applied, and 50 ms later while it is
 //! read; otherwise they come every 100 ms, more often than the app's 500 ms. Uses
-//! a temporary folder only. Prints one line per change:
+//! a temporary folder only. Prints one line per change, with the time spent in
+//! polls (`busy_ms`) and the process's CPU time from the change's end (`cpu_ms`):
 //! - `move_in`: a folder of FILES files, in folders of 1,000, is moved in;
 //! - `add_wide`: ADDED files are created in an indexed folder of WIDE files;
 //! - `move_out`: the first folder is moved out again.
@@ -39,6 +40,14 @@ fn reply(buffer: Buffer) -> Value {
             .unwrap();
     unsafe { cn_buffer_free(buffer) };
     value
+}
+
+/// User and system CPU time of this process so far.
+fn cpu_ms() -> f64 {
+    let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+    let ms = |time: libc::timeval| time.tv_sec as f64 * 1000.0 + time.tv_usec as f64 / 1000.0;
+    ms(usage.ru_utime) + ms(usage.ru_stime)
 }
 
 fn main() {
@@ -98,7 +107,8 @@ fn main() {
     let measure = |name: &str, expected: usize, change: &dyn Fn()| {
         let changed = Instant::now();
         change();
-        let (mut polls, mut longest, mut total) = (0, 0.0_f64, 0);
+        let cpu = cpu_ms();
+        let (mut polls, mut longest, mut busy, mut total) = (0, 0.0_f64, 0.0, 0);
         let mut next = Duration::from_millis(100);
         let mut walking = false;
         while total != expected || walking || changed.elapsed() < Duration::from_millis(300) {
@@ -126,6 +136,7 @@ fn main() {
             }
             polls += 1;
             longest = longest.max(ms);
+            busy += ms;
             total = polled["total"].as_u64().unwrap() as usize;
             walking = polled["walking"] == true;
             next = Duration::from_millis(match (walking, polled["applying"] == true) {
@@ -137,7 +148,8 @@ fn main() {
         println!(
             "{}",
             serde_json::json!({"change": name, "indexed_after_ms": changed.elapsed().as_secs_f64() * 1000.0,
-                "longest_poll_ms": longest, "polls": polls, "total": total})
+                "longest_poll_ms": longest, "busy_ms": busy, "cpu_ms": cpu_ms() - cpu, "polls": polls,
+                "total": total})
         );
     };
     let moved = root.join("moved");

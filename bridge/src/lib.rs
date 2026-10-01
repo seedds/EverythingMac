@@ -37,7 +37,8 @@ struct State {
     dirty: bool,
     /// Only the FSEvents position advanced; saved when quitting or switching indexes.
     events_dirty: bool,
-    events: std::collections::VecDeque<Value>,
+    /// The newest events, newest first, for the Events tab.
+    events: std::collections::VecDeque<live::LoggedEvent>,
     processed_events: u64,
     sort: Option<sort::SortStatePayload>,
     /// Selected nodes, comparable only while `selection_instance` is the cache's.
@@ -598,7 +599,12 @@ mod tests {
         let _lock = TEST_LOCK.lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let mut state = State::new(SearchCache::walk_fs(temp.path()), temp.path().into());
-        state.events.push_front(json!({"id":1, "path":"/a", "flags":"Created", "time":0.0}));
+        let created = everything_mac_sdk::FsEvent {
+            path: "/a".into(),
+            id: 1,
+            flag: everything_mac_sdk::EventFlag::ItemCreated,
+        };
+        live::log_events(&mut state.events, &[created]);
         state.processed_events = 1;
         let mut engine = Engine(Arc::new(Mutex::new(state)));
         unsafe {
@@ -610,6 +616,39 @@ mod tests {
             let unchanged = reply(live::cn_poll(&mut engine, 1, true));
             assert!(unchanged.get("events").is_none());
         }
+    }
+
+    #[test]
+    fn event_log_keeps_the_newest_events_raw_until_listed() {
+        use everything_mac_sdk::{EventFlag, FsEvent};
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+        let flag = EventFlag::ItemCreated | EventFlag::ItemIsFile;
+        let event = |id: u64| FsEvent {
+            path: format!("/folder/file{id}").into(),
+            id,
+            flag,
+        };
+        let mut log = std::collections::VecDeque::new();
+        live::log_events(&mut log, &(1..=1200).map(event).collect::<Vec<_>>());
+        live::log_events(&mut log, &(1201..=1203).map(event).collect::<Vec<_>>());
+        let ids: Vec<u64> = log.iter().map(|logged| logged.id).collect();
+        assert_eq!(ids, (704..=1203).rev().collect::<Vec<_>>());
+        // Listed exactly as entries were built before they were kept raw.
+        let listed = log[0].to_json();
+        let time = listed["time"].as_f64().unwrap();
+        assert!(time > 1.7e9);
+        assert_eq!(
+            listed,
+            json!({"id":1203, "path":"/folder/file1203", "flags":format!("{flag:?}"), "time":time})
+        );
+        let unreadable = FsEvent {
+            path: OsStr::from_bytes(b"/bad\xff").into(),
+            id: 1204,
+            flag: EventFlag::ItemRemoved,
+        };
+        live::log_events(&mut log, &[unreadable]);
+        assert_eq!(log[0].to_json()["path"], "/bad\u{FFFD}");
+        assert_eq!(log.len(), 500);
     }
 
     unsafe fn reply(buffer: Buffer) -> Value {
