@@ -11,22 +11,6 @@ using familiar macOS actions.
 
 <img src="Resources/EverythingMac.png" alt="EverythingMac app icon" width="160" />
 
-## Features
-
-- Search file and folder names and paths with wildcards, regular expressions, Boolean
-  queries, and filters. Searches never open files or read their contents. Reusable
-  sort indexes support sorting all matching results.
-- Live filesystem updates that refresh sizes and dates in place, indexed disk usage,
-  and selections that stay stable as files change, even across millions of results.
-  Open, reveal, preview, rename, copy, drag, or trash selected files.
-- Exclude names and glob patterns such as `node_modules`, `*.log`, and `**/build/**`.
-- Saved searches, the latest 100 distinct recent searches, a configurable global
-  activation shortcut, and searchable offline help.
-
-See the [versioned performance report](docs/PERFORMANCE.md) for measured latency,
-startup costs, memory use, and comparison limits. Its historical results are not
-a benchmark of the latest release.
-
 ## Speed compared with Cardinal
 
 Cardinal 0.1.23 and EverythingMac 0.1.81 were timed on the same Mac, indexing the same
