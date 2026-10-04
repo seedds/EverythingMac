@@ -438,7 +438,7 @@ cargo run -p everything-mac-native-prototype --example fixture -- "$FIXTURE_DIR"
 The feature suite checks exclusions, shortcuts, history persistence/restoration, help,
 input-method composition in the search field (marked text survives app updates and
 keeps Return, Escape, and the arrow keys), index filename migration, the 800-point
-minimum layout, the independent Settings
+minimum layout, column resizing, the independent Settings
 window and draft cancellation, standard menu shortcuts, search-window hiding,
 reopening and restoration from the Dock, and asynchronous shutdown on quit.
 Historical test totals

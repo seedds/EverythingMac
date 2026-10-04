@@ -731,6 +731,19 @@ index that typed them as files), an item added at the path of another, and a wal
 stops reading; each failed against the old behavior. The performance guide's build
 commands used the crate's old name, `cardinal-native-prototype`, and now build.
 
+## Column resizing — 0.1.84
+
+The results table had used `lastColumnOnlyAutoresizingStyle` since the first native
+table. While the columns filled the window, as they do after launch and after any
+window resize, AppKit kept their total at the window's width, so the Created column
+absorbed every divider drag as well as every window resize. The table now uses
+`noColumnAutoresizing`, as in Everything: a drag changes only its column, window resizes
+change none, and a horizontal scroller covers columns wider than the window. Saved
+widths carry over, including a Created width the old behavior stretched; Reset Column
+Widths restores the defaults. The feature check queues mouse events for the header's
+own resize tracking while the window is wider than the columns, then resizes the window
+and resets the widths; the drag check failed against the old style.
+
 ## Validation boundaries
 
 The deployment target is macOS 14; actual macOS 14 and Intel execution remain
