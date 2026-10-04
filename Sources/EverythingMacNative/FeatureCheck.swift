@@ -163,6 +163,60 @@ final class FeatureCheck {
       "Closing Settings while recording leaves keys in the search window alone")
     model.settingsTab = "index"
   }
+  /// Dragging a column divider resizes only that column, and resizing the window
+  /// resizes no column. Drives the header's own resize tracking with queued events.
+  func checkColumnResizing() async throws {
+    func table(in view: NSView?) -> ResultsView? {
+      if let table = view as? ResultsView { return table }
+      return (view?.subviews ?? []).lazy.compactMap { table(in: $0) }.first
+    }
+    guard let table = table(in: window.contentView), let header = table.headerView,
+      let scroll = table.enclosingScrollView, let resetMenu = header.menu
+    else { throw messageError("Cannot find the results table header") }
+    func widths() -> [String: CGFloat] {
+      Dictionary(uniqueKeysWithValues: table.tableColumns.map { ($0.identifier.rawValue, $0.width) })
+    }
+    let before = widths()
+    let size = window.contentView?.bounds.size ?? .zero
+    let visible = scroll.frame.width
+    // Wider than the columns: autoresizing would make the last column take up the
+    // rest of the window and give back whatever a divider drag takes.
+    let extra = max(0, table.frame.width - scroll.contentView.bounds.width) + 200
+    window.setContentSize(NSSize(width: size.width + extra, height: size.height))
+    window.contentView?.layoutSubtreeIfNeeded()
+    try await Task.sleep(nanoseconds: 100_000_000)
+    let widened = scroll.frame.width
+    let wide = widths()
+    let edge = NSPoint(x: header.headerRect(ofColumn: 0).maxX - 1, y: header.bounds.midY)
+    let start = header.convert(edge, to: nil)
+    func mouse(_ type: NSEvent.EventType, dx: CGFloat) -> NSEvent? {
+      NSEvent.mouseEvent(
+        with: type, location: NSPoint(x: start.x + dx, y: start.y), modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+        context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
+    }
+    guard let down = mouse(.leftMouseDown, dx: 0), let drag = mouse(.leftMouseDragged, dx: 60),
+      let up = mouse(.leftMouseUp, dx: 60)
+    else { throw messageError("Cannot create mouse events") }
+    window.postEvent(drag, atStart: false)
+    window.postEvent(up, atStart: false)
+    header.mouseDown(with: down)
+    let dragged = widths()
+    try check(
+      dragged["Name"]! > wide["Name"]!
+        && dragged.allSatisfy { $0.key == "Name" || $0.value == wide[$0.key] },
+      "Resizing a column leaves the other columns' widths unchanged")
+    window.setContentSize(size)
+    window.contentView?.layoutSubtreeIfNeeded()
+    try await Task.sleep(nanoseconds: 100_000_000)
+    try check(
+      widened > visible && wide == before && widths() == dragged,
+      "Window resizing leaves column widths unchanged")
+    resetMenu.performActionForItem(at: 0)
+    try check(
+      ResultsTable.columns.allSatisfy { widths()[$0.name] == $0.width },
+      "Reset Column Widths restores the default widths")
+  }
   func start() {
     Task { @MainActor in
       do {
@@ -410,6 +464,7 @@ final class FeatureCheck {
     try check(model.error == nil, "A new search clears an earlier action's message")
     try checkRenameSelection(model.root + "/report.txt")
     try await checkInputMethodComposition()
+    try await checkColumnResizing()
     try model.library.save(name: "Report preset", state: state)
     window.setContentSize(NSSize(width: 800, height: 600))
     try render(window, suffix: "results")

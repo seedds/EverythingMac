@@ -91,7 +91,9 @@ struct ResultsTable: NSViewRepresentable {
     table.rowHeight = 24
     table.usesAlternatingRowBackgroundColors = true
     table.allowsMultipleSelection = true
-    table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+    // Resizing a column changes only that column, and the window never resizes
+    // columns, as in Everything.
+    table.columnAutoresizingStyle = .noColumnAutoresizing
     for (name, width) in Self.columns {
       let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(name))
       column.title = name == "Name" ? "Filename" : name

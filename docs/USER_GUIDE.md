@@ -15,7 +15,7 @@ results table, and a compact bottom status bar**.
 | Folder scope field | Always visible to the right of the search field. Filters file results by folder; clear it to remove the filter. Disabled on the Events tab. |
 | Search Library button | Left of the search field, beside Aa; browse saved searches and recent history. |
 | Aa button | Left of the search field; toggles case-sensitive matching. When off, names and the `parent:` and `infolder:` filters ignore case for all letters, including accented and non-Latin ones. |
-| Results table | Name, Path, Size, Modified, and Created columns, with resizable widths and single-line middle truncation. |
+| Results table | Name, Path, Size, Modified, and Created columns, with resizable widths and single-line middle truncation. Dragging a divider resizes only that column; resizing the window leaves column widths alone, and a horizontal scroller appears when the columns are wider than the window. |
 | Bottom status bar | Lifecycle state (Ready, Updating, Paused; hover for index details), Files/Events segmented control with counts, rescan, selection count, and search duration. Updating also appears while folders changed on disk are read in the background. |
 | Index menu | Live Updates on/off (Paused in the status bar while off), Rescan (Option-Command-R), and Cancel Scan. |
 

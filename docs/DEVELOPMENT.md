@@ -247,7 +247,8 @@ FSEvents, filters, selection, a hidden window that searches again only once show
 rename, Trash/recovery, Quick Look, saved-scope restoration, English-only packaging,
 fresh preference defaults, saved settings, and tab switching. The feature check uses
 isolated preferences and disposable files to drive the real window, menus, Settings,
-search history browsing, the F2 rename dialog, the shortcut recorder, and key commands.
+search history browsing, the F2 rename dialog, the shortcut recorder, column resizing,
+and key commands.
 A successful JSON report contains `"error": null`; inspect the report rather than
 relying only on the process exit status.
 
